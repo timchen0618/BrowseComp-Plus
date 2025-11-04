@@ -26,3 +26,6 @@ dependencies = [
     "transformers>=4.53.2",
     # NOTE: No vllm or deepspeed here
 ]
+
+[tool.poetry]
+package-mode = false
