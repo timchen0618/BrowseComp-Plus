@@ -131,16 +131,11 @@ def load_traces_from_file(file_path: str) -> List[Dict[str, Any]]:
 @st.cache_data
 def load_query_mapping() -> Dict[str, str]:
     """Load query_id to query mapping from the decrypted dataset."""
-    mapping_file = Path('data/browsecomp_plus_decrypted.jsonl')
+    mapping_file = Path('data/browsecomp_plus_id2query.json')
     if not mapping_file.exists():
         return {}
-    
-    id2query = {}
-    for record in read_jsonl(str(mapping_file)):
-        query_id = record.get('query_id')
-        query = record.get('query')
-        if query_id and query:
-            id2query[str(query_id)] = query
+    with open(mapping_file, 'r', encoding='utf-8') as f:
+        id2query = json.load(f)
     return id2query
 
 
