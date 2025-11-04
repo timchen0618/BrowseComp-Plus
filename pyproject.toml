@@ -2,16 +2,11 @@
 name = "browsecomp-plus"
 version = "0.1.0"
 description = "Add your description here"
-# Add an upper bound so Poetry doesn't consider 4.x
 requires-python = ">=3.10,<4.0"
-
 dependencies = [
     "accelerate>=1.9.0",
     "anthropic>=0.58.2",
     "datasets>=4.0.0",
-    # Move deepspeed to optional extra (GPU-only, hard to build on Streamlit)
-    # "deepspeed>=0.17.2",
-    # Fix FAISS to a real PyPI version; 1.8.x is the latest series with wheels
     "faiss-cpu>=1.8.0.post1",
     "fastmcp==2.9.2",
     "google-genai>=1.27.0",
@@ -25,30 +20,9 @@ dependencies = [
     "rich>=14.0.0",
     "streamlit>=1.40.0",
     "tevatron",
-    # Pin torch/vision to CPU wheels that exist for 3.11/3.12
-    # (Streamlit often runs 3.12). If Streamlit uses 3.13 for you, these still have CPU wheels.
     "torch==2.4.1",
     "torchvision==0.19.1",
     "tqdm>=4.67.1",
     "transformers>=4.53.2",
-    # Move vllm to optional extra (GPU-required and heavy)
-    # "vllm>=0.9.0",
+    # NOTE: No vllm or deepspeed here
 ]
-
-[project.optional-dependencies]
-gpu = [
-    "deepspeed>=0.17.2",
-    "vllm>=0.9.0",
-]
-
-[tool.uv.sources]
-tevatron = { git = "https://github.com/texttron/tevatron.git", rev = "main" }
-
-# If Poetry is used under the hood, giving it the same python bound avoids the earlier solver complaint.
-[tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-
-# Optional but nice to have if Poetry is used for builds
-[build-system]
-requires = ["poetry-core>=1.9.0"]
-build-backend = "poetry.core.masonry.api"
