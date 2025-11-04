@@ -9,3 +9,4 @@ retrieval/
 topics-qrels/queries.tsv
 runs/
 evals/
+data/
