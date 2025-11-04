@@ -62,9 +62,9 @@ def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_in
             output = entry.get('output', [])
             formatted_output = format_output(output)
             
-            # Calculate height based on content length (max 600px)
-            content_height = min(len(formatted_output.split('\n')) * 20, 600)
-            content_height = max(content_height, 100)
+            # Calculate height based on content length (max 1000px, min 200px)
+            content_height = min(len(formatted_output.split('\n')) * 20, 1000)
+            content_height = max(content_height, 200)
             
             # Use code block for better formatting of long content
             st.markdown("**Reasoning Output:**")
