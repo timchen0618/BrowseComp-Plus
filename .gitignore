@@ -6,8 +6,6 @@ collection/
 indexes/
 tmp/
 retrieval/
-data/browsecomp_plus_decrypted.jsonl
 topics-qrels/queries.tsv
 runs/
 evals/
-data/decrypted_run_files/
