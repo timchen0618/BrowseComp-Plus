@@ -11,7 +11,8 @@ This script:
 import json
 import sys
 from pathlib import Path
-from typing import Set
+from typing import Set, Dict, List
+from collections import defaultdict
 
 
 def extract_query_ids_from_jsonl(jsonl_path: Path) -> Set[str]:
@@ -225,6 +226,91 @@ def filter_jsonl_directory(jsonl_dir: Path, query_ids: Set[str], exclude_file: P
     return {"processed": processed, "total_records_kept": total_kept}
 
 
+def calculate_average_search_calls(jsonl_dir: Path, query_ids: Set[str]) -> Dict[str, float]:
+    """
+    Calculate the average number of search calls per file across queries.
+    
+    Args:
+        jsonl_dir: Directory containing JSONL files (searches recursively)
+        query_ids: Set of query IDs to consider (only queries in this set will be counted)
+        
+    Returns:
+        Dictionary mapping file paths (relative to jsonl_dir) to average search call counts
+    """
+    if not jsonl_dir.exists() or not jsonl_dir.is_dir():
+        print(f"Warning: Directory {jsonl_dir} does not exist or is not a directory", file=sys.stderr)
+        return {}
+    
+    # Find all JSONL files recursively
+    jsonl_files = list(jsonl_dir.rglob("*.jsonl"))
+    
+    if not jsonl_files:
+        return {}
+    
+    # Dictionary to store search counts per file: {file_path: [list of search counts]}
+    file_search_counts: Dict[str, List[int]] = defaultdict(list)
+    
+    print(f"\nCalculating average search calls per file from {len(jsonl_files)} files...")
+    
+    jsonl_dir_resolved = jsonl_dir.resolve()
+    
+    for jsonl_file in sorted(jsonl_files):
+        # Get relative path from jsonl_dir (e.g., "bm25/gpt5.jsonl")
+        try:
+            file_path = str(jsonl_file.relative_to(jsonl_dir_resolved))
+        except ValueError:
+            # If file is not relative to jsonl_dir, use full path
+            file_path = str(jsonl_file)
+        
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    try:
+                        obj = json.loads(line)
+                        query_id = obj.get("query_id")
+                        query_id_str = str(query_id) if query_id is not None else None
+                        
+                        # Only count queries that match the query_ids set
+                        if query_id_str in query_ids:
+                            # Extract search count from tool_call_counts
+                            if 'tool_call_counts' in obj:
+                                tool_call_counts = obj.get("tool_call_counts", {})
+                                search_count = tool_call_counts.get("search", 0)
+                            elif 'search_counts' in obj:
+                                search_count = obj.get("search_counts", 0)
+                            else:
+                                search_count = 0
+                                
+                            # Convert to int (handle various types)
+                            try:
+                                search_count = int(search_count)
+                            except (ValueError, TypeError):
+                                search_count = 0
+                            
+                            file_search_counts[file_path].append(search_count)
+                            
+                    except json.JSONDecodeError as e:
+                        print(f"Warning: Failed to parse line {line_num} in {jsonl_file}: {e}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"Warning: Error processing line {line_num} in {jsonl_file}: {e}", file=sys.stderr)
+                        
+        except Exception as e:
+            print(f"Warning: Error reading {jsonl_file}: {e}", file=sys.stderr)
+    
+    # Calculate averages per file
+    file_averages: Dict[str, float] = {}
+    for file_path, search_counts in file_search_counts.items():
+        if len(search_counts) > 0:
+            average = sum(search_counts) / len(search_counts)
+            file_averages[file_path] = average
+    
+    return file_averages
+
+
 def main():
     import argparse
     
@@ -317,6 +403,23 @@ def main():
             filter_jsonl_file(jsonl_file, query_ids)
     elif args.dry_run and args.jsonl_files:
         print(f"\nWould filter {len(args.jsonl_files)} additional JSONL files")
+    
+    # Calculate and print average search calls per file
+    print("\n" + "=" * 80)
+    print("Average Number of Search Calls per File")
+    print("=" * 80)
+    
+    file_averages = calculate_average_search_calls(args.jsonl_dir, query_ids)
+    
+    if file_averages:
+        # Sort by file path for consistent output
+        sorted_files = sorted(file_averages.items())
+        
+        print(f"\nAverage search calls across {len(query_ids)} queries:\n")
+        for file_path, avg_count in sorted_files:
+            print(f"  {file_path:40s}: {avg_count:.2f}")
+    else:
+        print("\nNo data found to calculate averages.")
     
     print("\nDone!")
 
