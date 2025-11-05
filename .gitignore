@@ -10,3 +10,4 @@ topics-qrels/queries.tsv
 runs/
 evals/
 data/
+data/decrypted_run_files
