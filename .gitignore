@@ -11,3 +11,4 @@ runs/
 evals/
 data/
 data/decrypted_run_files
+data/run_subset
