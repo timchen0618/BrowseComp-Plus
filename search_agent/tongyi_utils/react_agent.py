@@ -159,7 +159,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    "retrieved_docids": list(set(retrieved_docids))
+                    # "retrieved_docids": list(set(retrieved_docids))
+                    "retrieved_docids": retrieved_docids
                 }
                 return result
             round += 1
@@ -183,9 +184,27 @@ class MultiTurnReactAgent(FnCallAgent):
 
                     if docids is not None:
                         tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-                        retrieved_docids.extend(docids)
+                        # retrieved_docids.extend(docids)
+                        # retrieved_docids.append(docids)
+                        import json
+                        if isinstance(tool_args, dict):
+                            if len(tool_args) > 0:
+                                retrieved_docids.append({json.dumps(tool_args): docids})
+                            else:
+                                retrieved_docids.append({"": docids})
+                        else:
+                            retrieved_docids.append({"": docids})
+                    elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
+                        if isinstance(tool_args, dict):
+                            if len(tool_args) > 0:
+                                retrieved_docids.append({json.dumps(tool_args): []})
+                            else:
+                                retrieved_docids.append({"": []})
+                        else:
+                            retrieved_docids.append({"": []})
 
                 except:
+                    # print(tool_args, type(tool_args))
                     tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
@@ -220,7 +239,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    "retrieved_docids": list(set(retrieved_docids))
+                    # "retrieved_docids": list(set(retrieved_docids))
+                    "retrieved_docids": retrieved_docids
                 }
                 return result
 
@@ -240,7 +260,8 @@ class MultiTurnReactAgent(FnCallAgent):
             "termination": termination,
             "tool_call_counts": tool_call_counts,
             "tool_call_counts_all": tool_call_counts_all,
-            "retrieved_docids": list(set(retrieved_docids))
+            # "retrieved_docids": list(set(retrieved_docids))
+            "retrieved_docids": retrieved_docids
         }
         return result
 

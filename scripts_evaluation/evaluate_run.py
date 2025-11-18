@@ -457,7 +457,7 @@ def main():
     all_results = []
 
     # Initialize vLLM engine and sampling params
-    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size)
+    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=4096, gpu_memory_utilization=0.85)
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
@@ -507,7 +507,27 @@ def main():
         correct_answer = ground_truth[str(query_id)]["answer"]
         gt_question = ground_truth[str(query_id)]["question"]
         is_completed = run_data["status"] == "completed"
-        retrieved_docids_set = set(run_data.get("retrieved_docids", []))
+        token_limit_reached = ('token limit reached' in run_data["status"])
+        if 'retrieved_docids' in run_data:
+            if isinstance(run_data['retrieved_docids'], list):
+                if len(run_data['retrieved_docids']) == 0:
+                    retrieved_docids_set = set()
+                else:
+                    if isinstance(run_data['retrieved_docids'][0], dict):
+                        # print(run_data['retrieved_docids'])
+                        # get the first value of the dictionary
+                        retrieved_docids = []
+                        for item in run_data['retrieved_docids']:
+                            retrieved_docids.extend(list(item.values())[0])
+                        retrieved_docids_set = set(retrieved_docids)
+                    elif isinstance(run_data['retrieved_docids'][0], str) or isinstance(run_data['retrieved_docids'][0], int):
+                        retrieved_docids_set = set(run_data['retrieved_docids'])
+            else:
+                raise ValueError(f"Unexpected retrieved_docids type: {type(run_data['retrieved_docids'])}")
+        else:
+            retrieved_docids_set = set()
+            
+        print('retrieved_docids_set: ', retrieved_docids_set)
         positives_for_query = qrel_evidence.get(str(query_id), [])
         retrieval_recall = len(
             retrieved_docids_set.intersection(set(positives_for_query))
@@ -527,6 +547,7 @@ def main():
                 "response": response,
                 "correct_answer": correct_answer,
                 "is_completed": is_completed,
+                "token_limit_reached": token_limit_reached,
                 "judge_prompt": None,
                 "judge_response": None,
                 "judge_result": {
@@ -568,6 +589,15 @@ def main():
             }
         )
 
+    print(f"Number of pending items: {len(pending_items)}")
+    # compute the number of tokens in the judge_prompt
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-32B")
+    num_tokens = [len(tokenizer.encode(item["judge_prompt"])) for item in pending_items]
+    print(f"Average number of tokens in the judge_prompt: {np.mean(num_tokens)}")
+    print(f"Max number of tokens in the judge_prompt: {np.max(num_tokens)}")
+    print(f"Min number of tokens in the judge_prompt: {np.min(num_tokens)}")
+
     for i in tqdm(
         range(0, len(pending_items), args.batch_size), desc="Evaluating", unit="batch"
     ):
@@ -606,6 +636,7 @@ def main():
                 "response": item["response"],
                 "correct_answer": item["correct_answer"],
                 "is_completed": True,
+                "token_limit_reached": False,
                 "judge_prompt": item["judge_prompt"],
                 "judge_response": judge_text,
                 "judge_result": judge_result,
@@ -702,6 +733,8 @@ def main():
         if isinstance(calibration_error, (int, float))
         else None
     )
+    
+    token_limit_reached_percent = round(sum(1 for r in all_results if r.get("token_limit_reached", False)) / len(all_results) * 100.0, 2)
 
     per_query_metrics = []
     for r in all_results:
@@ -778,6 +811,7 @@ def main():
         "Link": "change me when submitting",
         "Evaluation Date": datetime.now().date().isoformat(),
         "per_query_metrics": per_query_metrics,
+        "token_limit_reached_percent": token_limit_reached_percent,
     }
 
     print(f"Evaluated {total} responses:")
@@ -806,7 +840,7 @@ def main():
     print(f"- Avg citations per response: {avg_citations_per_response:.2f}")
     print(f"- Precision (avg): {precision_percent:.2f}%")
     print(f"- Recall (avg): {recall_citation_percent:.2f}%")
-
+    print(f"- Token limit reached (%): {token_limit_reached_percent:.2f}%")
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
 

@@ -48,7 +48,7 @@ class SearchToolHandler(BaseTool):
             snippet = self._truncate(passage_text, max_tokens)
 
             # Follows original tongyi search tool format
-            formatted_result = f"{idx}. [{title}]\n{snippet}"
+            formatted_result = f"{idx}. <docid: {r['docid']}> [{title}]\n{snippet}"
             formatted.append(formatted_result)
 
         return formatted

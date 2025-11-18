@@ -98,7 +98,7 @@ def persist_response(output_dir: Path, query_id: str | None, query: str, result:
         "tool_call_counts": result.get("tool_call_counts", {}),
         "tool_call_counts_all": result.get("tool_call_counts_all", {}),
         "status": status,
-        "retrieved_docids": sorted(result.get("retrieved_docids", [])),
+        "retrieved_docids": result.get("retrieved_docids", []),
         "result": result_array
     }
 

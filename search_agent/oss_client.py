@@ -149,9 +149,13 @@ def run_conversation_with_tools(
         try:
             request = initial_request.copy()
             request["input"] = messages
+            # request["return_incomplete_output"] = True
             response = client.responses.create(
                 **request,
             )
+            print('=--------------------------------=')
+            print('[Request:]', request)
+            print('[Response:]', response.model_dump(mode="python"))
         except Exception as e:
             if verbose:
                 print(f"Error: {e}")
