@@ -204,7 +204,8 @@ def main():
     parser.add_argument("--num-threads", type=int, default=10, help="Number of parallel threads for processing queries")
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
-
+    parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
+    
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
@@ -252,7 +253,8 @@ def main():
     agent = MultiTurnReactAgent(
         llm=llm_cfg,
         function_list=["search"],
-        search_tool_handler=search_tool_handler
+        search_tool_handler=search_tool_handler,
+        multi_answer=args.multi_answer
     )
     
     query_str = args.query.strip()

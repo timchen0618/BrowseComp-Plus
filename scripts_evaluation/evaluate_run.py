@@ -588,15 +588,15 @@ def main():
                 "judge_prompt": judge_prompt,
             }
         )
-
-    print(f"Number of pending items: {len(pending_items)}")
-    # compute the number of tokens in the judge_prompt
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-32B")
-    num_tokens = [len(tokenizer.encode(item["judge_prompt"])) for item in pending_items]
-    print(f"Average number of tokens in the judge_prompt: {np.mean(num_tokens)}")
-    print(f"Max number of tokens in the judge_prompt: {np.max(num_tokens)}")
-    print(f"Min number of tokens in the judge_prompt: {np.min(num_tokens)}")
+    if len(pending_items) > 0:
+        print(f"Number of pending items: {len(pending_items)}")
+        # compute the number of tokens in the judge_prompt
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-32B")
+        num_tokens = [len(tokenizer.encode(item["judge_prompt"])) for item in pending_items]
+        print(f"Average number of tokens in the judge_prompt: {np.mean(num_tokens)}")
+        print(f"Max number of tokens in the judge_prompt: {np.max(num_tokens)}")
+        print(f"Min number of tokens in the judge_prompt: {np.min(num_tokens)}")
 
     for i in tqdm(
         range(0, len(pending_items), args.batch_size), desc="Evaluating", unit="batch"

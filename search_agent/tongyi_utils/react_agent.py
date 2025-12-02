@@ -36,6 +36,25 @@ For each search tool call, return a json object with function name and arguments
 
 Current date: """
 
+
+SYSTEM_PROMPT_MULTI_ANSWER = """You are an expert in researching and answering complex questions. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For every request, synthesize information from credible, diverse sources to deliver a comprehensive, accurate, and objective response. Each of the questions has multiple answers. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer within <answer></answer> tags. The answer should be a list of answers, separated by semi-colons.
+
+# Tools
+
+You may call the search tool one or multiple times to assist with the user query.
+
+You are provided with the search tool, its signature within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "search", "description": "Perform Google web searches then returns a string of the top search results. Accepts a single query.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "The search query."}}, "required": ["query"]}}}
+</tools>
+
+For each search tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": search, "arguments": <args-json-object>}
+</tool_call>
+
+Current date: """
+
 from tongyi_utils.tool_search import SearchToolHandler
 
 OBS_START = '<tool_response>'
@@ -56,11 +75,13 @@ class MultiTurnReactAgent(FnCallAgent):
                  function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
                  llm: Optional[Union[Dict, BaseChatModel]] = None,
                  search_tool_handler: Optional[SearchToolHandler] = None,
+                 multi_answer: Optional[bool] = False,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
         self.search_tool = search_tool_handler
+        self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
 
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
@@ -141,7 +162,7 @@ class MultiTurnReactAgent(FnCallAgent):
         planning_port = data['planning_port']
         answer = data['item']['answer']
         self.user_prompt = question
-        system_prompt = SYSTEM_PROMPT_SEARCH_ONLY
+        system_prompt = self.system_prompt
         cur_date = today_date()
         system_prompt = system_prompt + str(cur_date)
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]

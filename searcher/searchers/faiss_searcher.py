@@ -208,7 +208,7 @@ class FaissSearcher(BaseSearcher):
             ds = load_dataset(
                 self.args.dataset_name, split="train", cache_dir=cache_dir
             )
-            self.docid_to_text = {row["docid"]: row["text"] for row in ds}
+            self.docid_to_text = {row.get("docid") or row.get("id"): row["text"] for row in ds}
             logger.info(f"Loaded {len(self.docid_to_text)} passages from dataset")
         except Exception as e:
             if "doesn't exist on the Hub or cannot be accessed" in str(e):
