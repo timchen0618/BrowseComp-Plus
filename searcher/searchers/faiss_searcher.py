@@ -70,6 +70,12 @@ class FaissSearcher(BaseSearcher):
             default=8192,
             help="Maximum sequence length for FAISS search (default: 8192)",
         )
+        parser.add_argument(
+            "--attn_implementation",
+            default="flash_attention_2",
+            choices=["sdpa", "flash_attention_2"],
+            help="Attention implementation for FAISS search (default: flash_attention_2)",
+        )
 
     def __init__(self, args):
         if args.model_name == "bm25":
@@ -160,6 +166,7 @@ class FaissSearcher(BaseSearcher):
             model_name_or_path=self.args.model_name,
             normalize=self.args.normalize,
             pooling=self.args.pooling,
+            attn_implementation=self.args.attn_implementation,
             cache_dir=cache_dir,
         )
 
