@@ -67,9 +67,9 @@ def parse_trajectories(args):
         out_data.append({"question": id2question[trajectory['query_id']], 
                         "answers": [''], 
                         "ctxs": [{"id":docid, "text": id2item[docid][1], "title": id2item[docid][2]} for docid in all_docids],
-                        "last_query": last_query,
+                        "last_query": "" if last_query is None else last_query,
                         "qid": trajectory['query_id']})
-        last_query_list.append({"question": last_query, "qid": trajectory['query_id'], "answers": [''], "ctxs": []})
+        last_query_list.append({"question": "" if last_query is None else last_query, "qid": trajectory['query_id'], "answers": [''], "ctxs": []})
         
         
         
@@ -83,7 +83,7 @@ def combine_last_search_and_trajectories(args):
     last_query_retrieval_results = read_jsonl(args.last_query_retrieval_results)
     assert len(combined_docs) == len(last_query_retrieval_results)
     for inst, last_query_inst in zip(combined_docs, last_query_retrieval_results):
-        assert inst['last_query'] == last_query_inst['question']
+        assert inst['last_query'] == last_query_inst['question'],(inst['last_query'], last_query_inst['question'])
         if len(inst['ctxs']) < args.topk:
             inst['ctxs'].extend(last_query_inst['ctxs'][:(args.topk - len(inst['ctxs']))])
         else:
@@ -126,4 +126,6 @@ if __name__ == "__main__":
         write_jsonl("/scratch/hc3337/projects//diverse_response/data/qampari_data/dev_data_gt_qampari_corpus_small_qwen.jsonl", out_data)
         raise ValueError(f"Invalid command: {args.command}")
     
+    
+    # python generate_qampari_results.py --input-dir qampari_runs/qwen3-0.6b/tongyi/ -t qampari_runs/qwen3-0.6b/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/qwen3-0.6b/qampari_last_queries.jsonl 
     # python generate_qampari_results.py --input-dir qampari_runs/infly/tongyi/ -t qampari_runs/infly/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/inf/qampari_last_queries.jsonl 
