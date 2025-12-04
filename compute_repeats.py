@@ -254,6 +254,7 @@ def main():
     parser.add_argument("--similarity_function", type=str, default='jaccard', help="Similarity function for clustering queries")
     parser.add_argument("--output_csv", action='store_true', help="whether to output the results to a csv file.")
     parser.add_argument("--identify_gold_subqueries", action='store_true', help="whether to identify gold subqueries.")
+    parser.add_argument("--ground_truth_file", type=Path, default=Path("data/small.jsonl"), help="Path to input jsonl file.")
     args = parser.parse_args()
     
     ########################################################
@@ -299,7 +300,7 @@ def main():
     ########################################################
     if args.output_csv:
         csv_results = [['filename', '', 'pairwise_doc_id_overlap', 'consecutive_doc_id_overlap', 'repeat_perc_doc_id', '', 'pairwise_similarity', 'consecutive_similarity', 'repeat_perc', 'num_queries', 'gold_subqueries']]
-    raw_data = read_jsonl("data/small.jsonl")
+    raw_data = read_jsonl(args.ground_truth_file)
     # query id to data
     id2data = {record['query_id']: {"query": record['query'], "gold_docs": [d['docid'] for d in record['gold_docs']]} for record in raw_data}
     filename2queries = {}

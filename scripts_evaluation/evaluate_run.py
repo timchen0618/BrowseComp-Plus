@@ -527,7 +527,7 @@ def main():
         else:
             retrieved_docids_set = set()
             
-        print('retrieved_docids_set: ', retrieved_docids_set)
+        # print('retrieved_docids_set: ', retrieved_docids_set)
         positives_for_query = qrel_evidence.get(str(query_id), [])
         retrieval_recall = len(
             retrieved_docids_set.intersection(set(positives_for_query))
