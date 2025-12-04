@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tongyi_utils.react_agent import MultiTurnReactAgent
+from tongyi_utils.react_agent import MultiTurnReactAgent, SampleAgent
 from tongyi_utils.tool_search import SearchToolHandler
 from searcher.searchers import SearcherType
 import re
@@ -168,17 +168,17 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
             "planning_port": args.port
         }
         
-        try:
-            result = agent._run(task_data, args.model)
-            persist_response(output_dir, qid, qtext, result, args)
-        except Exception as exc:
-            print(f"Error processing query {qid}: {exc}")
-            error_result = {
-                "question": qtext,
-                "error": str(exc),
-                "prediction": "[Failed]"
-            }
-            persist_response(output_dir, qid, qtext, error_result, args)
+        # try:
+        result = agent._run(task_data, args.model)
+        persist_response(output_dir, qid, qtext, result, args)
+        # except Exception as exc:
+        #     print(f"Error processing query {qid}: {exc}")
+        #     error_result = {
+        #         "question": qtext,
+        #         "error": str(exc),
+        #         "prediction": "[Failed]"
+        #     }
+        #     persist_response(output_dir, qid, qtext, error_result, args)
     
     if args.num_threads <= 1:
         with tqdm(remaining, desc="Queries", unit="query") as pbar:
@@ -205,6 +205,7 @@ def main():
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
+    parser.add_argument("--sample-search-args", action="store_true", help="Sample search tool args")
     
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
@@ -250,7 +251,13 @@ def main():
         'model_type': 'qwen_dashscope'
     }
 
-    agent = MultiTurnReactAgent(
+    if args.sample_search_args:
+        agent_class = SampleAgent
+    else:
+        agent_class = MultiTurnReactAgent
+
+    print(f"Using {agent_class.__name__}...")
+    agent = agent_class(
         llm=llm_cfg,
         function_list=["search"],
         search_tool_handler=search_tool_handler,
