@@ -3,7 +3,7 @@ import csv
 from tqdm import tqdm
 import argparse
 from pathlib import Path
-
+import json5
 def read_jsonl(filepath):
     with open(filepath, 'r') as f:
         return [json.loads(line) for line in f]
@@ -58,7 +58,7 @@ def parse_trajectories(args):
         
         for has_doc, doc_dict in zip(has_doc_list, retrieved_docids):
             if has_doc:
-                last_query = json.loads(list(doc_dict.keys())[0])['query']
+                last_query = json5.loads(list(doc_dict.keys())[0])['query']
                 break
         
         if isinstance(last_query, list):
@@ -127,5 +127,14 @@ if __name__ == "__main__":
         raise ValueError(f"Invalid command: {args.command}")
     
     
+    # Qwen3-0.6b
+    # python generate_qampari_results.py
     # python generate_qampari_results.py --input-dir qampari_runs/qwen3-0.6b/tongyi/ -t qampari_runs/qwen3-0.6b/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/qwen3-0.6b/qampari_last_queries.jsonl 
+    
+    # Infly
+    # python generate_qampari_results.py --input-dir qampari_runs/infly/tongyi/ -t qampari_runs/infly/tongyi/combined.jsonl --command parse_trajectories
     # python generate_qampari_results.py --input-dir qampari_runs/infly/tongyi/ -t qampari_runs/infly/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/inf/qampari_last_queries.jsonl 
+    
+    # Contriever
+    # python generate_qampari_results.py --input-dir qampari_runs/contriever/tongyi/ -t qampari_runs/contriever/tongyi/combined.jsonl --command parse_trajectories
+    # python generate_qampari_results.py --input-dir qampari_runs/contriever/tongyi/ -t qampari_runs/contriever/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/contriever/qampari_last_queries.jsonl 
