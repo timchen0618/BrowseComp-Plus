@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tongyi_utils.react_agent import MultiTurnReactAgent, SampleAgent
+from tongyi_utils.react_agent import MultiTurnReactAgent, SampleAgent, SampleOutcomeAgent
 from tongyi_utils.tool_search import SearchToolHandler
 from searcher.searchers import SearcherType
 import re
@@ -205,7 +205,7 @@ def main():
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
-    parser.add_argument("--sample-search-args", action="store_true", help="Sample search tool args")
+    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max'], help='whether to sample, and how to sample multiple search calls')
     
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
@@ -251,8 +251,8 @@ def main():
         'model_type': 'qwen_dashscope'
     }
 
-    if args.sample_search_args:
-        agent_class = SampleAgent
+    if args.sample_mode is not None:
+        agent_class = SampleOutcomeAgent
     else:
         agent_class = MultiTurnReactAgent
 
@@ -261,7 +261,8 @@ def main():
         llm=llm_cfg,
         function_list=["search"],
         search_tool_handler=search_tool_handler,
-        multi_answer=args.multi_answer
+        multi_answer=args.multi_answer,
+        sample_mode=args.sample_mode
     )
     
     query_str = args.query.strip()

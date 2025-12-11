@@ -465,6 +465,7 @@ class SampleAgent(MultiTurnReactAgent):
                                     sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
                                     print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
                                     
+                                    # compute similarity and get the most dissimilar response.
                                     tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
                                     similarities = np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
                                     min_sim_index = np.argmin(similarities)
@@ -475,6 +476,294 @@ class SampleAgent(MultiTurnReactAgent):
                                 print('***Selected tool_name, tool_args: ', tool_name, tool_args)
                                 tool_call_counts['search'] -= 1
                                 result, _, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
+                    else:                                    
+                        result, docids, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
+
+                result = "<tool_response>\n" + result + "\n</tool_response>"
+                messages.append({"role": "user", "content": result})
+            if '<answer>' in content and '</answer>' in content:
+                termination = 'answer'
+                break
+            if num_llm_calls_available <= 0 and '<answer>' not in content:
+                messages[-1]['content'] = 'Sorry, the number of llm calls exceeds the limit.'
+
+            max_tokens = 108 * 1024
+            token_count = self.count_tokens(messages)
+            # print(f"round: {round}, token count: {token_count}")
+
+            if token_count > max_tokens:
+                # print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
+                
+                messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
+                content = self.call_server(messages, planning_port)
+                messages.append({"role": "assistant", "content": content.strip()})
+                if '<answer>' in content and '</answer>' in content:
+                    prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
+                    termination = 'generate an answer as token limit reached'
+                else:
+                    prediction = messages[-1]['content']
+                    termination = 'format error: generate an answer as token limit reached'
+                result = {
+                    "question": question,
+                    "answer": answer,
+                    "messages": messages,
+                    "prediction": prediction,
+                    "termination": termination,
+                    "tool_call_counts": tool_call_counts,
+                    "tool_call_counts_all": tool_call_counts_all,
+                    # "retrieved_docids": list(set(retrieved_docids))
+                    "retrieved_docids": retrieved_docids
+                }
+                return result
+
+        if '<answer>' in messages[-1]['content']:
+            prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
+            termination = 'answer'
+        else:
+            prediction = 'No answer found.'
+            termination = 'answer not found'
+            if num_llm_calls_available == 0:
+                termination = 'exceed available llm calls'
+        result = {
+            "question": question,
+            "answer": answer,
+            "messages": messages,
+            "prediction": prediction,
+            "termination": termination,
+            "tool_call_counts": tool_call_counts,
+            "tool_call_counts_all": tool_call_counts_all,
+            # "retrieved_docids": list(set(retrieved_docids))
+            "retrieved_docids": retrieved_docids
+        }
+        return result
+    
+    
+
+class SampleOutcomeAgent(MultiTurnReactAgent):
+    def __init__(self,
+                 function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
+                 llm: Optional[Union[Dict, BaseChatModel]] = None,
+                 search_tool_handler: Optional[SearchToolHandler] = None,
+                 multi_answer: Optional[bool] = False,
+                 sample_mode: Optional[str] = None,
+                 **kwargs):
+        super().__init__(
+            function_list=function_list,
+            llm=llm,
+            search_tool_handler=search_tool_handler,
+            multi_answer=multi_answer,
+            **kwargs
+        )
+        self.sample_mode = sample_mode
+        
+    def parse_content(self, content: str, tool_call_counts_all: dict):
+        tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
+        valid_tool_call = False
+        try:
+            tool_call = json5.loads(tool_call)
+            tool_name = tool_call.get('name', '')
+            tool_args = tool_call.get('arguments', {})
+            valid_tool_call = True
+            tool_call_counts_all[tool_name] = tool_call_counts_all.get(tool_name, 0) + 1
+            return tool_name, tool_args, valid_tool_call
+        except:
+            tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
+            return None, None, False
+
+    def process_tool_call(self, tool_name: str, tool_args: dict, tool_call_counts: dict, retrieved_docids: list):
+        result, docids = self.custom_call_tool(tool_name, tool_args)
+
+        has_doc_ids = False
+        if docids is not None:
+            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
+            # retrieved_docids.extend(docids)
+            # retrieved_docids.append(docids)
+            # import json5
+            if isinstance(tool_args, dict):
+                if len(tool_args) > 0:
+                    retrieved_docids.append({json5.dumps(tool_args): docids})
+                else:
+                    retrieved_docids.append({"": docids})
+            else:
+                retrieved_docids.append({"": docids})
+            has_doc_ids = True
+        elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
+            if isinstance(tool_args, dict):
+                if len(tool_args) > 0:
+                    retrieved_docids.append({json5.dumps(tool_args): []})
+                else:
+                    retrieved_docids.append({"": []})
+            else:
+                retrieved_docids.append({"": []})
+        
+        return result, docids, retrieved_docids, has_doc_ids
+    
+    def jaccard_similarity(self, list1: list, list2: list):
+        return len(set(list1) & set(list2)) / len(set(list1) | set(list2))
+
+    def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
+        self.model=model
+        tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path)
+        try:
+            question = data['item']['question']
+        except:
+            raw_msg = data['item']['messages'][1]["content"]
+            question = raw_msg.split("User:")[1].strip() if "User:" in raw_msg else raw_msg
+
+        tool_call_counts = {}  # Only successful tool calls
+        tool_call_counts_all = {}  # All tool calls (successful and failed)
+        retrieved_docids = []
+        retrieved_docids_set = set()
+
+        start_time = time.time()
+        planning_port = data['planning_port']
+        answer = data['item']['answer']
+        self.user_prompt = question
+        system_prompt = self.system_prompt
+        cur_date = today_date()
+        system_prompt = system_prompt + str(cur_date)
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
+        num_llm_calls_available = MAX_LLM_CALL_PER_RUN
+        round = 0
+        while num_llm_calls_available > 0:
+            if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
+                prediction = 'No answer found after 2h30mins'
+                termination = 'No answer found after 2h30mins'
+                result = {
+                    "question": question,
+                    "answer": answer,
+                    "messages": messages,
+                    "prediction": prediction,
+                    "termination": termination,
+                    "tool_call_counts": tool_call_counts,
+                    "tool_call_counts_all": tool_call_counts_all,
+                    # "retrieved_docids": list(set(retrieved_docids))
+                    "retrieved_docids": retrieved_docids
+                }
+                return result
+            round += 1
+            num_llm_calls_available -= 1
+            content = self.call_server(messages, planning_port)
+            print(f'Round {round}: {content}')
+            if '<tool_response>' in content:
+                pos = content.find('<tool_response>')
+                content = content[:pos]
+            messages.append({"role": "assistant", "content": content.strip()})
+            if '<tool_call>' in content and '</tool_call>' in content:
+                tool_name, tool_args, valid_tool_call = self.parse_content(content, tool_call_counts_all)
+                print('OUTER tool_name: ', tool_name, 'tool_args: ', tool_args, 'valid_tool_call: ', valid_tool_call)
+                if not valid_tool_call:
+                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
+                else:
+                    if tool_name == 'search':
+                        result, _, retrieved_docids, has_doc_ids = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
+                        if has_doc_ids: 
+                            # only when search tool call returns some doc ids, we sample 5 times
+                            # later when we actually use the most dissimilar search tool args, we will process the search call again
+                            print("Sampling search tool args for 5 times...", content)
+                            sampled_tool_args = [tool_args]
+                            for _ in range(30):
+                                content_inner = self.call_server(messages[:-1], planning_port)
+                                # print('[sampled content_inner: ]', content_inner)
+                                if not ('<tool_call>' in content_inner and '</tool_call>' in content_inner):
+                                    continue
+                                tool_name_inner, tool_args_inner, valid_tool_call_inner = self.parse_content(content_inner, {})
+                                # print('[sampled tool_name: ', tool_name_inner, 'valid_tool_call: ', valid_tool_call_inner)
+                                if valid_tool_call_inner and tool_name_inner == 'search':
+                                    try:
+                                        # print('$$$ Try loading tool_args_inner: ', tool_args_inner, type(tool_args_inner))
+                                        if isinstance(tool_args_inner, dict):
+                                            if 'query' in (tool_args_inner) and isinstance(tool_args_inner['query'], str):
+                                                # print('$$$ Query in tool_args_inner: ', tool_args_inner['query'])
+                                                sampled_tool_args.append(tool_args_inner)
+                                                if len(sampled_tool_args) >= 5:
+                                                    break
+                                        elif isinstance(tool_args_inner, str):
+                                            tool_args_inner_dict = json5.loads(tool_args_inner)
+                                            if 'query' in (tool_args_inner_dict) and isinstance(tool_args_inner_dict['query'], str):
+                                                sampled_tool_args.append(tool_args_inner)
+                                                if len(sampled_tool_args) >= 5:
+                                                    break
+                                    except:
+                                        # print('$$$ Error loading tool_args_inner: ', tool_args_inner)
+                                        continue
+                            if len(sampled_tool_args) >= 5:     
+                                # handle the retrieved_docids list to remove the last element
+                                retrieved_docids.pop()
+                                print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
+                                
+                                print("<<>>Sampled search tool args: ", sampled_tool_args)
+                                past_keys = []
+                                for n_dict in retrieved_docids:
+                                    key = next(iter(n_dict.keys()))
+                                    val = json5.loads(key)
+                                    if len(n_dict[key]) > 0:
+                                        if isinstance(val['query'], list):
+                                            past_keys.append(','.join(val['query']))
+                                        else:
+                                            past_keys.append(val['query'])
+                                        
+                                if len(past_keys) == 0:
+                                    print('$$$ No past keys, selecting a random tool args')
+                                    tool_args = random.choice(sampled_tool_args)
+                                    tool_name = 'search'
+                                else:
+                                    print('$$$ Past keys: ', past_keys)
+                                    tokenized_past_keys = tokenizer.encode(' '.join(past_keys))
+                                    sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
+                                    print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
+                                    
+                                    if self.sample_mode == 'jaccard_join':
+                                        # compute similarity and get the most dissimilar response.
+                                        # compare with all the past keys joined by whitespace. 
+                                        tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
+                                        similarities = np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
+                                        
+                                    elif self.sample_mode == 'jaccard_max':
+                                        # compute similarity using jaccard similarity, but compare with each previous key individually and take the max. 
+                                        similarities = []
+                                        tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
+                                        for tokenized_arg in tokenized_sampled_args:  # loop thru every tokenized sampled arguments 
+                                            # get the max sim across past search calls
+                                            max_sim_for_arg = max([self.jaccard_similarity(tokenizer.encode(past_k), tokenized_arg) for past_k in past_keys])
+                                            similarities.append(max_sim_for_arg)
+                                        similarities = np.array(similarities)
+                                    elif self.sample_mode == 'bertscore_join':
+                                        # compute similarity and get the most dissimilar response using bertscore.
+                                        # compare with all the past keys joined by whitespace. 
+                                        from bert_score import score
+                                        P, R, F1 = score(sampled_tool_args_text_only, [' '.join(past_keys) for _ in range(len(sampled_tool_args_text_only))], lang='en', verbose=False)
+                                        similarities = F1.numpy()
+                                    elif self.sample_mode == 'bertscore_max':
+                                        # compute similarity using bertscore, but compare with each previous key individually and take the max. 
+                                        from bert_score import score
+                                        similarities = []
+                                        for _sampled_arg in sampled_tool_args_text_only:
+                                            P, R, F1 = score([_sampled_arg for _ in range(len(past_keys))], past_keys, lang='en', verbose=False)
+                                            # take the max F1 score for each sampled argument
+                                            similarities.append(max(F1.numpy()))
+                                        similarities = np.array(similarities)
+                                    elif self.sample_mode == 'outcome':  
+                                        # compute similarity using outcome based reward. 
+                                        similarities = []
+                                        for tool_args_sampled in sampled_tool_args:
+                                            _, _, retrieved_docids_sampled, _ = self.process_tool_call(tool_name, tool_args_sampled, {}, [])
+                                            # print('sampled args', tool_args_sampled, 'comparing outcome between: ', list(retrieved_docids_set), 'and: ', next(iter(retrieved_docids_sampled[0].values())))
+                                            similarities.append(self.jaccard_similarity(list(retrieved_docids_set), next(iter(retrieved_docids_sampled[0].values()))))
+                                        similarities = np.array(similarities)
+                                                 
+                                    min_sim_index = np.argmin(similarities)    
+                                    tool_args = sampled_tool_args[min_sim_index]
+                                    tool_name = 'search'
+                                
+                                # only until here we have successfully sampled 5 tool calls and picked the best one.
+                                print('***Selected tool_name, tool_args: ', tool_name, tool_args)
+                                tool_call_counts['search'] -= 1
+                                result, _, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
+                                
+                            # maintain a set of retrieved doc ids. No need to recompute every time. 
+                            for _docid in next(iter(retrieved_docids[-1].values())):
+                                retrieved_docids_set.add(_docid)
                     else:                                    
                         result, docids, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
 
