@@ -125,13 +125,18 @@ def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_in
 @st.cache_data
 def load_traces_from_file(file_path: str) -> List[Dict[str, Any]]:
     """Load and cache traces from a file."""
-    return read_jsonl(file_path)
+    data = read_jsonl(file_path)
+    for inst in data:
+        inst['search_counts'] = inst.get('tool_call_counts', {}).get('search', 0)
+        
+    data = sorted(data, key=lambda x: int(x['query_id']), reverse=False)
+    return data
 
 
 @st.cache_data
-def load_query_mapping() -> Dict[str, str]:
+def load_query_mapping(mapping_file: str) -> Dict[str, str]:
     """Load query_id to query mapping from the decrypted dataset."""
-    mapping_file = Path('data/browsecomp_plus_id2query.json')
+    mapping_file = Path(mapping_file)
     if not mapping_file.exists():
         return {}
     with open(mapping_file, 'r', encoding='utf-8') as f:
@@ -139,7 +144,7 @@ def load_query_mapping() -> Dict[str, str]:
     return id2query
 
 
-def main():
+def main(mapping_file: str, data_dir: str):
     st.set_page_config(
         page_title="Agent Trace Viewer",
         page_icon="🔍",
@@ -159,22 +164,22 @@ def main():
     st.sidebar.header("Trace File Selection")
     
     # Load traces from data directory
-    data_dir = Path('data/decrypted_run_files')
+    data_dir_path = Path(data_dir)
     
-    if not data_dir.exists():
-        st.error("Data directory not found. Please ensure 'data/decrypted_run_files' exists.")
+    if not data_dir_path.exists():
+        st.error(f"Data directory not found. Please ensure '{data_dir_path}' exists.")
         return
     
     # Get all subdirectories and their trace files
     trace_files = {}
-    for subdir in data_dir.iterdir():
+    for subdir in data_dir_path.iterdir():
         if subdir.is_dir():
             for jsonl_file in subdir.glob("*.jsonl"):
                 display_name = f"{subdir.name}/{jsonl_file.name}"
                 trace_files[display_name] = str(jsonl_file)
     
     if not trace_files:
-        st.warning("No trace files found in data/decrypted_run_files")
+        st.warning(f"No trace files found in {data_dir}")
         return
     
     # File selector
@@ -221,7 +226,7 @@ def main():
     trace_uid = f"{selected_file}_{selected_index}"
     
     # Load query mapping
-    id2query = load_query_mapping()
+    id2query = load_query_mapping(mapping_file)
     
     # Get query text
     query_id = selected_trace.get('query_id', 'Unknown')
@@ -306,5 +311,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(mapping_file='data/qampari_id2query.json', data_dir='data/qampari_show')
 
