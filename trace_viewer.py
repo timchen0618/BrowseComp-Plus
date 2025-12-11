@@ -311,5 +311,6 @@ def main(mapping_file: str, data_dir: str):
 
 
 if __name__ == "__main__":
-    main(mapping_file='data/qampari_id2query.json', data_dir='data/qampari_show')
+    # main(mapping_file='data/qampari_id2query.json', data_dir='data/qampari_show')
+    main(mapping_file='data/browsecomp_plus_id2query.json', data_dir='data/run_subset')
 
