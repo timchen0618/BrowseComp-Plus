@@ -317,40 +317,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Filter files to keep only queries matching IDs from a reference JSONL file"
     )
-    parser.add_argument(
-        "--reference",
-        type=Path,
-        default="data/decrypted_run_files/bm25/oss-20b.jsonl",
-        help="Reference JSONL file containing query IDs to keep (default: data/decrypted_run_files/bm25/oss-20b.jsonl)",
-    )
-    parser.add_argument(
-        "--json_dir",
-        type=Path,
-        default="runs/bm25/oss-20b",
-        help="Directory containing JSON files to filter (default: runs/bm25/oss-20b)",
-    )
-    parser.add_argument(
-        "--jsonl_files",
-        type=Path,
-        nargs="*",
-        help="Additional JSONL files to filter (optional)",
-    )
-    parser.add_argument(
-        "--jsonl_dir",
-        type=Path,
-        default="data/decrypted_run_files",
-        help="Directory containing JSONL files to filter recursively (default: data/decrypted_run_files)",
-    )
-    parser.add_argument(
-        "--no-backup",
-        action="store_true",
-        help="Don't create .bak backup files when removing JSON files",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without actually modifying files",
-    )
+    parser.add_argument("--reference", type=Path, default="data/decrypted_run_files/bm25/oss-20b.jsonl", help="Reference JSONL file containing query IDs to keep (default: data/decrypted_run_files/bm25/oss-20b.jsonl)")
+    parser.add_argument("--json_dir", type=Path, default="runs/bm25/oss-20b", help="Directory containing JSON files to filter (default: runs/bm25/oss-20b)")
+    parser.add_argument("--jsonl_files", type=Path, nargs="*", help="Additional JSONL files to filter (optional)")
+    parser.add_argument("--jsonl_dir", type=Path, default="data/decrypted_run_files", help="Directory containing JSONL files to filter recursively (default: data/decrypted_run_files)")
+    parser.add_argument("--no-backup", action="store_true", help="Don't create .bak backup files when removing JSON files")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without actually modifying files")
     
     args = parser.parse_args()
     
