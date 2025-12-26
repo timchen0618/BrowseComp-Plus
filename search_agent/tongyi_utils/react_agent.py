@@ -18,6 +18,7 @@ from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools import BaseTool
 import time
 import numpy as np
+from bert_score import BERTScorer
 
 SYSTEM_PROMPT_SEARCH_ONLY = """You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For every request, synthesize information from credible, diverse sources to deliver a comprehensive, accurate, and objective response. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer within <answer></answer> tags.
 
@@ -403,7 +404,7 @@ class SampleAgent(MultiTurnReactAgent):
             messages.append({"role": "assistant", "content": content.strip()})
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_name, tool_args, valid_tool_call = self.parse_content(content, tool_call_counts_all)
-                print('OUTER tool_name: ', tool_name, 'tool_args: ', tool_args, 'valid_tool_call: ', valid_tool_call)
+                # print('OUTER tool_name: ', tool_name, 'tool_args: ', tool_args, 'valid_tool_call: ', valid_tool_call)
                 if not valid_tool_call:
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 else:
@@ -412,7 +413,7 @@ class SampleAgent(MultiTurnReactAgent):
                         if has_doc_ids: 
                             # only when search tool call returns some doc ids, we sample 5 times
                             # later when we actually use the most dissimilar search tool args, we will process the search call again
-                            print("Sampling search tool args for 5 times...", content)
+                            # print("Sampling search tool args for 5 times...", content)
                             sampled_tool_args = [tool_args]
                             for _ in range(30):
                                 content_inner = self.call_server(messages[:-1], planning_port)
@@ -442,9 +443,9 @@ class SampleAgent(MultiTurnReactAgent):
                             if len(sampled_tool_args) >= 5:     
                                 # handle the retrieved_docids list to remove the last element
                                 retrieved_docids.pop()
-                                print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
+                                # print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
                                 
-                                print("<<>>Sampled search tool args: ", sampled_tool_args)
+                                # print("<<>>Sampled search tool args: ", sampled_tool_args)
                                 past_keys = []
                                 for n_dict in retrieved_docids:
                                     key = next(iter(n_dict.keys()))
@@ -456,11 +457,11 @@ class SampleAgent(MultiTurnReactAgent):
                                             past_keys.append(val['query'])
                                         
                                 if len(past_keys) == 0:
-                                    print('$$$ No past keys, selecting a random tool args')
+                                    # print('$$$ No past keys, selecting a random tool args')
                                     tool_args = random.choice(sampled_tool_args)
                                     tool_name = 'search'
                                 else:
-                                    print('$$$ Past keys: ', past_keys)
+                                    # print('$$$ Past keys: ', past_keys)
                                     tokenized_past_keys = tokenizer.encode(' '.join(past_keys))
                                     sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
                                     print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
@@ -473,7 +474,7 @@ class SampleAgent(MultiTurnReactAgent):
                                     tool_name = 'search'
                                 
                                 # only until here we have successfully sampled 5 tool calls and picked the best one.
-                                print('***Selected tool_name, tool_args: ', tool_name, tool_args)
+                                # print('***Selected tool_name, tool_args: ', tool_name, tool_args)
                                 tool_call_counts['search'] -= 1
                                 result, _, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
                     else:                                    
@@ -555,6 +556,7 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
             **kwargs
         )
         self.sample_mode = sample_mode
+        self.bert_scorer = BERTScorer(lang="en")
         
     def parse_content(self, content: str, tool_call_counts_all: dict):
         tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
@@ -660,7 +662,7 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                         if has_doc_ids: 
                             # only when search tool call returns some doc ids, we sample 5 times
                             # later when we actually use the most dissimilar search tool args, we will process the search call again
-                            print("Sampling search tool args for 5 times...", content)
+                            # print("Sampling search tool args for 5 times...", content)
                             sampled_tool_args = [tool_args]
                             for _ in range(30):
                                 content_inner = self.call_server(messages[:-1], planning_port)
@@ -690,9 +692,9 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                             if len(sampled_tool_args) >= 5:     
                                 # handle the retrieved_docids list to remove the last element
                                 retrieved_docids.pop()
-                                print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
+                                # print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
                                 
-                                print("<<>>Sampled search tool args: ", sampled_tool_args)
+                                # print("<<>>Sampled search tool args: ", sampled_tool_args)
                                 past_keys = []
                                 for n_dict in retrieved_docids:
                                     key = next(iter(n_dict.keys()))
@@ -704,14 +706,14 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                             past_keys.append(val['query'])
                                         
                                 if len(past_keys) == 0:
-                                    print('$$$ No past keys, selecting a random tool args')
+                                    # print('$$$ No past keys, selecting a random tool args')
                                     tool_args = random.choice(sampled_tool_args)
                                     tool_name = 'search'
                                 else:
-                                    print('$$$ Past keys: ', past_keys)
+                                    # print('$$$ Past keys: ', past_keys)
                                     tokenized_past_keys = tokenizer.encode(' '.join(past_keys))
                                     sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
-                                    print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
+                                    # print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
                                     
                                     if self.sample_mode == 'jaccard_join':
                                         # compute similarity and get the most dissimilar response.
@@ -731,15 +733,13 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                     elif self.sample_mode == 'bertscore_join':
                                         # compute similarity and get the most dissimilar response using bertscore.
                                         # compare with all the past keys joined by whitespace. 
-                                        from bert_score import score
-                                        P, R, F1 = score(sampled_tool_args_text_only, [' '.join(past_keys) for _ in range(len(sampled_tool_args_text_only))], lang='en', verbose=False)
+                                        P, R, F1 = self.bert_scorer.score(sampled_tool_args_text_only, [' '.join(past_keys) for _ in range(len(sampled_tool_args_text_only))])
                                         similarities = F1.numpy()
                                     elif self.sample_mode == 'bertscore_max':
                                         # compute similarity using bertscore, but compare with each previous key individually and take the max. 
-                                        from bert_score import score
                                         similarities = []
                                         for _sampled_arg in sampled_tool_args_text_only:
-                                            P, R, F1 = score([_sampled_arg for _ in range(len(past_keys))], past_keys, lang='en', verbose=False)
+                                            P, R, F1 = self.bert_scorer.score([_sampled_arg for _ in range(len(past_keys))], past_keys)
                                             # take the max F1 score for each sampled argument
                                             similarities.append(max(F1.numpy()))
                                         similarities = np.array(similarities)

@@ -265,6 +265,12 @@ def main():
         sample_mode=args.sample_mode
     )
     
+    # make a dummy call
+    agent.model = args.model
+    agent.call_server([{"role": "user", "content": "Hello, how are you?"}], args.port)
+    
+    print("Dummy call successful")
+    
     query_str = args.query.strip()
     if query_str.lower().endswith(".tsv"):
         potential_path = Path(query_str)
