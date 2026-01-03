@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tongyi_utils.react_agent import MultiTurnReactAgent, SampleAgent, SampleOutcomeAgent
+from tongyi_utils.react_agent import MultiTurnReactAgent, SampleOutcomeAgent
 from tongyi_utils.tool_search import SearchToolHandler
 from searcher.searchers import SearcherType
 import re
@@ -205,7 +205,8 @@ def main():
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
-    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max'], help='whether to sample, and how to sample multiple search calls')
+    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
+    parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
     
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
@@ -267,6 +268,7 @@ def main():
     
     # make a dummy call
     agent.model = args.model
+    agent.reward_model = args.reward_model
     agent.call_server([{"role": "user", "content": "Hello, how are you?"}], args.port)
     
     print("Dummy call successful")
