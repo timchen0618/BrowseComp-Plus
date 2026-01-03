@@ -1,6 +1,6 @@
 import json
 
-command = 'run_qwen3'
+command = 'run_reward'
 
 if command == 'gen_embed':
     template_file = "embed_template.SBATCH"
@@ -49,6 +49,25 @@ elif command == 'run_qwen3':
             template = org_template.replace("[num]", str(num))
             write_to_run_file.append(f"sbatch sbatch_jobs/run{_web}_qwen3_{num}.SBATCH")
             with open(f"sbatch_jobs/run{_web}_qwen3_{num}.SBATCH", "w") as f:
+                f.write(template)
+                
+                
+    with open(f"run.sh", "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write("\n".join(write_to_run_file))
+        
+elif command == 'run_reward':
+    write_to_run_file = []
+
+    # for model in ["infly", "qwen3-0.6b"]:
+    for _web in ["_web", ""]:
+        template_file = f"run{_web}_qwen3_reward.SBATCH"
+        org_template = open(template_file, "r").read()
+        for num in range(0, 10):
+            
+            template = org_template.replace("[num]", str(num))
+            write_to_run_file.append(f"sbatch sbatch_jobs/run{_web}_qwen3_reward_{num}.SBATCH")
+            with open(f"sbatch_jobs/run{_web}_qwen3_reward_{num}.SBATCH", "w") as f:
                 f.write(template)
                 
                 
