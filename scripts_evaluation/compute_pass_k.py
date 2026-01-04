@@ -51,19 +51,11 @@ def load_per_query_scores(summary_path: Path, metric: str) -> List[Tuple[str, fl
     return results
 
 
-def aggregate_scores(dirs: Iterable[Path], metric: str, ground_truth: str) -> None:
-    """Aggregate per-query scores and print the average of per-query maxima."""
-    if ground_truth is not None:
-        ground_truth = read_jsonl(ground_truth)
-        gt_query_ids = [inst['query_id'] for inst in ground_truth]
-    else:
-        gt_query_ids = None
-        
-    dirs = list(dirs)  # ensure we can iterate multiple times
+def aggregate_metric_per_query(dirs: Iterable[Path], metric: str, ground_truth: str, gt_query_ids: List[str], eval_file_name: str) -> None:
     scores_by_qid: Dict[str, List[float]] = {}
 
     for directory in dirs:
-        summary_path = directory / "evaluation_summary.json"
+        summary_path = directory / eval_file_name
         if not summary_path.is_file():
             print(f"Skip {summary_path}: file not found")
             continue
@@ -82,6 +74,24 @@ def aggregate_scores(dirs: Iterable[Path], metric: str, ground_truth: str) -> No
             if (gt_query_ids is not None) and (qid not in gt_query_ids):
                 continue
             scores_by_qid.setdefault(qid, []).append(score)
+    return scores_by_qid
+
+def aggregate_scores(dirs: Iterable[Path], metric: str, ground_truth: str) -> None:
+    """
+        Aggregate per-query scores and print the average of per-query maxima.
+        1. compute the average of per-query maxima
+        2. compute document recall and number of calls
+    """
+    if ground_truth is not None:
+        ground_truth = read_jsonl(ground_truth)
+        gt_query_ids = [inst['query_id'] for inst in ground_truth]
+    else:
+        gt_query_ids = None
+        
+    dirs = list(dirs)  # ensure we can iterate multiple times
+    scores_by_qid = aggregate_metric_per_query(dirs, metric, ground_truth, gt_query_ids, "evaluation_summary.json")
+    recalls_by_qid = aggregate_metric_per_query(dirs, "recall", ground_truth, gt_query_ids, "evaluation_summary.json")
+    num_search_calls_by_qid = aggregate_metric_per_query(dirs, "num_search_calls", ground_truth, gt_query_ids, "evaluation_summary.json")
 
     if not scores_by_qid:
         print("No scores found to aggregate.")
@@ -93,12 +103,22 @@ def aggregate_scores(dirs: Iterable[Path], metric: str, ground_truth: str) -> No
     average_num_answers = sum(num_answers_by_qid.values()) / len(num_answers_by_qid)
     average_max_score = sum(max_by_qid.values()) / len(max_by_qid)
     average_average_score = sum(average_by_qid.values()) / len(average_by_qid)
+    recalls_using_max_score = []
+    num_search_calls_using_max_score = []
+    for qid, vals in recalls_by_qid.items():
+        recalls_using_max_score.append(vals[scores_by_qid[qid].index(max(scores_by_qid[qid]))])
+    for qid, vals in num_search_calls_by_qid.items():
+        num_search_calls_using_max_score.append(vals[scores_by_qid[qid].index(max(scores_by_qid[qid]))])
+    average_recall = sum(recalls_using_max_score) / len(recalls_using_max_score)
+    average_num_search_calls = sum(num_search_calls_using_max_score) / len(num_search_calls_using_max_score)
 
     print(f"Aggregated metric '{metric}' from {len(scores_by_qid)} queries.")
     print(f"Directories processed: {len(dirs)}")
     print(f"Average of per-query maxima: {average_max_score:.4f}")
     print(f"Average of per-query averages: {average_average_score:.4f}")
     print(f"Average number of answers: {average_num_answers:.2f}")
+    print(f"Average recall using max score: {average_recall:.4f}")
+    print(f"Average number of search calls using max score: {average_num_search_calls:.2f}")
 
 
 def parse_args() -> argparse.Namespace:

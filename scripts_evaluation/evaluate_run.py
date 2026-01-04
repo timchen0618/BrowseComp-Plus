@@ -746,11 +746,13 @@ def main():
             if isinstance(recall_val, (int, float))
             else None
         )
+        num_search_calls = r.get("tool_call_counts", {}).get("search", 0)
         per_query_metrics.append(
             {
                 "query_id": qid,
                 "correct": correct_flag,
                 "recall": recall_val_percent,
+                "num_search_calls": num_search_calls,
             }
         )
 
