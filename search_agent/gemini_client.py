@@ -196,6 +196,7 @@ async def run_conversation_with_sampling(
     max_iterations=100,
     num_samples=5,
     sample_mode='jaccard_join',
+    max_tokens=10000,
 ):
     """
     Run conversation with manual tool call handling, sampling multiple outputs at every step.
@@ -263,6 +264,7 @@ async def run_conversation_with_sampling(
     iteration = 0
     answer_found = False
     past_keys = []
+    token_counts = 0
     
     tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
     while iteration < max_iterations:
@@ -344,6 +346,7 @@ async def run_conversation_with_sampling(
         #     response_dict = json.loads(json.dumps(response, default=str))
         print('-'*100)
         print('response_dict:', response_dict)
+        token_counts += response_dict.get("usage_metadata", {}).get("candidates_token_count", 0)
         
         # Process response parts (text, reasoning, etc.)
         # Add assistant response to messages
@@ -447,11 +450,14 @@ async def run_conversation_with_sampling(
                 "parts": function_response_parts
             })
 
-        # print('^'*100)
-        # print('gemini_messages:', gemini_messages)
+        
+        if token_counts > max_tokens:
+            break
 
         iteration += 1
 
+
+    print('Total Tokens:', token_counts, 'Max Tokens:', max_tokens)
     return all_response_dicts, gemini_messages, all_results, tool_counts
 
 
@@ -672,6 +678,7 @@ async def _process_tsv_dataset(tsv_path: str, gemini_client, mcp_client, config,
                         max_iterations=args.max_iterations,
                         num_samples=args.num_samples,
                         sample_mode=args.sample_mode,
+                        max_tokens=args.max_tokens,
                     )
                 )
                 
@@ -929,6 +936,7 @@ async def main():
                     max_iterations=args.max_iterations,
                     num_samples=args.num_samples,
                     sample_mode=args.sample_mode,
+                    max_tokens=args.max_tokens,
                 )
             )
             
@@ -1008,5 +1016,3 @@ async def main_with_cleanup():
 if __name__ == "__main__":
     asyncio.run(main_with_cleanup())
 
-
-# GEMINI_API_KEY=AIzaSyAejK_M6SpLi-0BfwdMRFkthNLrZBPR_dk python search_agent/gemini_client.py --model gemini-2.5-flash --mcp-url http://127.0.0.1:8080/mcp --output-dir runs/qwen3-8/gemini_2_5_flash_sample_new --do-sampling --max-iterations 3  --num-samples 2 --store-raw --query topics-qrels/q_1.tsv
