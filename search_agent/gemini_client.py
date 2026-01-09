@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+import random
 
 from dotenv import load_dotenv
 from fastmcp import Client
@@ -13,6 +14,9 @@ from fastmcp.client.transports import SSETransport
 from google import genai
 from prompts import format_query
 from tqdm import tqdm
+import numpy as np
+
+from transformers import AutoTokenizer
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -191,6 +195,7 @@ async def run_conversation_with_sampling(
     initial_messages,
     max_iterations=100,
     num_samples=5,
+    sample_mode='jaccard_join',
 ):
     """
     Run conversation with manual tool call handling, sampling multiple outputs at every step.
@@ -201,45 +206,144 @@ async def run_conversation_with_sampling(
     Returns:
         List of all responses and the final conversation state.
     """
+    def check_has_search_call(response_dict):
+        has_search_call = False
+        search_call_args = None
+        for candidate in response_dict.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                if "function_call" in part and part['function_call'] is not None and isinstance(part['function_call'], dict):
+                    fc = part['function_call']
+                    name = fc.get("name")
+                    args = fc.get("args", {})
+                    if name == 'search' and args is not None and isinstance(args, dict) and len(args) > 0:
+                        has_search_call = True
+                        search_call_args = ','.join(args['query']) if isinstance(args['query'], list) else args['query']
+                        # [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
+                        break
+        return has_search_call, search_call_args
+    
+    def jaccard_similarity(list1: list, list2: list):
+        return len(set(list1) & set(list2)) / len(set(list1) | set(list2))
+    
+    def sample_best_response(sampled_response_dicts, sampled_search_call_argss, past_keys, sample_mode, tokenizer):
+        # print('MMMMMMMMM, Sample Mode:', sample_mode)
+        # print('OOOOOOOOO, Sampled Search Call Args:', sampled_search_call_argss)
+        # print('QQQQQQQQQ, Sampled Response Dicts:', sampled_response_dicts)
+        # print('PPPPPPPPP, Past Keys:', past_keys)
+        # sample the best response based on the search call args
+        if sample_mode == 'jaccard_join':
+            # compute similarity and get the most dissimilar response.
+            # compare with all the past keys joined by whitespace. 
+            tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_search_call_argss]
+            tokenized_joined_past_keys = tokenizer.encode(' '.join(past_keys))
+            similarities = np.array([jaccard_similarity(tokenized_joined_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
+            
+        elif sample_mode == 'jaccard_max':
+            # compute similarity using jaccard similarity, but compare with each previous key individually and take the max. 
+            similarities = []
+            tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_search_call_argss]
+            tokenized_past_keys = [tokenizer.encode(s) for s in past_keys]
+            for tokenized_arg in tokenized_sampled_args:  # loop thru every tokenized sampled arguments 
+                # get the max sim across past search calls
+                max_sim_for_arg = max([jaccard_similarity(tokenized_past_k, tokenized_arg) for tokenized_past_k in tokenized_past_keys])
+                similarities.append(max_sim_for_arg)
+            similarities = np.array(similarities)
+            
+        min_sim_index = np.argmin(similarities)
+        past_keys.append(sampled_search_call_argss[min_sim_index])
+        return sampled_response_dicts[min_sim_index], sampled_search_call_argss[min_sim_index]
+        
     # Convert to Gemini message format
     gemini_messages = convert_messages_to_gemini_format(initial_messages)
     
-    all_responses = []
+    all_response_dicts = []
     all_results = []
     tool_counts = {}
     iteration = 0
     answer_found = False
+    past_keys = []
+    
+    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
     while iteration < max_iterations:
-        # Always sample at every step
-        print(f"[Info] Sampling {num_samples} responses at step {iteration}...")
+        # Generate response without automatic function calling
+        first_response = await generate_response(
+            gemini_client, mcp_client, config, initial_messages, 
+            use_automatic_calling=False, gemini_messages=gemini_messages
+        )
+        try:
+            first_response_dict = first_response.model_dump(mode="python")
+        except AttributeError:
+            first_response_dict = json.loads(json.dumps(first_response, default=str))
+        
+        # check if the first response has a search call
+        has_search_call, search_call_args = check_has_search_call(first_response_dict)
+        
+        if has_search_call:
+            # sample multiple responses and get the best one
+            print(f"[Info] Sampling {num_samples} responses at step {iteration}...")
 
-        sampled_responses = []
-        for sample_idx in range(num_samples):
-            print(f"[Info] Generating sample {sample_idx + 1}/{num_samples} at step {iteration}...")
+            sampled_response_dicts = [first_response_dict]
+            sampled_search_call_argss = [search_call_args]
+            
+            # sample 2x the number of samples, and ensure we have at least num_samples responses
+            for sample_idx in range(num_samples*2):
+                print(f"[Info] Generating sample {sample_idx + 1}/{num_samples} at step {iteration}...")
 
-            # Generate response without automatic function calling
-            response = await generate_response(
-                gemini_client, mcp_client, config, initial_messages, 
-                use_automatic_calling=False, gemini_messages=gemini_messages
-            )
-            sampled_responses.append(response)
-            all_responses.append(response)
-            print('all_responses:', all_responses)
+                # Generate response without automatic function calling
+                inner_response = await generate_response(
+                    gemini_client, mcp_client, config, initial_messages, 
+                    use_automatic_calling=False, gemini_messages=gemini_messages
+                )
+                
+                try:
+                    inner_response_dict = inner_response.model_dump(mode="python")
+                except AttributeError:
+                    inner_response_dict = json.loads(json.dumps(inner_response, default=str))
+                has_search_call, inner_search_call_args = check_has_search_call(inner_response_dict)
+                if has_search_call:
+                    sampled_response_dicts.append(inner_response_dict)
+                    sampled_search_call_argss.append(inner_search_call_args)
+                if len(sampled_response_dicts) >= num_samples:
+                    break
+                
+            if len(past_keys) == 0:
+                # no past keys, select a random response
+                rand_index = random.randint(0, len(sampled_response_dicts) - 1)
+                response_dict = sampled_response_dicts[rand_index]
+                past_keys.append(sampled_search_call_argss[rand_index])
+            else:
+                # sample the best response based on the search call args
+                response_dict, _ = sample_best_response(sampled_response_dicts, sampled_search_call_argss, past_keys, sample_mode, tokenizer)
+        
+        else:
+            response_dict = first_response_dict
+        
+        all_response_dicts.append(response_dict)
+    
+
+        # sampled_responses = []
+        # for sample_idx in range(num_samples):
+        #     print(f"[Info] Generating sample {sample_idx + 1}/{num_samples} at step {iteration}...")
+
+        #     # Generate response without automatic function calling
+        #     response = await generate_response(
+        #         gemini_client, mcp_client, config, initial_messages, 
+        #         use_automatic_calling=False, gemini_messages=gemini_messages
+        #     )
+        #     sampled_responses.append(response)
+        #     all_responses.append(response)
+        #     print('all_responses:', all_responses)
 
         # Use the first response for processing (or could use best one)
-        response = sampled_responses[0]
-
-        """Extract function calls from a Gemini response."""
-        try:
-            response_dict = response.model_dump(mode="python")
-        except AttributeError:
-            response_dict = json.loads(json.dumps(response, default=str))
+        
+        # """Extract function calls from a Gemini response."""
+        # try:
+        #     response_dict = response.model_dump(mode="python")
+        # except AttributeError:
+        #     response_dict = json.loads(json.dumps(response, default=str))
         print('-'*100)
         print('response_dict:', response_dict)
-        # Extract function calls from response
-        # function_calls = extract_function_calls_from_response(response_dict)
-        # print('*'*100)
-        # print('function_calls:', function_calls)
         
         # Process response parts (text, reasoning, etc.)
         # Add assistant response to messages
@@ -281,8 +385,8 @@ async def run_conversation_with_sampling(
                         "output": None,
                     })
 
-        print('&'*100)
-        print('assistant_content_parts:', assistant_content_parts)
+        # print('&'*100)
+        # print('assistant_content_parts:', assistant_content_parts)
 
         if answer_found:
             break
@@ -294,8 +398,8 @@ async def run_conversation_with_sampling(
                 "parts": assistant_content_parts
             })
 
-        print('$'*100)
-        print('gemini_messages:', gemini_messages)
+        # print('$'*100)
+        # print('gemini_messages:', gemini_messages)
 
         # If no function calls, we're done
         if not function_calls:
@@ -333,8 +437,8 @@ async def run_conversation_with_sampling(
                 "output": tool_result.structuredContent['result'],
             })
 
-        print('%'*100)
-        print('function_response_parts:', function_response_parts)
+        # print('%'*100)
+        # print('function_response_parts:', function_response_parts)
 
         # Add function results to messages
         if function_response_parts:
@@ -343,12 +447,12 @@ async def run_conversation_with_sampling(
                 "parts": function_response_parts
             })
 
-        print('^'*100)
-        print('gemini_messages:', gemini_messages)
+        # print('^'*100)
+        # print('gemini_messages:', gemini_messages)
 
         iteration += 1
 
-    return all_responses, gemini_messages, all_results, tool_counts
+    return all_response_dicts, gemini_messages, all_results, tool_counts
 
 
 def _persist_response(
@@ -377,7 +481,7 @@ def _persist_response(
     output_tokens = cand_tokens + thought_tokens
     included_reason = thought_tokens or None
 
-    print('_'*100)
+    # print('_'*100)
     # for p in response_dict.get("candidates", [{}])[0].get("content", {}).get("parts", []):
     #     print('part:', p)
     
@@ -399,10 +503,10 @@ def _persist_response(
     pending_calls = {}
 
     # print('parts:', list(_part_iter()))
-    print('starting to iterate over parts')
+    # print('starting to iterate over parts')
     for part in _part_iter():
-        print('iterating over part')
-        print('part:', part)
+        # print('iterating over part')
+        # print('part:', part)
         fc = part.get("function_call")
         fr = part.get("function_response")
 
@@ -471,7 +575,7 @@ def _persist_response(
                 }
             )
 
-    print('done iterating over parts')
+    # print('done iterating over parts')
     for entry in pending_calls.values():
         if entry["output"] is None:
             print(f"[Warning] Function '{entry['tool_name']}' had no response")
@@ -559,7 +663,7 @@ async def _process_tsv_dataset(tsv_path: str, gemini_client, mcp_client, config,
         try:
             # Handle sampling mode (step-by-step with sampling at every step)
             if args.do_sampling:
-                all_responses, final_messages, all_results, tool_counts = (
+                all_response_dicts, final_messages, all_results, tool_counts = (
                     await run_conversation_with_sampling(
                         gemini_client,
                         mcp_client,
@@ -567,6 +671,7 @@ async def _process_tsv_dataset(tsv_path: str, gemini_client, mcp_client, config,
                         messages,
                         max_iterations=args.max_iterations,
                         num_samples=args.num_samples,
+                        sample_mode=args.sample_mode,
                     )
                 )
                 
@@ -584,12 +689,12 @@ async def _process_tsv_dataset(tsv_path: str, gemini_client, mcp_client, config,
                 #         query_id=f"{qid}_step_{step_idx // args.num_samples}_sample_{step_idx % args.num_samples}",
                 #         store_raw=args.store_raw,
                 #     )
-                response = all_responses[-1]
+                response_dict = all_response_dicts[-1]
                 os.makedirs(out_dir, exist_ok=True)
-                try:
-                    response_dict = response.model_dump(mode="python")
-                except AttributeError:
-                    response_dict = json.loads(json.dumps(response, default=str))
+                # try:
+                #     response_dict = response.model_dump(mode="python")
+                # except AttributeError:
+                #     response_dict = json.loads(json.dumps(response, default=str))
 
                 um = response_dict.get("usage_metadata", {})
                 prompt_tokens = um.get("prompt_token_count")
@@ -626,7 +731,7 @@ async def _process_tsv_dataset(tsv_path: str, gemini_client, mcp_client, config,
                 }
 
                 if args.store_raw:
-                    record["raw_response"] = all_responses
+                    record["raw_response"] = all_response_dicts
 
                 ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
                 fname = os.path.join(out_dir, f"run_{ts}.json")
@@ -760,6 +865,14 @@ async def main():
         default=100,
         help="Maximum number of iterations when using --do-sampling mode (default: %(default)s).",
     )
+    parser.add_argument(
+        "--sample-mode",
+        type=str,
+        default='jaccard_join',
+        choices=['jaccard_join', 'jaccard_max'],
+        help="Mode to sample the best response (default: %(default)s).",
+    )
+    
     args = parser.parse_args()
 
     gemini_client, mcp_client, config = init_gemini_client(
@@ -815,6 +928,7 @@ async def main():
                     messages,
                     max_iterations=args.max_iterations,
                     num_samples=args.num_samples,
+                    sample_mode=args.sample_mode,
                 )
             )
             
@@ -893,3 +1007,6 @@ async def main_with_cleanup():
 
 if __name__ == "__main__":
     asyncio.run(main_with_cleanup())
+
+
+# GEMINI_API_KEY=AIzaSyAejK_M6SpLi-0BfwdMRFkthNLrZBPR_dk python search_agent/gemini_client.py --model gemini-2.5-flash --mcp-url http://127.0.0.1:8080/mcp --output-dir runs/qwen3-8/gemini_2_5_flash_sample_new --do-sampling --max-iterations 3  --num-samples 2 --store-raw --query topics-qrels/q_1.tsv
