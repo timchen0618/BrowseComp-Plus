@@ -205,7 +205,7 @@ def main():
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
-    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
+    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join', 'reward+bertscore_max', 'reward_single_lm', 'reward_single_lm+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
     parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
     
     # Server configuration arguments

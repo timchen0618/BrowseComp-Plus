@@ -822,7 +822,7 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                             similarities.append(self.jaccard_similarity(list(retrieved_docids_set), next(iter(retrieved_docids_sampled[0].values()))))
                                         similarities = np.array(similarities)
                                                  
-                                    elif self.sample_mode == 'reward' or self.sample_mode == 'reward+jaccard_join':
+                                    elif (self.sample_mode == 'reward' or self.sample_mode == 'reward+jaccard_join' or self.sample_mode == 'reward+bertscore_max') or (self.sample_mode == 'reward_single_lm' or self.sample_mode == 'reward_single_lm+jaccard_join'):
                                         similarities = []
                                         for current_reasoning in sampled_current_reasonings:
                                             # score the trajectory based on the reward model.
@@ -833,7 +833,10 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                                 current_reasoning=current_reasoning)
                                             reward_messages = [{"role": "user", "content": summary_prompt}]
                                             print("^^^history summary: ", self.historical_summary)
-                                            summary = self.call_reward_model(reward_messages, planning_port+2)
+                                            if 'single_lm' in self.sample_mode:
+                                                summary = self.call_server(reward_messages, planning_port)
+                                            else:
+                                                summary = self.call_reward_model(reward_messages, planning_port+2)
                                             print("summary: ", summary)
                                             try:
                                                 summary = summary.split('\\boxed_summary{')[1].split('}')[0]
@@ -847,7 +850,10 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                                 previous_tool_response=messages[-2]['content'], 
                                                 current_reasoning=current_reasoning)
                                             score_messages = [{"role": "user", "content": score_prompt}]
-                                            score = self.call_reward_model(score_messages, planning_port+2)
+                                            if 'single_lm' in self.sample_mode:
+                                                score = self.call_server(score_messages, planning_port)
+                                            else:
+                                                score = self.call_reward_model(score_messages, planning_port+2)
                                             # print("score: ", score)
                                             try:
                                                 score = score.split('\\boxed_score{')[1].split('}')[0]
@@ -857,9 +863,16 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                                             
                                             similarities.append(-score)
                                         similarities = np.array(similarities)
-                                        if self.sample_mode == 'reward+jaccard_join':
+                                        if self.sample_mode == 'reward+jaccard_join' or self.sample_mode == 'reward_single_lm+jaccard_join':
                                             tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
                                             similarities += np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
+                                        elif self.sample_mode == 'reward+bertscore_max':
+                                            bertscore_similarities = []
+                                            for _sampled_arg in sampled_tool_args_text_only:
+                                                P, R, F1 = self.bert_scorer.score([_sampled_arg for _ in range(len(past_keys))], past_keys)
+                                                # take the max F1 score for each sampled argument
+                                                bertscore_similarities.append(max(F1.numpy()))
+                                            similarities += np.array(bertscore_similarities)
                                     
                                     print('$$$ similarities: ', similarities)
                                     min_sim_index = np.argmin(similarities)    
