@@ -40,12 +40,16 @@ def parse_trajectories(args):
     data = sorted(data, key=lambda x: int(x['query_id']))
     for trajectory in tqdm(data):
         retrieved_docids = trajectory['retrieved_docids']
-        all_docids = set()
+        # all_docids = set()
+        all_docids = []
         last_query = None
         has_doc_list = []
         for doc_dict in retrieved_docids:
             for query_before_parse, docids in doc_dict.items():
-                all_docids.update(set(docids))
+                # all_docids.update(set(docids))
+                for d in docids:
+                    if d not in all_docids:
+                        all_docids.append(d)
                 if len(docids) > 0:
                     has_doc_list.append(True)
                 else:
@@ -74,12 +78,12 @@ def parse_trajectories(args):
         
         
     print('Saving results...')
-    write_jsonl(Path(args.input_dir) / 'qampari_combined_docs.jsonl', out_data)
-    write_jsonl(Path(args.input_dir) / 'qampari_last_queries.jsonl', last_query_list)
+    write_jsonl(Path(args.input_dir) / f'{args.data_type}_combined_docs.jsonl', out_data)
+    write_jsonl(Path(args.input_dir) / f'{args.data_type}_last_queries.jsonl', last_query_list)
     
     
 def combine_last_search_and_trajectories(args):
-    combined_docs = read_jsonl(Path(args.input_dir) / 'qampari_combined_docs.jsonl')
+    combined_docs = read_jsonl(Path(args.input_dir) / f'{args.data_type}_combined_docs.jsonl')
     last_query_retrieval_results = read_jsonl(args.last_query_retrieval_results)
     assert len(combined_docs) == len(last_query_retrieval_results)
     for inst, last_query_inst in zip(combined_docs, last_query_retrieval_results):
@@ -95,8 +99,8 @@ def combine_last_search_and_trajectories(args):
         for i in range(len(inst['ctxs'])):
             inst['ctxs'][i]['score'] = 1 / (i + 1 + 1e-6)
         selected_indices.append(int(inst['qid']))
-    write_jsonl(Path(args.input_dir) / f'qampari_agentic_final_results_topk{args.topk}.jsonl', combined_docs)
-    fw = open(Path(args.input_dir) / f'qampari_agentic_final_results_topk{args.topk}.txt', 'w')
+    write_jsonl(Path(args.input_dir) / f'{args.data_type}_agentic_final_results_topk{args.topk}.jsonl', combined_docs)
+    fw = open(Path(args.input_dir) / f'{args.data_type}_agentic_final_results_topk{args.topk}.txt', 'w')
     for index in selected_indices:
         fw.write(f'{index}\n')
     fw.close()
@@ -111,6 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--command", type=str, default="parse_trajectories", choices=["parse_trajectories", "combine_last_search_and_trajectories", "subset"])
     parser.add_argument("--topk", type=int, default=100)
     parser.add_argument("--last-query-retrieval-results", "-l", type=str, default="qampari_runs/qwen3-0.6b/tongyi/last_query_retrieval_results.jsonl")
+    parser.add_argument("--data_type", type=str, default="qampari", choices=["qampari", "quest"])
     
     args = parser.parse_args()
     

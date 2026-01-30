@@ -1,0 +1,16 @@
+# model_name="/scratch/hc3337/models/iterative_retrieval/contriever-finetuned"
+model_name="facebook/contriever-msmarco"
+corpus_name=$1
+
+CUDA_VISIBLE_DEVICES=0 python -m tevatron.retriever.driver.encode \
+  --model_name_or_path ${model_name} \
+  --dataset_name csv \
+  --dataset_path /scratch/hc3337/wikipedia_chunks/${corpus_name}.csv \
+  --encode_output_path embeddings/contriever/${corpus_name}.pkl \
+  --passage_max_len 512 \
+  --normalize \
+  --pooling mean \
+  --passage_prefix "" \
+  --per_device_eval_batch_size 32 \
+  --fp16 \
+  --attn_implementation sdpa
