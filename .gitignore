@@ -13,3 +13,6 @@ data/
 data/decrypted_run_files
 data/run_subset
 *.SBATCH
+quest_runs/
+qampari_runs/
+embeddings/
