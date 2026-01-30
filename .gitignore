@@ -6,7 +6,7 @@ collection/
 indexes/
 tmp/
 retrieval/
-topics-qrels/queries.tsv
+topics-qrels/
 runs/
 evals/
 data/
