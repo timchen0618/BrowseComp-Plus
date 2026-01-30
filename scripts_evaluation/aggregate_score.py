@@ -66,6 +66,7 @@ def extract_metrics(summary_path: Path) -> Dict[str, float]:
         "accuracy_percent": data.get("Accuracy (%)"),
         "recall_percent": data.get("Recall (%)"),
         "token_limit_percent": data.get("token_limit_reached_percent"),
+        "average_tool_calls": data.get("avg_tool_stats", {}).get("search", 0),
     }
 
 
@@ -98,6 +99,7 @@ def write_csv(rows: List[Dict[str, object]], output_path: Path) -> None:
         "accuracy_percent",
         "recall_percent",
         "token_limit_percent",
+        "average_tool_calls",
     )
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
