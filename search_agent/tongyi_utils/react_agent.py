@@ -221,6 +221,8 @@ class MultiTurnReactAgent(FnCallAgent):
         tool_call_counts = {}  # Only successful tool calls
         tool_call_counts_all = {}  # All tool calls (successful and failed)
         retrieved_docids = []
+        total_inference_time = 0.0
+        total_tool_call_time = 0.0
 
         start_time = time.time()
         planning_port = data['planning_port']
@@ -233,6 +235,7 @@ class MultiTurnReactAgent(FnCallAgent):
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
         while num_llm_calls_available > 0:
+            start_inference_time = time.time()
             if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
                 prediction = 'No answer found after 2h30mins'
                 termination = 'No answer found after 2h30mins'
@@ -256,6 +259,9 @@ class MultiTurnReactAgent(FnCallAgent):
                 pos = content.find('<tool_response>')
                 content = content[:pos]
             messages.append({"role": "assistant", "content": content.strip()})
+            total_inference_time += (time.time() - start_inference_time)
+            
+            start_tool_call_time = time.time()
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
@@ -294,6 +300,10 @@ class MultiTurnReactAgent(FnCallAgent):
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
                 messages.append({"role": "user", "content": result})
+                
+            total_tool_call_time += (time.time() - start_tool_call_time)
+                
+            start_inference_time = time.time()
             if '<answer>' in content and '</answer>' in content:
                 termination = 'answer'
                 break
@@ -329,6 +339,8 @@ class MultiTurnReactAgent(FnCallAgent):
                 }
                 return result
 
+            total_inference_time += (time.time() - start_inference_time)
+
         if '<answer>' in messages[-1]['content']:
             prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
             termination = 'answer'
@@ -346,7 +358,9 @@ class MultiTurnReactAgent(FnCallAgent):
             "tool_call_counts": tool_call_counts,
             "tool_call_counts_all": tool_call_counts_all,
             # "retrieved_docids": list(set(retrieved_docids))
-            "retrieved_docids": retrieved_docids
+            "retrieved_docids": retrieved_docids,
+            "total_inference_time": total_inference_time,
+            "total_tool_call_time": total_tool_call_time
         }
         return result
 

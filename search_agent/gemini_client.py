@@ -1016,3 +1016,5 @@ async def main_with_cleanup():
 if __name__ == "__main__":
     asyncio.run(main_with_cleanup())
 
+
+# GEMINI_API_KEY=AIzaSyAejK_M6SpLi-0BfwdMRFkthNLrZBPR_dk python search_agent/gemini_client.py --model gemini-2.5-flash --mcp-url http://127.0.0.1:8080/mcp --output-dir runs/qwen3-8/gemini_2_5_flash_sample_new --do-sampling --max-iterations 3  --num-samples 2 --store-raw --query topics-qrels/q_1.tsv

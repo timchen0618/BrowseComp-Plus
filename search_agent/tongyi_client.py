@@ -75,7 +75,7 @@ def parse_messages_to_result_array(messages: list) -> list:
     return result_array
 
 
-def persist_response(output_dir: Path, query_id: str | None, query: str, result: dict, args):
+def persist_response(output_dir: Path, query_id: str | None, query: str, result: dict, args, time_taken: float = None):
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     filename = output_dir / f"run_{ts}.json"
 
@@ -92,7 +92,10 @@ def persist_response(output_dir: Path, query_id: str | None, query: str, result:
             "presence_penalty": args.presence_penalty,
             "snippet_max_tokens": args.snippet_max_tokens,
             "k": args.k,
-            "searcher_type": args.searcher_type
+            "searcher_type": args.searcher_type,
+            "time_taken": time_taken,
+            "total_inference_time": result.get("total_inference_time", 0.0),
+            "total_tool_call_time": result.get("total_tool_call_time", 0.0)
         },
         "query_id": query_id,
         "tool_call_counts": result.get("tool_call_counts", {}),
@@ -120,8 +123,11 @@ def process_single_query(query: str, agent: MultiTurnReactAgent, args, output_di
     }
     
     try:
+        import time
+        start_time = time.time()
         result = agent._run(task_data, args.model)
-        persist_response(output_dir, None, query, result, args)
+        time_taken = time.time() - start_time
+        persist_response(output_dir, None, query, result, args, time_taken)
     except Exception as exc:
         print(f"Error processing query: {exc}")
         error_result = {
@@ -129,7 +135,7 @@ def process_single_query(query: str, agent: MultiTurnReactAgent, args, output_di
             "error": str(exc),
             "prediction": "[Failed]"
         }
-        persist_response(output_dir, None, query, error_result, args)
+        persist_response(output_dir, None, query, error_result, args, 0.0)
 
 
 def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_dir: Path):
@@ -169,8 +175,11 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
         }
         
         # try:
+        import time
+        start_time = time.time()
         result = agent._run(task_data, args.model)
-        persist_response(output_dir, qid, qtext, result, args)
+        time_taken = time.time() - start_time
+        persist_response(output_dir, qid, qtext, result, args, time_taken)
         # except Exception as exc:
         #     print(f"Error processing query {qid}: {exc}")
         #     error_result = {
