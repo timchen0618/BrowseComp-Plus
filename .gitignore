@@ -19,3 +19,4 @@ embeddings/
 *_runs/
 final_results
 sbatch_outputs
+deletable
