@@ -36,12 +36,35 @@ def write_tsv(lines, file_path):
 
 
 
-input_file = "data/dev_data_gt_quest.jsonl"
-output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/quest_17_shards"
-num_shards = 17
+# input_file = "data/dev_data_gt_quest.jsonl"
+# output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/quest_17_shards"
+# num_shards = 17
 
 
-data = read_jsonl(input_file)
+# input_file = "data/dev_data_gt_webqsp.jsonl"
+# output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/webqsp_10_shards"
+# num_shards = 10
+
+
+# data = read_jsonl(input_file)
+
+# os.makedirs(output_dir, exist_ok=True)
+
+# # with open(input_file, "r", encoding="utf-8") as f:
+# #     lines = f.readlines()
+# lines = []
+# for qid, inst in enumerate(data):
+#     lines.append([str(qid), inst['question_text']])
+    
+# write_tsv(lines, os.path.join(output_dir, "webqsp_dev_question_only.tsv"))
+    
+
+import datasets
+output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/nq_10_shards"
+num_shards = 10
+
+
+data = datasets.load_dataset('RUC-NLPIR/FlashRAG_datasets', 'nq')['test']
 
 os.makedirs(output_dir, exist_ok=True)
 
@@ -49,9 +72,11 @@ os.makedirs(output_dir, exist_ok=True)
 #     lines = f.readlines()
 lines = []
 for qid, inst in enumerate(data):
-    lines.append([str(qid), inst['question_text']])
+    lines.append([str(qid), inst['question']])
+    if qid >= 999:
+        break
     
-write_tsv(lines, os.path.join(output_dir, "quest_dev_question_only.tsv"))
+write_tsv(lines, os.path.join(output_dir, "nq_dev_question_only.tsv"))
     
 total = len(lines)
 chunk_size = total // num_shards

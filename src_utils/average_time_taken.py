@@ -35,7 +35,7 @@ def extract_time_taken(path: Path) -> Optional[Tuple[float, float, float]]:
         print(f"Skip {path}: {exc}")
         return None, None, None
     
-    
+
 def extract_tool_call_counts(path: Path) -> int:
     """Load a trajectory file and return meta_data.time_taken if present and numeric."""
     try:
@@ -104,7 +104,7 @@ def main() -> None:
         
     tool_call_counts: List[int] = []
     missing = 0
-    for path in files:
+    for path in files
         tool_call_count = extract_tool_call_counts(path)
         if tool_call_count is None:
             missing += 1

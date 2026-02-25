@@ -16,3 +16,6 @@ data/run_subset
 quest_runs/
 qampari_runs/
 embeddings/
+*_runs/
+final_results
+sbatch_outputs

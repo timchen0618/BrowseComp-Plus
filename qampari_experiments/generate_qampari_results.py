@@ -115,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--command", type=str, default="parse_trajectories", choices=["parse_trajectories", "combine_last_search_and_trajectories", "subset"])
     parser.add_argument("--topk", type=int, default=100)
     parser.add_argument("--last-query-retrieval-results", "-l", type=str, default="qampari_runs/qwen3-0.6b/tongyi/last_query_retrieval_results.jsonl")
-    parser.add_argument("--data_type", type=str, default="qampari", choices=["qampari", "quest"])
+    parser.add_argument("--data_type", type=str, default="qampari", choices=["qampari", "quest", "webqsp"])
     
     args = parser.parse_args()
     
@@ -143,3 +143,13 @@ if __name__ == "__main__":
     # Contriever
     # python generate_qampari_results.py --input-dir qampari_runs/contriever/tongyi/ -t qampari_runs/contriever/tongyi/combined.jsonl --command parse_trajectories
     # python generate_qampari_results.py --input-dir qampari_runs/contriever/tongyi/ -t qampari_runs/contriever/tongyi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/contriever/qampari_last_queries.jsonl 
+
+
+    # Qwen3-0.6b
+    # PYTHONPATH=. python qampari_experiments/generate_qampari_results.py --input-dir webqsp_runs/qwen3-0.6b/tongyi_multi/ -t webqsp_runs/qwen3-0.6b/tongyi_multi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/qwen3-0.6b/webqsp_last_queries_tongyi_multi.jsonl  --data_type webqsp
+    
+    # Infly
+    # PYTHONPATH=. python qampari_experiments/generate_qampari_results.py --input-dir webqsp_runs/infly/tongyi_multi/ -t webqsp_runs/infly/tongyi_multi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/infly/webqsp_last_queries_tongyi_multi.jsonl  --data_type webqsp
+    
+    # Contriever
+    # PYTHONPATH=. python qampari_experiments/generate_qampari_results.py --input-dir webqsp_runs/contriever/tongyi_multi/ -t webqsp_runs/contriever/tongyi_multi/combined.jsonl --command combine_last_search_and_trajectories -l ../autoregressive/results/base_retrievers/contriever/webqsp_last_queries_tongyi_multi.jsonl  --data_type webqsp   
