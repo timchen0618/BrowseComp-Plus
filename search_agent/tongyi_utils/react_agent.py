@@ -20,7 +20,7 @@ import time
 import numpy as np
 from bert_score import BERTScorer
 
-from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER
+from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER
 from tongyi_utils.tool_search import SearchToolHandler
 
 OBS_START = '<tool_response>'
@@ -42,13 +42,23 @@ class MultiTurnReactAgent(FnCallAgent):
                  llm: Optional[Union[Dict, BaseChatModel]] = None,
                  search_tool_handler: Optional[SearchToolHandler] = None,
                  multi_answer: Optional[bool] = False,
+                 planning: Optional[bool] = False,
+                 query_rewriting: Optional[bool] = False,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
         self.search_tool = search_tool_handler
         self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
-
+        self.planning = planning
+        self.query_rewriting = query_rewriting
+        if self.planning:
+            print("Planning mode enabled", flush=True)
+            self.planner_prompt = PROMPT_PLANNER
+        if self.query_rewriting:
+            print("Query rewriting mode enabled", flush=True)
+            self.query_rewriter_prompt = PROMPT_QUERY_REWRITER
+        
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
     
@@ -74,7 +84,7 @@ class MultiTurnReactAgent(FnCallAgent):
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
-                    logprobs=True,
+                    logprobs=False,
                     max_tokens=10000,
                     presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1)
                 )
@@ -136,6 +146,15 @@ class MultiTurnReactAgent(FnCallAgent):
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
+        
+        ## Start Planning.
+        if self.planning:
+            print("Starting planning...", flush=True)
+            content = self.call_server([{"role": "system", "content": self.planner_prompt}, {"role": "user", "content": question}], planning_port)
+            messages.append({"role": "assistant", "content": "I am calling a planner to plan a sequence of actions to answer the user's question."})
+            messages.append({"role": "user", "content": "Here is the planner's response; please follow the plan to answer the user's question: " + content.strip().split("<plan>")[1].split("</plan>")[0]})
+            print("Planning response: ", content.strip().split("<plan>")[1].split("</plan>")[0].strip(), flush=True)
+            
         while num_llm_calls_available > 0:
             start_inference_time = time.time()
             if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
@@ -153,17 +172,22 @@ class MultiTurnReactAgent(FnCallAgent):
                     "retrieved_docids": retrieved_docids
                 }
                 return result
+            
+            ## Call LLM Inference.
             round += 1
             num_llm_calls_available -= 1
             content = self.call_server(messages, planning_port)
-            print(f'Round {round}: {content}')
+            print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]
             messages.append({"role": "assistant", "content": content.strip()})
             total_inference_time += (time.time() - start_inference_time)
             
+            
+            ## Start Tool Calling.
             start_tool_call_time = time.time()
+            valid_tool_call = False
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
@@ -187,6 +211,7 @@ class MultiTurnReactAgent(FnCallAgent):
                                 retrieved_docids.append({"": docids})
                         else:
                             retrieved_docids.append({"": docids})
+                        valid_tool_call = True
                     elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
                         if isinstance(tool_args, dict):
                             if len(tool_args) > 0:
@@ -199,10 +224,20 @@ class MultiTurnReactAgent(FnCallAgent):
                 except:
                     # print(tool_args, type(tool_args))
                     tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
-                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
+                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field. The arguments should only be a single string and should not be a list.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
                 messages.append({"role": "user", "content": result})
                 
+                if valid_tool_call and self.query_rewriting:
+                    # Start Query Rewriting.
+                    print("Starting query rewriting...", flush=True)
+                    past_search_tool_calls = [json5.dumps(x.keys()[0]) for x in retrieved_docids]
+                    user_prompt = f"User question: {question}\n Previous search tool calls: {past_search_tool_calls} \n\n Current search tool call: {json5.dumps(tool_args)} \n\n Current search tool response: {result}"
+                    print("User prompt for query rewriting: ", user_prompt, flush=True)
+                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], planning_port)
+                    messages.append({"role": "assistant", "content": "I am calling a query rewriter to help me improve the queries I have made previously."})
+                    messages.append({"role": "user", "content": "Here is the query rewriter's response; please follow the response to help improve the queries you have made previously: " + content.strip().split("<query>")[1].split("</query>")[0]})
+                    print("Query rewriting response: ", content.strip().split("<query>")[1].split("</query>")[0].strip(), flush=True)
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
             start_inference_time = time.time()
@@ -625,7 +660,7 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
             round += 1
             num_llm_calls_available -= 1
             content = self.call_server(messages, planning_port)
-            print(f'Round {round}: {content}')
+            print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]
@@ -915,4 +950,4 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
 # vllm serve hkust-nlp/WebExplorer-8B --port 6008 --tensor-parallel-size 1  --gpu-memory-utilization 0.5 --trust-remote-code
 # CUDA_VISIBLE_DEVICES=1 vllm serve Jaew00Lee/Qwen3-4B-PRInTS --port 6010 --tensor-parallel-size 1  --gpu-memory-utilization 0.5 --trust-remote-code
 
-# python search_agent/tongyi_client.py --model hkust-nlp/WebExplorer-8B --output-dir runs/qwen3-8/test --searcher-type faiss --index-path "indexes/qwen3-embedding-8b/corpus.shard*.pkl" --model-name "Qwen/Qwen3-Embedding-8B"  --num-threads 1 --sample-mode reward
+# python search_agent/tongyi_client.py --model hkust-nlp/WebExplorer-8B --output-dir runs/qwen3-8/test --searcher-type faiss --index-path "indexes/Qwen3-Embedding-8B/corpus.shard*.pkl" --model-name "Qwen/Qwen3-Embedding-8B"  --num-threads 1 --sample-mode reward

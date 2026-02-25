@@ -29,7 +29,7 @@ python scripts_evaluation/evaluate_run.py --input_dir runs/bm25/opus --tensor_pa
 
 To pair Qwen3-Embedding with Anthropic API, we first run the Qwen3-Embedding MCP server:
 ```bash
-python searcher/mcp_server.py --searcher-type faiss --index-path "indexes/qwen3-embedding-8b/corpus.shard*.pkl" --model-name "Qwen/Qwen3-Embedding-8B" --normalize --public
+python searcher/mcp_server.py --searcher-type faiss --index-path "indexes/Qwen3-Embedding-8B/corpus.shard*.pkl" --model-name "Qwen/Qwen3-Embedding-8B" --normalize --public
 ```
 > you may replace `--model-name` and `--index-path` to other sizes of Qwen3-Embedding, such as `Qwen/Qwen3-Embedding-4B` and `indexes/qwen3-embedding-4b/corpus.shard*.pkl`.
 

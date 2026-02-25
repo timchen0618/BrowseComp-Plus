@@ -23,10 +23,26 @@ def parse_messages_to_result_array(messages: list) -> list:
     result_array = []
 
     for i, msg in enumerate(messages):
-        if msg.get("role") != "assistant":
+        if msg.get("role") != "assistant" and not (msg.get("role") == "user" and (msg.get("content").startswith("Here is the planner's response") or msg.get("content").startswith("Here is the query rewriter's response"))):
             continue
 
         content = msg.get("content", "")
+        
+        ## for planning
+        if msg.get("content").startswith("Here is the planner's response") or msg.get("content").startswith("Here is the query rewriter's response"):
+            result_array.append({
+                "type": "user",
+                "tool_name": None,
+                "arguments": None,
+                "output": msg.get("content")
+                })
+        if msg.get("content") == "I am calling a planner to plan a sequence of actions to answer the user's question." or msg.get("content") == "I am calling a query rewriter to help me improve the queries I have made previously.":
+            result_array.append({
+                "type": "assistant",
+                "tool_name": None,
+                "arguments": None,
+                "output": msg.get("content")
+                })
 
         think_matches = re.findall(r'<think>(.*?)</think>', content, re.DOTALL)
         if think_matches:
@@ -216,7 +232,8 @@ def main():
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
     parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join', 'reward+bertscore_max', 'reward_single_lm', 'reward_single_lm+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
     parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
-    
+    parser.add_argument("--planning", action="store_true", help="Use planning mode")
+    parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
@@ -272,7 +289,9 @@ def main():
         function_list=["search"],
         search_tool_handler=search_tool_handler,
         multi_answer=args.multi_answer,
-        sample_mode=args.sample_mode
+        sample_mode=args.sample_mode,
+        planning=args.planning,
+        query_rewriting=args.query_rewriting
     )
     
     # make a dummy call
