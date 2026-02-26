@@ -1,0 +1,27 @@
+#!/bin/bash
+# Multi-GPU SFT training script
+
+# Uses Hugging Face Accelerate for distributed training.
+# For 1 GPU: python scripts/sft_train.py ...
+# For multi-GPU: accelerate launch scripts/sft_train.py ...
+
+# Configure accelerate first (one-time):
+#   accelerate config
+# Select: multi-GPU, FSDP or DeepSpeed as needed
+
+# Example: 4 GPUs with FSDP
+accelerate launch \
+    --num_processes 4 \
+    --use_fsdp \
+    scripts/sft_train.py \
+    --data_path /path/to/trajectories.jsonl \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --output_dir checkpoints/sft_run \
+    --use_lora \
+    --num_epochs 3 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --save_steps 100 \
+    --eval_steps 100 \
+    --wandb_project sft-trajectory \
+    "$@"
