@@ -135,7 +135,9 @@ def process_single_query(query: str, agent: MultiTurnReactAgent, args, output_di
     
     task_data = {
         "item": {"question": query, "answer": ""},
-        "planning_port": args.port
+        "main_agent_port": args.port,
+        "planning_port": args.planning_port,
+        "query_rewriting_port": args.query_rewriting_port
     }
     
     try:
@@ -187,7 +189,9 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
     def handle_single_query(qid: str, qtext: str):
         task_data = {
             "item": {"question": qtext, "answer": ""},
-            "planning_port": args.port
+            "main_agent_port": args.port,
+            "planning_port": args.planning_port,
+            "query_rewriting_port": args.query_rewriting_port
         }
         
         # try:
@@ -233,7 +237,9 @@ def main():
     parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join', 'reward+bertscore_max', 'reward_single_lm', 'reward_single_lm+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
     parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
     parser.add_argument("--planning", action="store_true", help="Use planning mode")
+    parser.add_argument("--planning-port", type=int, default=None, help="Planning server port")
     parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
+    parser.add_argument("--query-rewriting-port", type=int, default=None, help="Query rewriting server port")
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
@@ -253,6 +259,10 @@ def main():
 
     model = args.model
     output_dir = Path(args.output_dir).expanduser().resolve()
+    if args.planning_port is None:
+        args.planning_port = args.port
+    if args.query_rewriting_port is None:
+        args.query_rewriting_port = args.port
     
     print(f"Model: {model}")
     print(f"Output directory: {output_dir}")

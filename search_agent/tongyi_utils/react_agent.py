@@ -137,7 +137,9 @@ class MultiTurnReactAgent(FnCallAgent):
         total_tool_call_time = 0.0
 
         start_time = time.time()
+        main_agent_port = data['main_agent_port']
         planning_port = data['planning_port']
+        query_rewriting_port = data['query_rewriting_port']
         answer = data['item']['answer']
         self.user_prompt = question
         system_prompt = self.system_prompt
@@ -176,7 +178,7 @@ class MultiTurnReactAgent(FnCallAgent):
             ## Call LLM Inference.
             round += 1
             num_llm_calls_available -= 1
-            content = self.call_server(messages, planning_port)
+            content = self.call_server(messages, main_agent_port)
             print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
@@ -234,7 +236,7 @@ class MultiTurnReactAgent(FnCallAgent):
                     past_search_tool_calls = [json5.dumps(x.keys()[0]) for x in retrieved_docids]
                     user_prompt = f"User question: {question}\n Previous search tool calls: {past_search_tool_calls} \n\n Current search tool call: {json5.dumps(tool_args)} \n\n Current search tool response: {result}"
                     print("User prompt for query rewriting: ", user_prompt, flush=True)
-                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], planning_port)
+                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port)
                     messages.append({"role": "assistant", "content": "I am calling a query rewriter to help me improve the queries I have made previously."})
                     messages.append({"role": "user", "content": "Here is the query rewriter's response; please follow the response to help improve the queries you have made previously: " + content.strip().split("<query>")[1].split("</query>")[0]})
                     print("Query rewriting response: ", content.strip().split("<query>")[1].split("</query>")[0].strip(), flush=True)
@@ -255,7 +257,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
                 
                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content = self.call_server(messages, planning_port)
+                content = self.call_server(messages, main_agent_port)
                 messages.append({"role": "assistant", "content": content.strip()})
                 if '<answer>' in content and '</answer>' in content:
                     prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]

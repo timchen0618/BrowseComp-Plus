@@ -140,3 +140,7 @@ Do NOT use the search tool in your rewriting. Do NOT hallucinate search results 
 {query}
 </query>
 """
+
+
+# Please help me write a simple supervised fine-tuning script (optionally uses LoRA) that train an LM to follow the trajectories loaded as input. The data will be a JSONL file, where each line is a .JSON object of "input" and "output" fields. The input is a system prompt + the user prompt, and the output is the trajectory from some agent model. The output trajectories may include messages of "assistant" and "user" role; only include the loss of the "assistant" ones, and mask the loss for the "user". Remember to save checkpoints to a folder after a few iterations. Record training loss and validation loss (validation dataset is simply 10% of the training set) during. the course of training. Log the metrics to wandb. 
+# Use whatever training framework you find useful, and be aware that we have multiple GPUs so tensor parallelism should be considered. 
