@@ -135,7 +135,7 @@ Do NOT use the search tool in your rewriting. Do NOT hallucinate search results 
 - When the previous search tool call does not return any relevant results, you should either rewrite the query to be more specific and focused, or pivot to a new direction where no previous search tool call has been made.
 - When the previous search tool call returns relevant results, you should dig deeper into the results and find connections between the results and the user's original question. Write a new query to the search tool to explore the relevant information further.
 - When the previous search tool call return semi-relevant results, you should think about how to improve the query to get more relevant results. Is it too braod, too specific, or something else?
-- Just output the rewritten query within <query></query> tags, and nothing else. Example:
+- Please output the rewritten query within <query></query> tags, and nothing else. Example:
 <query>
 {query}
 </query>

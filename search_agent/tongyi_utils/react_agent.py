@@ -44,6 +44,8 @@ class MultiTurnReactAgent(FnCallAgent):
                  multi_answer: Optional[bool] = False,
                  planning: Optional[bool] = False,
                  query_rewriting: Optional[bool] = False,
+                 planning_model: Optional[str] = None,
+                 query_rewriting_model: Optional[str] = None,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
@@ -52,6 +54,8 @@ class MultiTurnReactAgent(FnCallAgent):
         self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
         self.planning = planning
         self.query_rewriting = query_rewriting
+        self.planning_model = planning_model
+        self.query_rewriting_model = query_rewriting_model
         if self.planning:
             print("Planning mode enabled", flush=True)
             self.planner_prompt = PROMPT_PLANNER
@@ -62,7 +66,7 @@ class MultiTurnReactAgent(FnCallAgent):
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
     
-    def call_server(self, msgs, planning_port, max_tries=10):
+    def call_server(self, msgs, planning_port, max_tries=10, model_str="main_agent"):
         
         openai_api_key = "EMPTY"
         openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
@@ -75,11 +79,21 @@ class MultiTurnReactAgent(FnCallAgent):
 
         base_sleep_time = 1 
         
+        # select model based on model_str
+        if model_str == "main_agent":
+            model = self.model
+        elif model_str == "planning":
+            model = self.planning_model
+        elif model_str == "query_rewriting":
+            model = self.query_rewriting_model
+        else:
+            raise ValueError(f"Invalid model string: {model_str}")
+        
         for attempt in range(max_tries):
             try:
                 # print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
                 chat_response = client.chat.completions.create(
-                    model=self.model,
+                    model=model,
                     messages=msgs,
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
@@ -124,6 +138,10 @@ class MultiTurnReactAgent(FnCallAgent):
 
     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
         self.model=model
+        if self.planning_model is None:
+            self.planning_model = model
+        if self.query_rewriting_model is None:
+            self.query_rewriting_model = model
         try:
             question = data['item']['question']
         except:
@@ -152,7 +170,7 @@ class MultiTurnReactAgent(FnCallAgent):
         ## Start Planning.
         if self.planning:
             print("Starting planning...", flush=True)
-            content = self.call_server([{"role": "system", "content": self.planner_prompt}, {"role": "user", "content": question}], planning_port)
+            content = self.call_server([{"role": "system", "content": self.planner_prompt}, {"role": "user", "content": question}], planning_port, model_str="planning")
             messages.append({"role": "assistant", "content": "I am calling a planner to plan a sequence of actions to answer the user's question."})
             messages.append({"role": "user", "content": "Here is the planner's response; please follow the plan to answer the user's question: " + content.strip().split("<plan>")[1].split("</plan>")[0]})
             print("Planning response: ", content.strip().split("<plan>")[1].split("</plan>")[0].strip(), flush=True)
@@ -178,7 +196,7 @@ class MultiTurnReactAgent(FnCallAgent):
             ## Call LLM Inference.
             round += 1
             num_llm_calls_available -= 1
-            content = self.call_server(messages, main_agent_port)
+            content = self.call_server(messages, main_agent_port, model_str="main_agent")
             print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
@@ -233,13 +251,15 @@ class MultiTurnReactAgent(FnCallAgent):
                 if valid_tool_call and self.query_rewriting:
                     # Start Query Rewriting.
                     print("Starting query rewriting...", flush=True)
-                    past_search_tool_calls = [json5.dumps(x.keys()[0]) for x in retrieved_docids]
+                    past_key_strings = [json5.dumps(list(x.keys())[0]) for x in retrieved_docids]
+                    past_key_strings = [k for k in past_key_strings if k != '' ]
+                    past_search_tool_calls = ';'.join(past_key_strings)
                     user_prompt = f"User question: {question}\n Previous search tool calls: {past_search_tool_calls} \n\n Current search tool call: {json5.dumps(tool_args)} \n\n Current search tool response: {result}"
                     print("User prompt for query rewriting: ", user_prompt, flush=True)
-                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port)
+                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port, model_str="query_rewriting")
                     messages.append({"role": "assistant", "content": "I am calling a query rewriter to help me improve the queries I have made previously."})
                     messages.append({"role": "user", "content": "Here is the query rewriter's response; please follow the response to help improve the queries you have made previously: " + content.strip().split("<query>")[1].split("</query>")[0]})
-                    print("Query rewriting response: ", content.strip().split("<query>")[1].split("</query>")[0].strip(), flush=True)
+                    print("Query rewriting response: ", content.strip(), flush=True)
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
             start_inference_time = time.time()
@@ -257,7 +277,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
                 
                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content = self.call_server(messages, main_agent_port)
+                content = self.call_server(messages, main_agent_port, model_str="main_agent")
                 messages.append({"role": "assistant", "content": content.strip()})
                 if '<answer>' in content and '</answer>' in content:
                     prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]

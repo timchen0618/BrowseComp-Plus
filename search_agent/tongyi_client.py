@@ -238,8 +238,10 @@ def main():
     parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
     parser.add_argument("--planning", action="store_true", help="Use planning mode")
     parser.add_argument("--planning-port", type=int, default=None, help="Planning server port")
+    parser.add_argument("--planning-model", type=str, default=None, help="Planning model path")
     parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
     parser.add_argument("--query-rewriting-port", type=int, default=None, help="Query rewriting server port")
+    parser.add_argument("--query-rewriting-model", type=str, default=None, help="Query rewriting model path")
     # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
@@ -259,10 +261,16 @@ def main():
 
     model = args.model
     output_dir = Path(args.output_dir).expanduser().resolve()
+    
+    # set default values for planning and query rewriting ports and models
     if args.planning_port is None:
         args.planning_port = args.port
     if args.query_rewriting_port is None:
         args.query_rewriting_port = args.port
+    if args.planning_model is None:
+        args.planning_model = args.model
+    if args.query_rewriting_model is None:
+        args.query_rewriting_model = args.model
     
     print(f"Model: {model}")
     print(f"Output directory: {output_dir}")
@@ -301,7 +309,9 @@ def main():
         multi_answer=args.multi_answer,
         sample_mode=args.sample_mode,
         planning=args.planning,
-        query_rewriting=args.query_rewriting
+        query_rewriting=args.query_rewriting,
+        planning_model=args.planning_model,
+        query_rewriting_model=args.query_rewriting_model
     )
     
     # make a dummy call
