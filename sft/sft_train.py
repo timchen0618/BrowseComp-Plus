@@ -32,6 +32,13 @@ from transformers import (
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
+try:
+    from accelerate.state import PartialState
+    from accelerate.utils import DistributedType
+except ImportError:
+    PartialState = None
+    DistributedType = None
+
 
 def load_jsonl_trajectories(file_path: Path) -> List[Dict[str, Any]]:
     """Load JSONL file with input/output format."""
@@ -362,7 +369,6 @@ def main():
     parser.add_argument(
         "--bf16",
         action="store_true",
-        default=True,
         help="Use bfloat16",
     )
     parser.add_argument(
@@ -373,7 +379,6 @@ def main():
     parser.add_argument(
         "--gradient_checkpointing",
         action="store_true",
-        default=True,
         help="Enable gradient checkpointing to save memory",
     )
     parser.add_argument(
@@ -391,6 +396,18 @@ def main():
     # Resolve bf16/fp16
     use_bf16 = args.bf16 and not args.fp16
 
+    # FSDP uses its own activation checkpointing; gradient_checkpointing in TrainingArguments must be False
+    # Check env var first (set by "accelerate launch --use_fsdp") - PartialState may report MULTI_GPU until model is wrapped
+    is_fsdp = os.environ.get("ACCELERATE_USE_FSDP", "false").lower() == "true"
+    if not is_fsdp and PartialState is not None and DistributedType is not None:
+        try:
+            state = PartialState()
+            is_fsdp = state.distributed_type == DistributedType.FSDP
+        except Exception:
+            pass
+    use_gradient_checkpointing = args.gradient_checkpointing and not is_fsdp
+
+    print('is_fsdp:', is_fsdp)
     # Load data
     print(f"Loading data from {args.data_path}")
     raw_data = load_jsonl_trajectories(args.data_path)
@@ -436,8 +453,6 @@ def main():
         **model_kwargs,
     )
 
-    if args.gradient_checkpointing:
-        model.enable_input_require_grads()
 
     peft_config = None
     if args.use_lora:
@@ -458,6 +473,10 @@ def main():
         completion_only_loss=True,
     )
 
+    if use_gradient_checkpointing:
+        # use_reentrant=False avoids bf16/float32 metadata mismatch with mixed precision
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    print('use gradient checkpointing:', use_gradient_checkpointing)
     # Training config
     training_args = SFTConfig(
         output_dir=str(args.output_dir),
@@ -474,11 +493,12 @@ def main():
         logging_steps=args.logging_steps,
         bf16=use_bf16,
         fp16=args.fp16,
-        gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing=use_gradient_checkpointing,
+        gradient_checkpointing_kwargs={"use_reentrant": False} if use_gradient_checkpointing else None,
         report_to="wandb",
         run_name=args.wandb_run_name or args.output_dir.name,
         seed=args.seed,
-        max_seq_length=args.max_seq_length,
+        max_length=args.max_seq_length,
         packing=False,
     )
 

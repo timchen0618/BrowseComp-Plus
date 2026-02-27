@@ -11,12 +11,14 @@
 
 # Example: 4 GPUs with FSDP
 accelerate launch \
-    --num_processes 4 \
+    --num_processes 2 \
     --use_fsdp \
-    scripts/sft_train.py \
-    --data_path /path/to/trajectories.jsonl \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --output_dir checkpoints/sft_run \
+    sft/sft_train.py \
+    --gradient_checkpointing \
+    --bf16 \
+    --data_path sft/sft_trajectories.jsonl \
+    --model_name_or_path Qwen/Qwen2.5-3B-Instruct \
+    --output_dir sft/checkpoints/sft_run \
     --use_lora \
     --num_epochs 3 \
     --per_device_train_batch_size 2 \

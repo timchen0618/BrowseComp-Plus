@@ -158,53 +158,42 @@ def load_query_by_id(queries_tsv: str, query_id: str) -> Optional[str]:
     return None
 
 
-def filter_trajectories(trajectories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    new_trajectories = []
+def filter_trajectories(traj: Dict[str, Any]) -> Dict[str, Any]:    
+    new_traj = {"query_id": traj.get('query_id'), "result": []}
+    query_id = traj.get('query_id')
+    result_array = traj.get('result', [])
     
-    for traj in trajectories:
-        query_id = traj.get('query_id')
-        result_array = traj.get('result', [])
-        
-        search_queries_list = []
-        entry_id = 0
-        for entry in result_array:
-            if entry.get('type') == 'tool_call' and (entry.get('tool_name') == 'search' or entry.get('tool_name') == 'local_knowledge_base_retrieval'):
-                # Extract search query from arguments
-                search_query = None
-                arguments = entry.get('arguments')
-                
-                if isinstance(arguments, dict):
-                    search_query = arguments.get('query') or arguments.get('search_query') or arguments.get('user_query')
-                elif isinstance(arguments, str):
-                    try:
-                        parsed_args = json.loads(arguments)
-                        if isinstance(parsed_args, dict):
-                            search_query = parsed_args.get('query') or parsed_args.get('search_query') or parsed_args.get('user_query')
-                    except:
-                        search_query = arguments
-                
-                # Extract docids from output
-                output = entry.get('output')
-                doc_ids = extract_docids_from_search_output(output)
-                
-                # Add to list if we have a search query
-                if search_query is not None and len(doc_ids) > 0:
-                    if isinstance(search_query, list):
-                        search_query = ' '.join(search_query)
-                    search_queries_list.append({
-                        "search_query": search_query,
-                        "doc_ids": doc_ids
-                    })
-                entry_id += 1
-        
-        # Create result entry for this trajectory
-        trajectory_result = {
-            "query_id": query_id,
-            "search_queries": search_queries_list
-        }
-        
-        new_trajectories.append(trajectory_result)
-    return new_trajectories
+    prev_doc_ids_list = set()
+    
+    for entry in result_array:
+        remove_entry = False
+        if entry.get('type') == 'tool_call' and (entry.get('tool_name') == 'search' or entry.get('tool_name') == 'local_knowledge_base_retrieval'):
+            # Extract search query from arguments
+            search_query = None
+            arguments = entry.get('arguments')
+            
+            if isinstance(arguments, dict):
+                search_query = arguments.get('query') or arguments.get('search_query') or arguments.get('user_query')
+            elif isinstance(arguments, str):
+                try:
+                    parsed_args = json.loads(arguments)
+                    if isinstance(parsed_args, dict):
+                        search_query = parsed_args.get('query') or parsed_args.get('search_query') or parsed_args.get('user_query')
+                except:
+                    search_query = arguments
+            
+            # Extract docids from output
+            output = entry.get('output')
+            doc_ids = extract_docids_from_search_output(output)
+            doc_ids_str_hash = "_".join([str(doc_id) for doc_id in doc_ids])
+            if doc_ids_str_hash in prev_doc_ids_list:
+                remove_entry = True
+            else:
+                prev_doc_ids_list.add(doc_ids_str_hash)
+            
+        if not remove_entry:
+            new_traj['result'].append(entry)
+    return new_traj
 
 
 def main():
