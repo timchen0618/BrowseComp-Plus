@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import csv
+import random
 import re
 import sys
 from pathlib import Path
@@ -152,7 +153,26 @@ def main():
         default=None,
         help="Limit number of queries to process (for debugging)",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility",
+    )
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        try:
+            import numpy as np
+            np.random.seed(args.seed)
+        except ImportError:
+            pass
+        try:
+            import torch
+            torch.manual_seed(args.seed)
+        except ImportError:
+            pass
 
     input_path = Path(args.input)
     output_path = Path(args.output)
@@ -171,6 +191,7 @@ def main():
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
+        seed=args.seed,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
