@@ -257,8 +257,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     user_prompt = f"User question: {question}\n Previous search tool calls: {past_search_tool_calls} \n\n Current search tool call: {json5.dumps(tool_args)} \n\n Current search tool response: {result}"
                     print("User prompt for query rewriting: ", user_prompt, flush=True)
                     content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port, model_str="query_rewriting")
-                    messages.append({"role": "assistant", "content": "I am calling a query rewriter to help me improve the queries I have made previously."})
-                    messages.append({"role": "user", "content": "Here is the query rewriter's response; please follow the response to help improve the queries you have made previously: " + content.strip().split("<query>")[1].split("</query>")[0]})
+                    messages.append({"role": "assistant", "content": "I am calling an expert search query rewriter to help me improve the search queries I have made previously."})
+                    messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip().split("<query>")[1].split("</query>")[0]})
                     print("Query rewriting response: ", content.strip(), flush=True)
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
