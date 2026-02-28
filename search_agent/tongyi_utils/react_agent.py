@@ -20,7 +20,7 @@ import time
 import numpy as np
 from bert_score import BERTScorer
 
-from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER
+from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER, SYSTEM_PROMPT_SEARCH_ONLY_REFINED
 from tongyi_utils.tool_search import SearchToolHandler
 
 OBS_START = '<tool_response>'
@@ -51,7 +51,7 @@ class MultiTurnReactAgent(FnCallAgent):
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
         self.search_tool = search_tool_handler
-        self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
+        self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
         self.planning = planning
         self.query_rewriting = query_rewriting
         self.planning_model = planning_model
@@ -244,7 +244,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 except:
                     # print(tool_args, type(tool_args))
                     tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
-                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field. The arguments should only be a single string and should not be a list.'
+                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field. The "arguments" field should only be a single string. It should NOT be a list.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
                 messages.append({"role": "user", "content": result})
                 
@@ -327,7 +327,7 @@ class MultiTurnReactAgent(FnCallAgent):
         if tool_name == "search" and self.search_tool:
             return self.search_tool.call(tool_args, **kwargs)
         else:
-            return f"Error: Tool {tool_name} not found", None
+            return f"Error: Tool {tool_name} not found. You can only use the \"search\" tool. Do not use any other tool.", None
 
 
 # class SampleAgent(MultiTurnReactAgent):
