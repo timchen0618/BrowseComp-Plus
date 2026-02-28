@@ -20,7 +20,7 @@ import time
 import numpy as np
 from bert_score import BERTScorer
 
-from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER, SYSTEM_PROMPT_SEARCH_ONLY_REFINED
+from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER, SYSTEM_PROMPT_SEARCH_ONLY_REFINED, SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING, SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING
 from tongyi_utils.tool_search import SearchToolHandler
 
 OBS_START = '<tool_response>'
@@ -59,9 +59,11 @@ class MultiTurnReactAgent(FnCallAgent):
         if self.planning:
             print("Planning mode enabled", flush=True)
             self.planner_prompt = PROMPT_PLANNER
+            self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING
         if self.query_rewriting:
             print("Query rewriting mode enabled", flush=True)
             self.query_rewriter_prompt = PROMPT_QUERY_REWRITER
+            self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING
         
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
