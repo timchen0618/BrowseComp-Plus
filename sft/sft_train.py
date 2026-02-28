@@ -379,7 +379,13 @@ def main():
     parser.add_argument(
         "--gradient_checkpointing",
         action="store_true",
+        default=True,
         help="Enable gradient checkpointing to save memory",
+    )
+    parser.add_argument(
+        "--force_gradient_checkpointing_bf16",
+        action="store_true",
+        help="Force gradient checkpointing with bf16 (may cause CheckpointError)",
     )
     parser.add_argument(
         "--load_in_4bit",
@@ -405,9 +411,13 @@ def main():
             is_fsdp = state.distributed_type == DistributedType.FSDP
         except Exception:
             pass
-    use_gradient_checkpointing = args.gradient_checkpointing and not is_fsdp
+    # bf16 + gradient_checkpointing causes CheckpointError (bf16/float32 metadata mismatch) - disable ckpt for bf16
+    use_gradient_checkpointing = (
+        args.gradient_checkpointing
+        and not is_fsdp
+        and (not use_bf16 or args.force_gradient_checkpointing_bf16)
+    )
 
-    print('is_fsdp:', is_fsdp)
     # Load data
     print(f"Loading data from {args.data_path}")
     raw_data = load_jsonl_trajectories(args.data_path)
@@ -474,8 +484,10 @@ def main():
     )
 
     if use_gradient_checkpointing:
-        # use_reentrant=False avoids bf16/float32 metadata mismatch with mixed precision
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        # use_reentrant=False + determinism_check="none" to avoid bf16/float32 metadata mismatch
+        # (recompute can produce float32 under autocast while forward used bf16)
+        _ckpt_kwargs = {"use_reentrant": False, "determinism_check": "none"}
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=_ckpt_kwargs)
     print('use gradient checkpointing:', use_gradient_checkpointing)
     # Training config
     training_args = SFTConfig(
@@ -494,7 +506,7 @@ def main():
         bf16=use_bf16,
         fp16=args.fp16,
         gradient_checkpointing=use_gradient_checkpointing,
-        gradient_checkpointing_kwargs={"use_reentrant": False} if use_gradient_checkpointing else None,
+        gradient_checkpointing_kwargs={"use_reentrant": False, "determinism_check": "none"} if use_gradient_checkpointing else None,
         report_to="wandb",
         run_name=args.wandb_run_name or args.output_dir.name,
         seed=args.seed,
@@ -514,7 +526,17 @@ def main():
         data_collator=data_collator,
     )
 
+    # PEFT+FSDP: use_orig_params must be false; override auto_wrap_policy for LoRA
+    if args.use_lora and getattr(trainer.accelerator.state, "fsdp_plugin", None) is not None:
+        from peft.utils.other import fsdp_auto_wrap_policy
+        trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(
+            trainer.model
+        )
+
     trainer.train()
+    # FSDP: use FULL_STATE_DICT for save_model to get loadable adapter weights
+    if getattr(trainer, "is_fsdp_enabled", False):
+        trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
     trainer.save_model(str(args.output_dir / "final"))
     tokenizer.save_pretrained(str(args.output_dir / "final"))
 

@@ -10,9 +10,9 @@
 # Select: multi-GPU, FSDP or DeepSpeed as needed
 
 # Example: 4 GPUs with FSDP
+# Use fsdp_config.yaml (fsdp_use_orig_params=false) for LoRA+FSDP compatibility
 accelerate launch \
-    --num_processes 2 \
-    --use_fsdp \
+    --config_file sft/fsdp_config.yaml \
     sft/sft_train.py \
     --gradient_checkpointing \
     --bf16 \

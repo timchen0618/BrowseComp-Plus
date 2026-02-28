@@ -21,3 +21,5 @@ final_results
 sbatch_outputs
 deletable
 plan_outputs
+.claude
+wandb
