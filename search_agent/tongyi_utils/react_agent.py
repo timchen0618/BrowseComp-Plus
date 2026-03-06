@@ -67,7 +67,7 @@ class MultiTurnReactAgent(FnCallAgent):
         return "<think>" in content and "</think>" in content
     
     def call_server(self, msgs, planning_port, max_tries=10, model_str="main_agent"):
-        
+
         openai_api_key = "EMPTY"
         openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
 
@@ -77,8 +77,8 @@ class MultiTurnReactAgent(FnCallAgent):
             timeout=600.0,
         )
 
-        base_sleep_time = 1 
-        
+        base_sleep_time = 1
+
         # select model based on model_str
         if model_str == "main_agent":
             model = self.model
@@ -88,7 +88,7 @@ class MultiTurnReactAgent(FnCallAgent):
             model = self.query_rewriting_model
         else:
             raise ValueError(f"Invalid model string: {model_str}")
-        
+
         for attempt in range(max_tries):
             try:
                 # print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
@@ -105,6 +105,13 @@ class MultiTurnReactAgent(FnCallAgent):
                 content = chat_response.choices[0].message.content
                 if content and content.strip():
                     print("--- Service call successful, received a valid response ---")
+                    # Track token usage if available
+                    if hasattr(chat_response, 'usage') and chat_response.usage:
+                        self._last_prompt_tokens = getattr(chat_response.usage, 'prompt_tokens', 0) or 0
+                        self._last_completion_tokens = getattr(chat_response.usage, 'completion_tokens', 0) or 0
+                    else:
+                        self._last_prompt_tokens = 0
+                        self._last_completion_tokens = 0
                     return content.strip()
                 else:
                     print(f"Warning: Attempt {attempt + 1} received an empty response.")
@@ -153,6 +160,8 @@ class MultiTurnReactAgent(FnCallAgent):
         retrieved_docids = []
         total_inference_time = 0.0
         total_tool_call_time = 0.0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
 
         start_time = time.time()
         main_agent_port = data['main_agent_port']
@@ -160,6 +169,8 @@ class MultiTurnReactAgent(FnCallAgent):
         query_rewriting_port = data['query_rewriting_port']
         answer = data['item']['answer']
         self.user_prompt = question
+        if self.search_tool and hasattr(self.search_tool, "set_query_context"):
+            self.search_tool.set_query_context(question)
         system_prompt = self.system_prompt
         cur_date = today_date()
         system_prompt = system_prompt + str(cur_date)
@@ -188,8 +199,11 @@ class MultiTurnReactAgent(FnCallAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
+                    "retrieved_docids": retrieved_docids,
+                    "total_inference_time": total_inference_time,
+                    "total_tool_call_time": total_tool_call_time,
+                    "total_prompt_tokens": total_prompt_tokens,
+                    "total_completion_tokens": total_completion_tokens,
                 }
                 return result
             
@@ -197,6 +211,8 @@ class MultiTurnReactAgent(FnCallAgent):
             round += 1
             num_llm_calls_available -= 1
             content = self.call_server(messages, main_agent_port, model_str="main_agent")
+            total_prompt_tokens += getattr(self, '_last_prompt_tokens', 0)
+            total_completion_tokens += getattr(self, '_last_completion_tokens', 0)
             print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
@@ -217,7 +233,22 @@ class MultiTurnReactAgent(FnCallAgent):
 
                     tool_call_counts_all[tool_name] = tool_call_counts_all.get(tool_name, 0) + 1
 
-                    result, docids = self.custom_call_tool(tool_name, tool_args)
+                    latest_reasoning = ""
+                    if "<think>" in content and "</think>" in content:
+                        try:
+                            latest_reasoning = (
+                                content.split("<think>", 1)[1]
+                                .split("</think>", 1)[0]
+                                .strip()
+                            )
+                        except Exception:
+                            latest_reasoning = ""
+
+                    result, docids = self.custom_call_tool(
+                        tool_name,
+                        tool_args,
+                        generation_context={"latest_reasoning": latest_reasoning},
+                    )
 
                     if docids is not None:
                         tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
@@ -293,8 +324,11 @@ class MultiTurnReactAgent(FnCallAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
+                    "retrieved_docids": retrieved_docids,
+                    "total_inference_time": total_inference_time,
+                    "total_tool_call_time": total_tool_call_time,
+                    "total_prompt_tokens": total_prompt_tokens,
+                    "total_completion_tokens": total_completion_tokens,
                 }
                 return result
 
@@ -316,10 +350,11 @@ class MultiTurnReactAgent(FnCallAgent):
             "termination": termination,
             "tool_call_counts": tool_call_counts,
             "tool_call_counts_all": tool_call_counts_all,
-            # "retrieved_docids": list(set(retrieved_docids))
             "retrieved_docids": retrieved_docids,
             "total_inference_time": total_inference_time,
-            "total_tool_call_time": total_tool_call_time
+            "total_tool_call_time": total_tool_call_time,
+            "total_prompt_tokens": total_prompt_tokens,
+            "total_completion_tokens": total_completion_tokens,
         }
         return result
 
@@ -652,11 +687,17 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
         tool_call_counts_all = {}  # All tool calls (successful and failed)
         retrieved_docids = []
         retrieved_docids_set = set()
+        total_inference_time = 0.0
+        total_tool_call_time = 0.0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
 
         start_time = time.time()
         planning_port = data['planning_port']
         answer = data['item']['answer']
         self.user_prompt = question
+        if self.search_tool and hasattr(self.search_tool, "set_query_context"):
+            self.search_tool.set_query_context(question)
         system_prompt = self.system_prompt
         cur_date = today_date()
         system_prompt = system_prompt + str(cur_date)
@@ -675,8 +716,11 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
+                    "retrieved_docids": retrieved_docids,
+                    "total_inference_time": total_inference_time,
+                    "total_tool_call_time": total_tool_call_time,
+                    "total_prompt_tokens": total_prompt_tokens,
+                    "total_completion_tokens": total_completion_tokens,
                 }
                 return result
             round += 1
@@ -897,8 +941,11 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
+                    "retrieved_docids": retrieved_docids,
+                    "total_inference_time": total_inference_time,
+                    "total_tool_call_time": total_tool_call_time,
+                    "total_prompt_tokens": total_prompt_tokens,
+                    "total_completion_tokens": total_completion_tokens,
                 }
                 return result
 
@@ -918,12 +965,15 @@ class SampleOutcomeAgent(MultiTurnReactAgent):
             "termination": termination,
             "tool_call_counts": tool_call_counts,
             "tool_call_counts_all": tool_call_counts_all,
-            # "retrieved_docids": list(set(retrieved_docids))
-            "retrieved_docids": retrieved_docids
+            "retrieved_docids": retrieved_docids,
+            "total_inference_time": total_inference_time,
+            "total_tool_call_time": total_tool_call_time,
+            "total_prompt_tokens": total_prompt_tokens,
+            "total_completion_tokens": total_completion_tokens,
         }
         return result
-    
-    
+
+
     def call_reward_model(self, msgs, planning_port, max_tries=10):
         
         openai_api_key = "EMPTY"

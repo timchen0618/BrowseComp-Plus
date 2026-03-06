@@ -457,7 +457,7 @@ def main():
     all_results = []
 
     # Initialize vLLM engine and sampling params
-    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=4096, gpu_memory_utilization=0.85)
+    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=2048, gpu_memory_utilization=0.95)
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
@@ -529,9 +529,12 @@ def main():
             
         # print('retrieved_docids_set: ', retrieved_docids_set)
         positives_for_query = qrel_evidence.get(str(query_id), [])
-        retrieval_recall = len(
-            retrieved_docids_set.intersection(set(positives_for_query))
-        ) / float(len(positives_for_query))
+        if positives_for_query:
+            retrieval_recall = len(
+                retrieved_docids_set.intersection(set(positives_for_query))
+            ) / float(len(positives_for_query))
+        else:
+            retrieval_recall = 0.0
 
         response = ""
         if (

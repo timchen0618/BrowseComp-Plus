@@ -1,0 +1,22 @@
+# GAR experiment dependencies (on top of base BrowseComp-Plus requirements)
+# Install into: /scratch/afw8937/efficient-search-agents/venv
+#
+# Usage:
+#   /scratch/afw8937/efficient-search-agents/venv/bin/pip install -r experiments/gar/requirements.txt
+
+# FAISS — CPU only. faiss-gpu-cu12 lacks sm_90 kernels for H100 (CUDA error 209).
+# Retrieval runs on CPU; wall-clock efficiency numbers are NOT comparable to GPU baselines.
+# If GPU FAISS is needed, build from source with -DFAISS_ENABLE_GPU=ON -DCMAKE_CUDA_ARCHITECTURES=90.
+faiss-cpu==1.13.2
+
+# Tevatron retriever framework — pinned to specific commit for DenseModel/FaissFlatSearcher
+tevatron @ git+https://github.com/texttron/tevatron.git@6555f12c844c64f020f5762096405a7ce5148b77
+
+# Qwen model dependencies
+qwen_omni_utils
+
+# Agent runtime dependencies
+json5
+qwen-agent
+bert_score
+soundfile
