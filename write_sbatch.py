@@ -30,6 +30,7 @@ elif command == 'run_agentic':
         for num in range(0, 10):
             template = org_template.replace("[num]", str(num))
             write_to_run_file.append(f"sbatch sbatch_jobs/qampari_{model}_{num}.SBATCH")
+            
             with open(f"sbatch_jobs/qampari_{model}_{num}.SBATCH", "w") as f:
                 f.write(template)
                 
@@ -84,6 +85,7 @@ elif command == 'run_qampari':
         for num in range(0, 10):
             template = org_template.replace("[num]", str(num))
             write_to_run_file.append(f"sbatch sbatch_jobs/qampari_{model}_{num}.SBATCH")
+            write_to_run_file.append(f"sleep 120")
             with open(f"sbatch_jobs/qampari_{model}_{num}.SBATCH", "w") as f:
                 f.write(template)
                 
@@ -101,6 +103,7 @@ elif command == 'run_qampari_finetuned':
         for num in range(0, 10):
             template = org_template.replace("[num]", str(num))
             write_to_run_file.append(f"sbatch sbatch_jobs/qampari_{model}_finetuned_{num}.SBATCH")
+            write_to_run_file.append(f"sleep 120")
             with open(f"sbatch_jobs/qampari_{model}_finetuned_{num}.SBATCH", "w") as f:
                 f.write(template)
                 
