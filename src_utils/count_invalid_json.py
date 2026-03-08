@@ -8,9 +8,10 @@ Reports average invalid count, average percentage, and breakdown by category.
 
 Example:
     python src_utils/count_invalid_json.py runs_first100/ -r
-    python src_utils/count_invalid_json.py runs_first100/Qwen3-Embedding-8B/mirothinker_rewrite/
+    python src_utils/count_invalid_json.py runs_first100/ -r -o invalid_stats.csv
 """
 
+import csv
 import json
 import sys
 from pathlib import Path
@@ -19,10 +20,18 @@ from collections import defaultdict
 
 
 def find_trajectory_files(folder: Path, recursive: bool) -> Tuple[list[Path], list[Path]]:
-    """Find .json and .jsonl files in the folder."""
+    """Find .json and .jsonl files in the folder. Single walk when recursive to avoid 2x tree traversal."""
     if recursive:
-        json_files = sorted(p for p in folder.rglob("*.json") if p.is_file())
-        jsonl_files = sorted(p for p in folder.rglob("*.jsonl") if p.is_file())
+        json_files: list[Path] = []
+        jsonl_files: list[Path] = []
+        for p in folder.rglob("*"):
+            if p.is_file():
+                if p.suffix == ".jsonl":
+                    jsonl_files.append(p)
+                elif p.suffix == ".json":
+                    json_files.append(p)
+        json_files.sort()
+        jsonl_files.sort()
     else:
         json_files = sorted(p for p in folder.glob("*.json") if p.is_file())
         jsonl_files = sorted(p for p in folder.glob("*.jsonl") if p.is_file())
@@ -85,29 +94,44 @@ def extract_invalid_stats(traj: dict) -> Tuple[int, int, dict[str, int]]:
     return (invalid, total, by_category)
 
 
-def stats_from_pairs(pairs: list[Tuple[int, int]]) -> Tuple[int, float, float]:
-    """Compute (n, avg_invalid, avg_pct) from a list of (invalid, total) pairs."""
-    n = len(pairs)
+def stats_from_records(
+    records: list[Tuple[int, int, int, int, int]]
+) -> Tuple[int, float, float, float, float, float]:
+    """
+    Compute stats from per-trajectory records (invalid, total, ij, visit, others).
+    All percentages use mean of per-trajectory ratios so each trajectory contributes equally.
+    Returns (n, avg_invalid, avg_pct, ij_pct, visit_pct, others_pct).
+    """
+    n = len(records)
     if n == 0:
-        return (0, 0.0, 0.0)
-    sum_invalid = sum(p[0] for p in pairs)
-    pct_sum = 0.0
-    pct_count = 0
-    for invalid, total in pairs:
+        return (0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    sum_invalid = sum(r[0] for r in records)
+    pct_vals = []
+    ij_pct_vals = []
+    v_pct_vals = []
+    o_pct_vals = []
+    for invalid, total, ij, v, o in records:
         if total > 0:
-            pct_sum += (invalid / total) * 100
-            pct_count += 1
+            pct_vals.append((invalid / total) * 100)
+            ij_pct_vals.append((ij / total) * 100)
+            v_pct_vals.append((v / total) * 100)
+            o_pct_vals.append((o / total) * 100)
     avg_invalid = sum_invalid / n
-    avg_pct = (pct_sum / pct_count) if pct_count > 0 else 0.0
-    return (n, avg_invalid, avg_pct)
+    avg_pct = sum(pct_vals) / len(pct_vals) if pct_vals else 0.0
+    ij_pct = sum(ij_pct_vals) / len(ij_pct_vals) if ij_pct_vals else 0.0
+    v_pct = sum(v_pct_vals) / len(v_pct_vals) if v_pct_vals else 0.0
+    o_pct = sum(o_pct_vals) / len(o_pct_vals) if o_pct_vals else 0.0
+    return (n, avg_invalid, avg_pct, ij_pct, v_pct, o_pct)
 
 
 def compute_stats(
     folder: Path,
     recursive: bool,
+    output_csv: Path | None = None,
 ) -> None:
     """
     Compute invalid JSON stats per folder and overall, printing results.
+    If output_csv is set, also write the data to that CSV file.
     """
     if not folder.exists() or not folder.is_dir():
         print(f"Error: Directory {folder} does not exist or is not a directory", file=sys.stderr)
@@ -118,57 +142,51 @@ def compute_stats(
         print(f"No trajectory files found in {folder}", file=sys.stderr)
         return
 
-    # Group (invalid, total) and per-category counts by containing folder
-    by_folder: dict[Path, list[Tuple[int, int]]] = defaultdict(list)
-    by_folder_categories: dict[Path, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # Group per-trajectory records by containing folder
+    # Record: (invalid, total, invalid_json, visit, others)
+    by_folder: dict[Path, list[Tuple[int, int, int, int, int]]] = defaultdict(list)
     folder_resolved = folder.resolve()
 
     for path, traj in iter_trajectories_with_path(json_files, jsonl_files):
         invalid, total, categories = extract_invalid_stats(traj)
+        ij = categories.get("invalid_json", 0)
+        v = categories.get("visit", 0)
+        o = categories.get("others", 0)
         file_folder = path.parent.resolve()
-        by_folder[file_folder].append((invalid, total))
-        for k, v in categories.items():
-            by_folder_categories[file_folder][k] += v
+        by_folder[file_folder].append((invalid, total, ij, v, o))
 
     # Build rows: (folder, n, avg_invalid, avg_pct, ij_avg, ij_pct, v_avg, v_pct, o_avg, o_pct)
-    def row(folder_name: Path | str, pairs: list[Tuple[int, int]], cats: dict[str, int]) -> tuple:
-        n, avg_invalid, avg_pct = stats_from_pairs(pairs)
-        sum_total = sum(p[1] for p in pairs)
-        def cat_avg(k: str) -> float:
-            return cats.get(k, 0) / n if n > 0 else 0.0
-        def cat_pct(k: str) -> float:
-            return (cats.get(k, 0) / sum_total * 100) if sum_total > 0 else 0.0
+    def row(folder_name: Path | str, records: list[Tuple[int, int, int, int, int]]) -> tuple:
+        n, avg_invalid, avg_pct, ij_pct, v_pct, o_pct = stats_from_records(records)
+        ij_avg = sum(r[2] for r in records) / n if n > 0 else 0.0
+        v_avg = sum(r[3] for r in records) / n if n > 0 else 0.0
+        o_avg = sum(r[4] for r in records) / n if n > 0 else 0.0
         return (
             str(folder_name),
             n,
             avg_invalid,
             avg_pct,
-            cat_avg("invalid_json"),
-            cat_pct("invalid_json"),
-            cat_avg("visit"),
-            cat_pct("visit"),
-            cat_avg("others"),
-            cat_pct("others"),
+            ij_avg,
+            ij_pct,
+            v_avg,
+            v_pct,
+            o_avg,
+            o_pct,
         )
 
     rows: list[tuple] = []
     for file_folder in sorted(by_folder.keys()):
-        pairs = by_folder[file_folder]
-        cats = dict(by_folder_categories[file_folder])
+        records = by_folder[file_folder]
         try:
             rel = file_folder.relative_to(folder_resolved)
         except ValueError:
             rel = file_folder
-        rows.append(row(rel, pairs, cats))
+        rows.append(row(rel, records))
 
-    all_pairs: list[Tuple[int, int]] = []
-    all_cats: dict[str, int] = defaultdict(int)
-    for p in by_folder.values():
-        all_pairs.extend(p)
-    for cats in by_folder_categories.values():
-        for k, v in cats.items():
-            all_cats[k] += v
-    rows.append(row(f"Overall ({folder})", all_pairs, dict(all_cats)))
+    all_records: list[Tuple[int, int, int, int, int]] = []
+    for recs in by_folder.values():
+        all_records.extend(recs)
+    rows.append(row(f"Overall ({folder})", all_records))
 
     # Print table
     cols = (
@@ -202,6 +220,27 @@ def compute_stats(
         print(fmt_row(r))
     print(sep)
 
+    if output_csv:
+        csv_cols = [
+            "Folder", "Traj", "Avg inv", "Avg inv %",
+            "inv_json avg", "inv_json %", "visit avg", "visit %",
+            "others avg", "others %",
+        ]
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(csv_cols)
+            for r in rows:
+                fs, n, ai, ap, ij_a, ij_p, v_a, v_p, o_a, o_p = r
+                writer.writerow([
+                    fs, n,
+                    round(ai, 2), round(ap, 2),
+                    round(ij_a, 2), round(ij_p, 2),
+                    round(v_a, 2), round(v_p, 2),
+                    round(o_a, 2), round(o_p, 2),
+                ])
+        print(f"\nWrote {output_csv}", file=sys.stderr)
+
 
 def main() -> None:
     import argparse
@@ -221,9 +260,16 @@ def main() -> None:
         action="store_true",
         help="Search subdirectories recursively",
     )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Write results to CSV file",
+    )
     args = parser.parse_args()
 
-    compute_stats(args.folder, recursive=args.recursive)
+    compute_stats(args.folder, recursive=args.recursive, output_csv=args.output)
 
 
 if __name__ == "__main__":

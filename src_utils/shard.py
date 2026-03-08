@@ -10,6 +10,10 @@ def write_tsv(lines, file_path):
         writer = csv.writer(f, delimiter="\t")
         writer.writerows(lines)
 
+def write_jsonl(data, file_path):
+    with open(file_path, "w", encoding="utf-8") as f:
+        for item in data:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
 # input_file = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/qampari_dev_question_only.tsv"
 # output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/qampari_10_shards"
 # num_shards = 10
@@ -59,12 +63,14 @@ def write_tsv(lines, file_path):
 # write_tsv(lines, os.path.join(output_dir, "webqsp_dev_question_only.tsv"))
     
 
+dataset_type = "musique"
+
 import datasets
-output_dir = "/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/nq_10_shards"
+output_dir = f"/scratch/hc3337/projects/BrowseComp-Plus/topics-qrels/{dataset_type}_10_shards"
 num_shards = 10
 
 
-data = datasets.load_dataset('RUC-NLPIR/FlashRAG_datasets', 'nq')['test']
+data = datasets.load_dataset('RUC-NLPIR/FlashRAG_datasets', dataset_type)['dev']
 
 os.makedirs(output_dir, exist_ok=True)
 
@@ -76,7 +82,7 @@ for qid, inst in enumerate(data):
     if qid >= 999:
         break
     
-write_tsv(lines, os.path.join(output_dir, "nq_dev_question_only.tsv"))
+write_tsv(lines, os.path.join(output_dir, f"{dataset_type}_dev_question_only.tsv"))
     
 total = len(lines)
 chunk_size = total // num_shards
@@ -91,3 +97,28 @@ for i in range(num_shards):
     print(f"Wrote {len(shard_lines)} lines to {shard_path}")
     start = end
 
+out_data = []
+for qid, inst in enumerate(data):
+    # Pick the answer with the longest string length from 'golden_answers'
+    golden_answers = inst.get('golden_answers', [])
+    if golden_answers:
+        longest_answer = max(golden_answers, key=len)
+    else:
+        longest_answer = ""
+    out_data.append({"query_id": str(qid), "query": inst['question'], "answer": longest_answer})
+    if qid >= 999:
+        break
+    
+write_jsonl(out_data, os.path.join(output_dir, f"{dataset_type}_dev_first1000.jsonl"))
+
+# # get the evidence for each query
+# out_data = []
+# for qid, inst in enumerate(data):
+#     metadata = inst['metadata']
+#     qds = metadata['question_decomposition']
+#     for qd in qds:
+#         print(qd.keys())
+#         if qd['is_supporting']:
+#             out_data.append([str(qid), 'Q0', qd['id'], '1'])
+
+# write_tsv(out_data, os.path.join(output_dir, f"qrel_evidence.txt"))
