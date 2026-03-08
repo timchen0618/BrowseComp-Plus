@@ -51,7 +51,7 @@ class MultiTurnReactAgent(FnCallAgent):
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
         self.search_tool = search_tool_handler
-        self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
+        self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
         self.planning = planning
         self.query_rewriting = query_rewriting
         self.planning_model = planning_model
@@ -260,7 +260,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     print("User prompt for query rewriting: ", user_prompt, flush=True)
                     content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port, model_str="query_rewriting")
                     messages.append({"role": "assistant", "content": "I am calling an expert search query rewriter to help me improve the search queries I have made previously."})
-                    messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip().split("<query>")[1].split("</query>")[0]})
+                    # messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip().split("<query>")[1].split("</query>")[0]})
+                    messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip()})
                     print("Query rewriting response: ", content.strip(), flush=True)
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
