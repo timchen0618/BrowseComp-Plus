@@ -4,13 +4,15 @@ import argparse
 import csv
 import json
 import os
+import random
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import format_query
+from prompts import PROMPT_PLANNER, format_query
 from rich import print as rprint
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -212,6 +214,86 @@ def run_conversation_with_tools(
     return messages, tool_usage, "incomplete"
 
 
+def call_planner(
+    client: openai.OpenAI,
+    planning_model: str,
+    planning_url: str,
+    raw_question: str,
+    max_tries: int = 10,
+    verbose: bool = False,
+) -> str:
+    """Call the planner model to produce a step sequence for the question."""
+    base_sleep_time = 1
+    messages = [
+        {"role": "system", "content": PROMPT_PLANNER},
+        {"role": "user", "content": raw_question},
+    ]
+
+    if str(getattr(client, "base_url", "") or "").rstrip("/") == planning_url.rstrip(
+        "/"
+    ):
+        planner_client = client
+    else:
+        planner_client = openai.OpenAI(base_url=planning_url, api_key="EMPTY")
+
+    for attempt in range(max_tries):
+        try:
+            chat_response = planner_client.chat.completions.create(
+                model=planning_model,
+                messages=messages,
+                max_tokens=4096,
+            )
+            content = chat_response.choices[0].message.content
+            if content and content.strip():
+                if verbose:
+                    print("Planning call successful")
+                return content.strip()
+            if verbose:
+                print(f"Warning: Attempt {attempt + 1} received an empty response.")
+        except Exception as e:
+            if verbose:
+                print(f"Planning error (attempt {attempt + 1}/{max_tries}): {e}")
+
+        if attempt < max_tries - 1:
+            sleep_time = min(
+                base_sleep_time * (2**attempt) + random.uniform(0, 1), 30
+            )
+            if verbose:
+                print(f"Retrying in {sleep_time:.2f} seconds...")
+            time.sleep(sleep_time)
+        else:
+            print("Planning: all retries exhausted, returning empty plan")
+            return ""
+
+    return ""
+
+
+def _parse_plan_from_response(response: str) -> str:
+    """Extract plan content from planner response. Fallback to full response or empty."""
+    if "<plan>" in response and "</plan>" in response:
+        try:
+            return response.split("<plan>")[1].split("</plan>")[0].strip()
+        except IndexError:
+            pass
+    return response.strip() if response else ""
+
+
+def _inject_plan_into_messages(planner_response: str) -> list[dict]:
+    """Return the two messages to inject: assistant intro and user with plan."""
+    plan_content = _parse_plan_from_response(planner_response)
+    return [
+        {
+            "role": "assistant",
+            "content": "I am calling a planner to plan a sequence of actions to answer the user's question.",
+        },
+        {
+            "role": "user",
+            "content": "Here is the planner's response; please follow the plan to answer the user's question: "
+            + plan_content,
+        },
+    ]
+
+
 def _persist_response(
     out_dir: str,
     initial_request: dict,
@@ -220,6 +302,7 @@ def _persist_response(
     status: str,
     *,
     query_id: str | None = None,
+    planning: bool = False,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -304,6 +387,7 @@ def _persist_response(
             "model": initial_request.get("model"),
             "reasoning": initial_request.get("reasoning"),
             "output_dir": str(out_dir),
+            "planning": planning,
         },
         "query_id": query_id,
         "tool_call_counts": normalized_tool_counts,
@@ -364,13 +448,29 @@ def _process_tsv_dataset(
 
     def _handle_single_query(qid: str, qtext: str, pbar=None):
         """Build request, send and persist response for one query."""
+        input_messages = [
+            {"role": "user", "content": format_query(qtext, args.query_template)}
+        ]
+
+        if args.planning:
+            if args.verbose:
+                print(f"[{qid}] Planning mode enabled, calling planner...", flush=True)
+            planner_response = call_planner(
+                client,
+                args.planning_model,
+                args.planning_url,
+                raw_question=qtext,
+                verbose=args.verbose,
+            )
+            plan_messages = _inject_plan_into_messages(planner_response)
+            input_messages.extend(plan_messages)
+            if args.verbose:
+                print(f"[{qid}] Injected plan into messages", flush=True)
 
         initial_request = {
             "model": args.model,
             "max_output_tokens": args.max_tokens,
-            "input": [
-                {"role": "user", "content": format_query(qtext, args.query_template)}
-            ],
+            "input": input_messages,
             "tools": tool_handler.get_tool_definitions(),
             "truncation": "auto",
             "reasoning": {"effort": args.reasoning_effort, "summary": "detailed"},
@@ -388,7 +488,7 @@ def _process_tsv_dataset(
                         pbar.set_postfix(completed=completed_count[0])
 
             _persist_response(
-                out_dir, initial_request, messages, tool_usage, status, query_id=qid
+                out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning
             )
 
         except Exception as exc:
@@ -465,6 +565,23 @@ def main():
     parser.add_argument(
         "--model-url", default="http://localhost:8000/v1", help="Model URL"
     )
+    parser.add_argument(
+        "--planning",
+        action="store_true",
+        help="Enable planning: call planner model first, inject plan into conversation",
+    )
+    parser.add_argument(
+        "--planning-model",
+        type=str,
+        default=None,
+        help="Model for planner (default: same as --model)",
+    )
+    parser.add_argument(
+        "--planning-url",
+        type=str,
+        default=None,
+        help="Base URL for planner (default: same as --model-url)",
+    )
 
     # Searcher selection and shared tool options --------------------------
     parser.add_argument(
@@ -503,6 +620,11 @@ def main():
 
     args = parser.parse_args()
 
+    if args.planning_model is None:
+        args.planning_model = args.model
+    if args.planning_url is None:
+        args.planning_url = args.model_url
+
     if args.hf_token:
         os.environ["HF_TOKEN"] = args.hf_token
         os.environ["HUGGINGFACE_HUB_TOKEN"] = args.hf_token
@@ -539,9 +661,22 @@ def main():
 
     print("Processing single query", args.query)
 
+    raw_question = args.query
     args.query = format_query(args.query, args.query_template)
 
     messages = [{"role": "user", "content": args.query}]
+
+    if args.planning:
+        print("Planning mode enabled, calling planner...", flush=True)
+        planner_response = call_planner(
+            client,
+            args.planning_model,
+            args.planning_url,
+            raw_question=raw_question,
+            verbose=args.verbose,
+        )
+        plan_messages = _inject_plan_into_messages(planner_response)
+        messages.extend(plan_messages)
 
     initial_request = {
         "model": args.model,
@@ -557,7 +692,7 @@ def main():
     )
 
     _persist_response(
-        args.output_dir, initial_request, messages, tool_usage, status, query_id=None
+        args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning
     )
 
     rprint(messages)
