@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import PROMPT_PLANNER, format_query
+from prompts import PROMPT_PLANNER, PROMPT_PLANNER_MID, format_query
 from rich import print as rprint
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -139,25 +139,18 @@ def run_conversation_with_tools(
     tool_handler: SearchToolHandler,
     max_iterations: int = 100,
     verbose: bool = False,
+    planning_config: dict | None = None,
 ):
-
     tool_usage = {}
-
     messages = initial_request["input"]
-
     iteration = 1
+    mid_planning_done = False
 
     while iteration <= max_iterations:
         try:
             request = initial_request.copy()
             request["input"] = messages
-            # request["return_incomplete_output"] = True
-            response = client.responses.create(
-                **request,
-            )
-            # print('=--------------------------------=')
-            # print('[Request:]', request)
-            # print('[Response:]', response.model_dump(mode="python"))
+            response = client.responses.create(**request)
         except Exception as e:
             if verbose:
                 print(f"Error: {e}")
@@ -166,7 +159,6 @@ def run_conversation_with_tools(
             continue
 
         response_dict = response.model_dump(mode="python")
-
         messages.extend(response_dict["output"])
 
         if (
@@ -208,6 +200,30 @@ def run_conversation_with_tools(
                         "output": error_msg,
                     }
                 )
+
+        total_tools = sum(tool_usage.values())
+        if (
+            planning_config
+            and planning_config.get("trigger") == "after_steps"
+            and total_tools >= planning_config.get("steps", 5)
+            and not mid_planning_done
+        ):
+            if verbose:
+                print("Mid-conversation planning triggered...")
+            planner_response = call_planner_mid(
+                client,
+                planning_model=planning_config["planning_model"],
+                planning_url=planning_config["planning_url"],
+                raw_question=planning_config["raw_question"],
+                messages=new_messages,
+                verbose=planning_config.get("verbose", False),
+            )
+            plan_messages = _inject_plan_into_messages(planner_response)
+            new_messages.extend(plan_messages)
+            mid_planning_done = True
+            if verbose:
+                print("Injected revised plan into messages")
+
         messages = new_messages
         iteration += 1
 
@@ -268,6 +284,135 @@ def call_planner(
     return ""
 
 
+REASONING_TRUNCATE = 200
+TOOL_OUTPUT_TRUNCATE = 300
+
+
+def _serialize_messages_for_planner(messages: list) -> str:
+    """Build a readable string from Responses API messages for the planner."""
+    parts = []
+    for item in messages or []:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        itype = item.get("type")
+        if role == "user":
+            content = item.get("content", "")
+            if isinstance(content, str):
+                parts.append(f"[User]: {content[:500]}{'...' if len(content) > 500 else ''}")
+            else:
+                parts.append("[User]: (structured content)")
+        elif role == "assistant":
+            content = item.get("content", "")
+            if isinstance(content, str):
+                parts.append(f"[Assistant]: {content[:500]}{'...' if len(content) > 500 else ''}")
+            else:
+                parts.append("[Assistant]: (structured content)")
+        elif itype == "reasoning":
+            summary = item.get("summary")
+            if isinstance(summary, list) and summary:
+                text = " ".join(
+                    str(s.get("text", s) if isinstance(s, dict) else s)
+                    for s in summary[:3]
+                )
+            else:
+                text_parts = []
+                for part in item.get("content", []) or []:
+                    if isinstance(part, dict) and part.get("type") in {"reasoning_text", "output_text", "text"}:
+                        text_parts.append(str(part.get("text", "")))
+                text = " ".join(text_parts)
+            text = (text[:REASONING_TRUNCATE] + "...") if len(text) > REASONING_TRUNCATE else text
+            if text.strip():
+                parts.append(f"[Reasoning]: {text.strip()}")
+        elif itype == "function_call":
+            name = item.get("name", "?")
+            args_str = item.get("arguments", "{}")
+            try:
+                args = json.loads(args_str)
+                q = args.get("user_query") or args.get("query") or args_str[:100]
+                parts.append(f"[Tool call] {name}: {q}")
+            except json.JSONDecodeError:
+                parts.append(f"[Tool call] {name}: {args_str[:100]}...")
+        elif itype == "function_call_output":
+            output = item.get("output", "")
+            if isinstance(output, str):
+                out = (output[:TOOL_OUTPUT_TRUNCATE] + "...") if len(output) > TOOL_OUTPUT_TRUNCATE else output
+            else:
+                out = json.dumps(output)[:TOOL_OUTPUT_TRUNCATE] + "..."
+            parts.append(f"[Tool result]: {out}")
+        elif itype == "message":
+            text_parts = []
+            for part in item.get("content", []) or []:
+                if isinstance(part, dict) and part.get("type") == "output_text":
+                    text_parts.append(str(part.get("text", "")))
+            text = " ".join(text_parts).strip()
+            if text:
+                parts.append(f"[Message]: {text[:300]}{'...' if len(text) > 300 else ''}")
+    return "\n\n".join(parts) if parts else "(no history)"
+
+
+def call_planner_mid(
+    client: openai.OpenAI,
+    planning_model: str,
+    planning_url: str,
+    raw_question: str,
+    messages: list,
+    max_tries: int = 10,
+    verbose: bool = False,
+) -> str:
+    """Call the planner with conversation history to produce a revised plan."""
+    conv_str = _serialize_messages_for_planner(messages)
+    
+    print(f"Conversation history so far: ------------------------------------------\n\n{conv_str}")
+    
+    user_content = f"""## Original question
+{raw_question}
+
+## Conversation history so far
+{conv_str}
+
+Based on the question and conversation history above, output the revised plan within <plan></plan> tags."""
+    planner_messages = [
+        {"role": "system", "content": PROMPT_PLANNER_MID},
+        {"role": "user", "content": user_content},
+    ]
+
+    if str(getattr(client, "base_url", "") or "").rstrip("/") == planning_url.rstrip("/"):
+        planner_client = client
+    else:
+        planner_client = openai.OpenAI(base_url=planning_url, api_key="EMPTY")
+
+    base_sleep_time = 1
+    for attempt in range(max_tries):
+        try:
+            chat_response = planner_client.chat.completions.create(
+                model=planning_model,
+                messages=planner_messages,
+                max_tokens=4096,
+            )
+            content = chat_response.choices[0].message.content
+            if content and content.strip():
+                if verbose:
+                    print("Mid-conversation planning call successful")
+                return content.strip()
+            if verbose:
+                print(f"Warning: Attempt {attempt + 1} received an empty response.")
+        except Exception as e:
+            if verbose:
+                print(f"Mid-planning error (attempt {attempt + 1}/{max_tries}): {e}")
+
+        if attempt < max_tries - 1:
+            sleep_time = min(base_sleep_time * (2**attempt) + random.uniform(0, 1), 30)
+            if verbose:
+                print(f"Retrying in {sleep_time:.2f} seconds...")
+            time.sleep(sleep_time)
+        else:
+            print("Mid-planning: all retries exhausted, returning empty plan")
+            return ""
+
+    return ""
+
+
 def _parse_plan_from_response(response: str) -> str:
     """Extract plan content from planner response. Fallback to full response or empty."""
     if "<plan>" in response and "</plan>" in response:
@@ -303,6 +448,8 @@ def _persist_response(
     *,
     query_id: str | None = None,
     planning: bool = False,
+    planning_trigger: str | None = None,
+    planning_steps: int | None = None,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -382,13 +529,19 @@ def _persist_response(
             normalized_name, 0
         ) + int(count or 0)
 
+    metadata = {
+        "model": initial_request.get("model"),
+        "reasoning": initial_request.get("reasoning"),
+        "output_dir": str(out_dir),
+        "planning": planning,
+    }
+    if planning and planning_trigger:
+        metadata["planning_trigger"] = planning_trigger
+    if planning and planning_trigger == "after_steps" and planning_steps is not None:
+        metadata["planning_steps"] = planning_steps
+
     normalized_record = {
-        "metadata": {
-            "model": initial_request.get("model"),
-            "reasoning": initial_request.get("reasoning"),
-            "output_dir": str(out_dir),
-            "planning": planning,
-        },
+        "metadata": metadata,
         "query_id": query_id,
         "tool_call_counts": normalized_tool_counts,
         "status": status,
@@ -452,20 +605,31 @@ def _process_tsv_dataset(
             {"role": "user", "content": format_query(qtext, args.query_template)}
         ]
 
+        planning_config = None
         if args.planning:
-            if args.verbose:
-                print(f"[{qid}] Planning mode enabled, calling planner...", flush=True)
-            planner_response = call_planner(
-                client,
-                args.planning_model,
-                args.planning_url,
-                raw_question=qtext,
-                verbose=args.verbose,
-            )
-            plan_messages = _inject_plan_into_messages(planner_response)
-            input_messages.extend(plan_messages)
-            if args.verbose:
-                print(f"[{qid}] Injected plan into messages", flush=True)
+            if args.planning_trigger == "start":
+                if args.verbose:
+                    print(f"[{qid}] Planning mode (start), calling planner...", flush=True)
+                planner_response = call_planner(
+                    client,
+                    args.planning_model,
+                    args.planning_url,
+                    raw_question=qtext,
+                    verbose=args.verbose,
+                )
+                plan_messages = _inject_plan_into_messages(planner_response)
+                input_messages.extend(plan_messages)
+                if args.verbose:
+                    print(f"[{qid}] Injected plan into messages", flush=True)
+            else:
+                planning_config = {
+                    "trigger": "after_steps",
+                    "steps": args.planning_steps,
+                    "raw_question": qtext,
+                    "planning_model": args.planning_model,
+                    "planning_url": args.planning_url,
+                    "verbose": args.verbose,
+                }
 
         initial_request = {
             "model": args.model,
@@ -478,7 +642,7 @@ def _process_tsv_dataset(
 
         try:
             messages, tool_usage, status = run_conversation_with_tools(
-                client, initial_request, tool_handler, args.max_iterations, args.verbose
+                client, initial_request, tool_handler, args.max_iterations, args.verbose, planning_config=planning_config,
             )
 
             if status == "completed":
@@ -488,7 +652,7 @@ def _process_tsv_dataset(
                         pbar.set_postfix(completed=completed_count[0])
 
             _persist_response(
-                out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning
+                out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning, planning_trigger=args.planning_trigger, planning_steps=args.planning_steps if args.planning_trigger == "after_steps" else None,
             )
 
         except Exception as exc:
@@ -582,6 +746,18 @@ def main():
         default=None,
         help="Base URL for planner (default: same as --model-url)",
     )
+    parser.add_argument(
+        "--planning-trigger",
+        choices=["start", "after_steps"],
+        default="start",
+        help="When to run planning: start (before loop) or after_steps (mid-conversation)",
+    )
+    parser.add_argument(
+        "--planning-steps",
+        type=int,
+        default=5,
+        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps)",
+    )
 
     # Searcher selection and shared tool options --------------------------
     parser.add_argument(
@@ -666,17 +842,28 @@ def main():
 
     messages = [{"role": "user", "content": args.query}]
 
+    planning_config = None
     if args.planning:
-        print("Planning mode enabled, calling planner...", flush=True)
-        planner_response = call_planner(
-            client,
-            args.planning_model,
-            args.planning_url,
-            raw_question=raw_question,
-            verbose=args.verbose,
-        )
-        plan_messages = _inject_plan_into_messages(planner_response)
-        messages.extend(plan_messages)
+        if args.planning_trigger == "start":
+            print("Planning mode (start), calling planner...", flush=True)
+            planner_response = call_planner(
+                client,
+                args.planning_model,
+                args.planning_url,
+                raw_question=raw_question,
+                verbose=args.verbose,
+            )
+            plan_messages = _inject_plan_into_messages(planner_response)
+            messages.extend(plan_messages)
+        else:
+            planning_config = {
+                "trigger": "after_steps",
+                "steps": args.planning_steps,
+                "raw_question": raw_question,
+                "planning_model": args.planning_model,
+                "planning_url": args.planning_url,
+                "verbose": args.verbose,
+            }
 
     initial_request = {
         "model": args.model,
@@ -688,11 +875,11 @@ def main():
     }
 
     messages, tool_usage, status = run_conversation_with_tools(
-        client, initial_request, tool_handler, args.max_iterations, args.verbose
+        client, initial_request, tool_handler, args.max_iterations, args.verbose, planning_config=planning_config
     )
 
     _persist_response(
-        args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning
+        args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning, planning_trigger=args.planning_trigger, planning_steps=args.planning_steps if args.planning_trigger == "after_steps" else None,
     )
 
     rprint(messages)
