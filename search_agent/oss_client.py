@@ -155,9 +155,9 @@ def run_conversation_with_tools(
             response = client.responses.create(
                 **request,
             )
-            print('=--------------------------------=')
-            print('[Request:]', request)
-            print('[Response:]', response.model_dump(mode="python"))
+            # print('=--------------------------------=')
+            # print('[Request:]', request)
+            # print('[Response:]', response.model_dump(mode="python"))
         except Exception as e:
             if verbose:
                 print(f"Error: {e}")
@@ -180,7 +180,7 @@ def run_conversation_with_tools(
             item for item in response_dict["output"] if item["type"] == "function_call"
         ]
 
-        if not function_calls:
+        if (not function_calls) or ("content" in response_dict["output"][-1] and (response_dict["output"][-1]["content"][0]["type"] == "output_text")):
             return messages, tool_usage, "completed"
 
         new_messages = messages.copy()
