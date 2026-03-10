@@ -284,9 +284,9 @@ def call_planner(
     return ""
 
 
-REASONING_TRUNCATE = 200
-TOOL_OUTPUT_TRUNCATE = 300
-
+REASONING_TRUNCATE = 1000
+TOOL_OUTPUT_TRUNCATE = 1000
+CONTENT_TRUNCATE = 1000
 
 def _serialize_messages_for_planner(messages: list) -> str:
     """Build a readable string from Responses API messages for the planner."""
@@ -299,13 +299,13 @@ def _serialize_messages_for_planner(messages: list) -> str:
         if role == "user":
             content = item.get("content", "")
             if isinstance(content, str):
-                parts.append(f"[User]: {content[:500]}{'...' if len(content) > 500 else ''}")
+                parts.append(f"[User]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
             else:
                 parts.append("[User]: (structured content)")
         elif role == "assistant":
             content = item.get("content", "")
             if isinstance(content, str):
-                parts.append(f"[Assistant]: {content[:500]}{'...' if len(content) > 500 else ''}")
+                parts.append(f"[Assistant]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
             else:
                 parts.append("[Assistant]: (structured content)")
         elif itype == "reasoning":
@@ -347,7 +347,7 @@ def _serialize_messages_for_planner(messages: list) -> str:
                     text_parts.append(str(part.get("text", "")))
             text = " ".join(text_parts).strip()
             if text:
-                parts.append(f"[Message]: {text[:300]}{'...' if len(text) > 300 else ''}")
+                parts.append(f"[Message]: {text[:CONTENT_TRUNCATE]}{'...' if len(text) > CONTENT_TRUNCATE else ''}")
     return "\n\n".join(parts) if parts else "(no history)"
 
 
@@ -537,7 +537,11 @@ def _persist_response(
     }
     if planning and planning_trigger:
         metadata["planning_trigger"] = planning_trigger
-    if planning and planning_trigger == "after_steps" and planning_steps is not None:
+    if (
+        planning
+        and planning_trigger in ("after_steps", "start_and_after_steps")
+        and planning_steps is not None
+    ):
         metadata["planning_steps"] = planning_steps
 
     normalized_record = {
@@ -607,7 +611,7 @@ def _process_tsv_dataset(
 
         planning_config = None
         if args.planning:
-            if args.planning_trigger == "start":
+            if args.planning_trigger in ("start", "start_and_after_steps"):
                 if args.verbose:
                     print(f"[{qid}] Planning mode (start), calling planner...", flush=True)
                 planner_response = call_planner(
@@ -621,7 +625,7 @@ def _process_tsv_dataset(
                 input_messages.extend(plan_messages)
                 if args.verbose:
                     print(f"[{qid}] Injected plan into messages", flush=True)
-            else:
+            if args.planning_trigger in ("after_steps", "start_and_after_steps"):
                 planning_config = {
                     "trigger": "after_steps",
                     "steps": args.planning_steps,
@@ -651,8 +655,13 @@ def _process_tsv_dataset(
                     if pbar:
                         pbar.set_postfix(completed=completed_count[0])
 
-            _persist_response(
-                out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning, planning_trigger=args.planning_trigger, planning_steps=args.planning_steps if args.planning_trigger == "after_steps" else None,
+            _persist_response(out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning,
+                planning_trigger=args.planning_trigger,
+                planning_steps=(
+                    args.planning_steps
+                    if args.planning_trigger in ("after_steps", "start_and_after_steps")
+                    else None
+                ),
             )
 
         except Exception as exc:
@@ -748,15 +757,15 @@ def main():
     )
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps"],
+        choices=["start", "after_steps", "start_and_after_steps"],
         default="start",
-        help="When to run planning: start (before loop) or after_steps (mid-conversation)",
+        help="When to run planning: start (before loop), after_steps (mid-conversation), or start_and_after_steps (both)",
     )
     parser.add_argument(
         "--planning-steps",
         type=int,
         default=5,
-        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps)",
+        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps or start_and_after_steps)",
     )
 
     # Searcher selection and shared tool options --------------------------
@@ -844,7 +853,7 @@ def main():
 
     planning_config = None
     if args.planning:
-        if args.planning_trigger == "start":
+        if args.planning_trigger in ("start", "start_and_after_steps"):
             print("Planning mode (start), calling planner...", flush=True)
             planner_response = call_planner(
                 client,
@@ -855,7 +864,7 @@ def main():
             )
             plan_messages = _inject_plan_into_messages(planner_response)
             messages.extend(plan_messages)
-        else:
+        if args.planning_trigger in ("after_steps", "start_and_after_steps"):
             planning_config = {
                 "trigger": "after_steps",
                 "steps": args.planning_steps,
@@ -879,7 +888,13 @@ def main():
     )
 
     _persist_response(
-        args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning, planning_trigger=args.planning_trigger, planning_steps=args.planning_steps if args.planning_trigger == "after_steps" else None,
+        args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning,
+        planning_trigger=args.planning_trigger,
+        planning_steps=(
+            args.planning_steps
+            if args.planning_trigger in ("after_steps", "start_and_after_steps")
+            else None
+        ),
     )
 
     rprint(messages)
