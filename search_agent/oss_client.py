@@ -133,6 +133,27 @@ class SearchToolHandler:
         return json.dumps(result, indent=2)
 
 
+def _sanitize_input_items(items: list) -> list:
+    """Remove channel/recipient keys with None values from input items.
+    vLLM gpt-oss Responses API rejects items with 'Unknown channel: None' / 'Unknown recipient: None'.
+    Output items from the API may include these fields; we strip them before sending back as input.
+    """
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        cleaned = {k: v for k, v in item.items() if not (k in ("channel", "recipient") and v is None)}
+        if "content" in cleaned and isinstance(cleaned["content"], list):
+            cleaned["content"] = [
+                {k: v for k, v in c.items() if not (k in ("channel", "recipient") and v is None)}
+                if isinstance(c, dict) else c
+                for c in cleaned["content"]
+            ]
+        out.append(cleaned)
+    return out
+
+
 def run_conversation_with_tools(
     client: openai.OpenAI,
     initial_request: dict,
@@ -149,9 +170,31 @@ def run_conversation_with_tools(
     while iteration <= max_iterations:
         try:
             request = initial_request.copy()
+            # request["input"] = _sanitize_input_items(messages)
             request["input"] = messages
+            # #region agent log
+            _payload_bytes = len(json.dumps(request, default=str).encode("utf-8"))
+            _input_count = len(messages)
+            _input_types = [m.get("type") or m.get("role", "?") for m in messages[:10]]
+            open("/scratch/hc3337/projects/BrowseComp-Plus/.cursor/debug-f24dbd.log", "a").write(
+                json.dumps({"id":"pre_call","timestamp":int(time.time()*1000),"location":"oss_client.py:156","message":"Before responses.create","data":{"iteration":iteration,"model":request.get("model"),"input_count":_input_count,"input_types":_input_types,"payload_bytes":_payload_bytes,"has_reasoning":"reasoning" in request},"hypothesisId":"H1_H2_H5"}) + "\n"
+            )
+            # #endregion
             response = client.responses.create(**request)
         except Exception as e:
+            # #region agent log
+            _err_str = str(e)
+            _err_type = type(e).__name__
+            _body = getattr(e, "body", None) or getattr(e, "response", None)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    _body = e.response.json() if hasattr(e.response, "json") else str(e.response)
+                except Exception:
+                    _body = str(getattr(e.response, "text", ""))
+            open("/scratch/hc3337/projects/BrowseComp-Plus/.cursor/debug-f24dbd.log", "a").write(
+                json.dumps({"id":"err_400","timestamp":int(time.time()*1000),"location":"oss_client.py:165","message":"400/API error caught","data":{"iteration":iteration,"model":request.get("model"),"err_type":_err_type,"err_str":_err_str[:500],"response_body":str(_body)[:800] if _body else None},"hypothesisId":"H5"}) + "\n"
+            )
+            # #endregion
             if verbose:
                 print(f"Error: {e}")
                 rprint(f"Request: {request}")
@@ -413,6 +456,46 @@ Based on the question and conversation history above, output the revised plan wi
     return ""
 
 
+def _load_and_validate_plans(
+    plan_file: str, query_tuples: list[tuple[str, str]]
+) -> dict[str, str]:
+    """Load pre-generated plans from JSONL and validate against query list."""
+    plan_path = Path(plan_file)
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"Plan file not found: {plan_file}")
+
+    plan_dict: dict[str, str] = {}
+    with plan_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            qid = str(obj.get("query_id", ""))
+            output = obj.get("output", "")
+            if qid:
+                plan_dict[qid] = output if isinstance(output, str) else json.dumps(output)
+
+    query_ids = {qid for qid, _ in query_tuples}
+
+    if len(plan_dict) != len(query_tuples):
+        raise ValueError(
+            f"Plan file has {len(plan_dict)} entries but query file has {len(query_tuples)}; "
+            "lengths must match"
+        )
+    if set(plan_dict.keys()) != query_ids:
+        missing = query_ids - set(plan_dict.keys())
+        extra = set(plan_dict.keys()) - query_ids
+        parts = []
+        if missing:
+            parts.append(f"query IDs missing from plan file: {sorted(missing)}")
+        if extra:
+            parts.append(f"plan file has extra IDs not in queries: {sorted(extra)}")
+        raise ValueError("Query IDs do not match between plan file and query file: " + "; ".join(parts))
+
+    return plan_dict
+
+
 def _parse_plan_from_response(response: str) -> str:
     """Extract plan content from planner response. Fallback to full response or empty."""
     if "<plan>" in response and "</plan>" in response:
@@ -450,6 +533,7 @@ def _persist_response(
     planning: bool = False,
     planning_trigger: str | None = None,
     planning_steps: int | None = None,
+    planning_file: str | None = None,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -518,6 +602,19 @@ def _persist_response(
                     }
                 )
 
+        elif itype is None and "role" in item and "content" in item:
+            # Role-based messages (e.g. planning intro, plan injection from user/assistant)
+            content = item.get("content", "")
+            if isinstance(content, str) and content.strip():
+                normalized_results.append(
+                    {
+                        "type": item.get("role", "user"),
+                        "tool_name": None,
+                        "arguments": None,
+                        "output": content,
+                    }
+                )
+
     normalized_tool_counts: dict[str, int] = {}
     for tool_name, count in (tool_usage or {}).items():
         normalized_name = (
@@ -543,6 +640,8 @@ def _persist_response(
         and planning_steps is not None
     ):
         metadata["planning_steps"] = planning_steps
+    if planning and planning_trigger == "start_ext" and planning_file:
+        metadata["planning_file"] = planning_file
 
     normalized_record = {
         "metadata": metadata,
@@ -598,6 +697,11 @@ def _process_tsv_dataset(
         f"Processing {len(remaining)} remaining queries (skipping {len(processed_ids)}) from {dataset_path} ..."
     )
 
+    plans_by_id: dict[str, str] = {}
+    if args.planning and args.planning_trigger == "start_ext":
+        plans_by_id = _load_and_validate_plans(args.planning_file, queries)
+        print(f"Loaded {len(plans_by_id)} plans from {args.planning_file}")
+
     import threading
 
     completed_lock = threading.Lock()
@@ -625,6 +729,12 @@ def _process_tsv_dataset(
                 input_messages.extend(plan_messages)
                 if args.verbose:
                     print(f"[{qid}] Injected plan into messages", flush=True)
+            elif args.planning_trigger == "start_ext":
+                plan_output = plans_by_id.get(qid, "")
+                plan_messages = _inject_plan_into_messages(plan_output)
+                input_messages.extend(plan_messages)
+                if args.verbose:
+                    print(f"[{qid}] Injected external plan into messages", flush=True)
             if args.planning_trigger in ("after_steps", "start_and_after_steps"):
                 planning_config = {
                     "trigger": "after_steps",
@@ -655,11 +765,23 @@ def _process_tsv_dataset(
                     if pbar:
                         pbar.set_postfix(completed=completed_count[0])
 
-            _persist_response(out_dir, initial_request, messages, tool_usage, status, query_id=qid, planning=args.planning,
+            _persist_response(
+                out_dir,
+                initial_request,
+                messages,
+                tool_usage,
+                status,
+                query_id=qid,
+                planning=args.planning,
                 planning_trigger=args.planning_trigger,
                 planning_steps=(
                     args.planning_steps
                     if args.planning_trigger in ("after_steps", "start_and_after_steps")
+                    else None
+                ),
+                planning_file=(
+                    args.planning_file
+                    if args.planning_trigger == "start_ext"
                     else None
                 ),
             )
@@ -757,15 +879,21 @@ def main():
     )
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps", "start_and_after_steps"],
+        choices=["start", "after_steps", "start_and_after_steps", "start_ext"],
         default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), or start_and_after_steps (both)",
+        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), or start_ext (load from file)",
     )
     parser.add_argument(
         "--planning-steps",
         type=int,
         default=5,
         help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps or start_and_after_steps)",
+    )
+    parser.add_argument(
+        "--planning-file",
+        type=str,
+        default=None,
+        help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
     )
 
     # Searcher selection and shared tool options --------------------------
@@ -805,6 +933,11 @@ def main():
 
     args = parser.parse_args()
 
+    if args.planning and args.planning_trigger == "start_ext":
+        if args.planning_file is None:
+            print("Error: start_ext requires --planning-file", file=sys.stderr)
+            sys.exit(1)
+
     if args.planning_model is None:
         args.planning_model = args.model
     if args.planning_url is None:
@@ -843,6 +976,13 @@ def main():
                     return
             except OSError:
                 pass
+
+        if args.planning and args.planning_trigger == "start_ext":
+            print(
+                "Error: start_ext requires a TSV query file; use --query path/to/queries.tsv",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     print("Processing single query", args.query)
 
