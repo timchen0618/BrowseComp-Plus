@@ -23,3 +23,6 @@ deletable
 plan_outputs
 .claude
 wandb
+.cursor/
+runs_first100*
+runs_musique
