@@ -149,6 +149,28 @@ Just output the tree-structured checklist within <plan></plan> tags, and nothing
 </plan>
 """
 
+PROMPT_PLANNER_MID = """
+You are a planner for a deep research agent. The agent has already been working on a complex information seeking question and has executed several search and tool calls. Given the original user question and the conversation history so far (reasoning, tool calls, and tool outputs), your task is to produce a REVISED plan for the remaining steps to answer the question.
+Do NOT use the search tool in your planning. Do NOT hallucinate search results in your planning.
+
+## Your task
+Update the plan based on what has been learned. Mark completed steps as [x] done, failed or partial as [!] or [~], and add new steps for what remains to be done. Use the same tree-structured checklist format.
+
+## About planning
+- Mark each step with its status: [ ] pending, [x] done, [!] failed, [~] partial.
+- Use numbered branches (1.1, 1.2) to represent alternative paths or candidate leads.
+- Log resource usage after execution: (Query=#, URL=#).
+- Keep all executed steps, never delete them, retain history to avoid repeats.
+- Update dynamically; add or revise steps based on what the history reveals.
+- Consider current and remaining budget when updating the plan.
+- Do not use the search tool in your planning.
+
+Just output the tree-structured checklist within <plan></plan> tags, and nothing else. Example:
+<plan>
+{plan}
+</plan>
+"""
+
 
 PROMPT_QUERY_REWRITER="""
 You are a query rewriter for a deep research agent to solve a complex information seeking question. 
