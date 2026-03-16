@@ -4,6 +4,8 @@
 
 import json5
 import os
+import re
+from pathlib import Path
 from typing import Dict, List, Optional, Union
 from qwen_agent.llm.schema import Message
 from qwen_agent.utils.utils import build_text_completion_prompt
@@ -20,7 +22,18 @@ import time
 import numpy as np
 from bert_score import BERTScorer
 
-from tongyi_utils.prompts import SYSTEM_PROMPT_SEARCH_ONLY, SYSTEM_PROMPT_MULTI_ANSWER, PRM_AS_SCORER, PRM_AS_SUMMARIZER, PROMPT_PLANNER, PROMPT_QUERY_REWRITER, SYSTEM_PROMPT_SEARCH_ONLY_REFINED, SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING, SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING
+from tongyi_utils.prompts import (
+    SYSTEM_PROMPT_SEARCH_ONLY,
+    SYSTEM_PROMPT_MULTI_ANSWER,
+    PRM_AS_SCORER,
+    PRM_AS_SUMMARIZER,
+    PROMPT_PLANNER,
+    PROMPT_PLANNER_MID,
+    PROMPT_QUERY_REWRITER,
+    SYSTEM_PROMPT_SEARCH_ONLY_REFINED,
+    SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING,
+    SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING,
+)
 from tongyi_utils.tool_search import SearchToolHandler
 
 OBS_START = '<tool_response>'
@@ -36,6 +49,102 @@ import datetime
 def today_date():
     return datetime.date.today().strftime("%Y-%m-%d")
 
+
+def _parse_plan_from_response(response: str) -> str:
+    """Extract plan content from planner response. Fallback to full response or empty."""
+    if "<plan>" in response and "</plan>" in response:
+        try:
+            return response.split("<plan>")[1].split("</plan>")[0].strip()
+        except IndexError:
+            pass
+    return response.strip() if response else ""
+
+
+def _inject_plan_into_messages(planner_response: str) -> list:
+    """Return the two messages to inject: assistant intro and user with plan."""
+    plan_content = _parse_plan_from_response(planner_response)
+    return [
+        {"role": "assistant", "content": "I am calling a planner to plan a sequence of actions to answer the user's question."},
+        {"role": "user", "content": "Here is the planner's response; please follow the plan to answer the user's question: " + plan_content},
+    ]
+
+
+REASONING_TRUNCATE = 1000
+TOOL_OUTPUT_TRUNCATE = 1000
+CONTENT_TRUNCATE = 1000
+
+
+def _serialize_messages_for_planner(messages: list) -> str:
+    """Build a readable string from react-style messages (role/content with <think>, <tool_call>, etc.) for the planner."""
+    parts = []
+    for item in messages or []:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content", "")
+        if not isinstance(content, str):
+            continue
+        if role == "user":
+            if "Here is the planner's response" in content or "Here is the expert search query rewriter's" in content:
+                continue  # skip injected planning/rewriting messages
+            if "<tool_response>" in content:
+                out = content.split("<tool_response>")[1].split("</tool_response>")[0]
+                out = (out[:TOOL_OUTPUT_TRUNCATE] + "...") if len(out) > TOOL_OUTPUT_TRUNCATE else out
+                parts.append(f"[Tool result]: {out.strip()}")
+            else:
+                parts.append(f"[User]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
+        elif role == "assistant":
+            if content in ("I am calling a planner to plan a sequence of actions to answer the user's question.", "I am calling an expert search query rewriter to help me improve the search queries I have made previously."):
+                continue
+            think_matches = []
+            for m in re.finditer(r'<think>(.*?)</think>', content, re.DOTALL):
+                think_matches.append(m.group(1).strip())
+            if think_matches:
+                text = " ".join(think_matches)
+                text = (text[:REASONING_TRUNCATE] + "...") if len(text) > REASONING_TRUNCATE else text
+                if text.strip():
+                    parts.append(f"[Reasoning]: {text.strip()}")
+            for m in re.finditer(r'<tool_call>(.*?)</tool_call>', content, re.DOTALL):
+                try:
+                    args = json5.loads(m.group(1))
+                    q = args.get("query") or args.get("user_query") or m.group(1)[:100]
+                    parts.append(f"[Tool call] search: {q}")
+                except Exception:
+                    parts.append(f"[Tool call] search: {m.group(1)[:100]}...")
+    return "\n\n".join(parts) if parts else "(no history)"
+
+
+def _load_and_validate_plans(plan_file: str, query_tuples: list) -> dict:
+    """Load pre-generated plans from JSONL and validate against query list."""
+    plan_path = Path(plan_file)
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"Plan file not found: {plan_file}")
+    plan_dict = {}
+    with plan_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json5.loads(line)
+            qid = str(obj.get("query_id", ""))
+            output = obj.get("output", "")
+            if qid:
+                plan_dict[qid] = output if isinstance(output, str) else json5.dumps(output)
+    query_ids = {qid for qid, _ in query_tuples}
+    if len(plan_dict) != len(query_tuples):
+        raise ValueError(f"Plan file has {len(plan_dict)} entries but query file has {len(query_tuples)}; lengths must match")
+    if set(plan_dict.keys()) != query_ids:
+        missing = query_ids - set(plan_dict.keys())
+        extra = set(plan_dict.keys()) - query_ids
+        parts = []
+        if missing:
+            parts.append(f"query IDs missing from plan file: {sorted(missing)}")
+        if extra:
+            parts.append(f"plan file has extra IDs not in queries: {sorted(extra)}")
+        raise ValueError("Query IDs do not match between plan file and query file: " + "; ".join(parts))
+    return plan_dict
+
+
 class MultiTurnReactAgent(FnCallAgent):
     def __init__(self,
                  function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
@@ -46,6 +155,9 @@ class MultiTurnReactAgent(FnCallAgent):
                  query_rewriting: Optional[bool] = False,
                  planning_model: Optional[str] = None,
                  query_rewriting_model: Optional[str] = None,
+                 planning_trigger: Optional[str] = "start",
+                 planning_steps: Optional[int] = 5,
+                 plans_by_id: Optional[dict] = None,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
@@ -56,8 +168,11 @@ class MultiTurnReactAgent(FnCallAgent):
         self.query_rewriting = query_rewriting
         self.planning_model = planning_model
         self.query_rewriting_model = query_rewriting_model
+        self.planning_trigger = planning_trigger if planning else "start"
+        self.planning_steps = planning_steps or 5
+        self.plans_by_id = plans_by_id or {}
         if self.planning:
-            print("Planning mode enabled", flush=True)
+            print(f"Planning mode enabled (trigger={self.planning_trigger}, steps={self.planning_steps})", flush=True)
             self.planner_prompt = PROMPT_PLANNER
             self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING
         if self.query_rewriting:
@@ -138,6 +253,34 @@ class MultiTurnReactAgent(FnCallAgent):
         
         return len(tokenizer.encode(full_prompt))
 
+    def call_planner(self, raw_question: str, planning_port: int, max_tries: int = 10) -> str:
+        """Call the planner model to produce a step sequence for the question."""
+        msgs = [
+            {"role": "system", "content": PROMPT_PLANNER},
+            {"role": "user", "content": raw_question},
+        ]
+        content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")
+        return content if content else ""
+
+    def call_planner_mid(
+        self, raw_question: str, messages: list, planning_port: int, max_tries: int = 10
+    ) -> str:
+        """Call the planner with conversation history to produce a revised plan."""
+        conv_str = _serialize_messages_for_planner(messages)
+        user_content = f"""## Original question
+{raw_question}
+
+## Conversation history so far
+{conv_str}
+
+Based on the question and conversation history above, output the revised plan within <plan></plan> tags."""
+        msgs = [
+            {"role": "system", "content": PROMPT_PLANNER_MID},
+            {"role": "user", "content": user_content},
+        ]
+        content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")
+        return content if content else ""
+
     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
         self.model=model
         if self.planning_model is None:
@@ -168,15 +311,23 @@ class MultiTurnReactAgent(FnCallAgent):
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
-        
-        ## Start Planning.
+        mid_planning_done = False
+
+        ## Start Planning (oss_client structure: start, after_steps, start_and_after_steps, start_ext).
         if self.planning:
-            print("Starting planning...", flush=True)
-            content = self.call_server([{"role": "system", "content": self.planner_prompt}, {"role": "user", "content": question}], planning_port, model_str="planning")
-            messages.append({"role": "assistant", "content": "I am calling a planner to plan a sequence of actions to answer the user's question."})
-            messages.append({"role": "user", "content": "Here is the planner's response; please follow the plan to answer the user's question: " + content.strip().split("<plan>")[1].split("</plan>")[0]})
-            print("Planning response: ", content.strip().split("<plan>")[1].split("</plan>")[0].strip(), flush=True)
-            
+            if self.planning_trigger in ("start", "start_and_after_steps"):
+                print("Planning mode (start), calling planner...", flush=True)
+                planner_response = self.call_planner(question, planning_port)
+                plan_messages = _inject_plan_into_messages(planner_response)
+                messages.extend(plan_messages)
+                print("Planning response: ", _parse_plan_from_response(planner_response), flush=True)
+            elif self.planning_trigger == "start_ext":
+                query_id = data.get("query_id", "")
+                plan_output = self.plans_by_id.get(query_id, "")
+                plan_messages = _inject_plan_into_messages(plan_output)
+                messages.extend(plan_messages)
+                print(f"Injected external plan for query_id={query_id}", flush=True)
+
         while num_llm_calls_available > 0:
             start_inference_time = time.time()
             if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
@@ -263,6 +414,22 @@ class MultiTurnReactAgent(FnCallAgent):
                     # messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip().split("<query>")[1].split("</query>")[0]})
                     messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip()})
                     print("Query rewriting response: ", content.strip(), flush=True)
+
+                ## Mid-conversation planning (oss_client: after_steps, start_and_after_steps).
+                total_tools = sum(tool_call_counts_all.values())
+                if (
+                    self.planning
+                    and self.planning_trigger in ("after_steps", "start_and_after_steps")
+                    and total_tools >= self.planning_steps
+                    and not mid_planning_done
+                ):
+                    print("Mid-conversation planning triggered...", flush=True)
+                    planner_response = self.call_planner_mid(question, messages, planning_port)
+                    plan_messages = _inject_plan_into_messages(planner_response)
+                    messages.extend(plan_messages)
+                    mid_planning_done = True
+                    print("Injected revised plan into messages", flush=True)
+
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
             start_inference_time = time.time()

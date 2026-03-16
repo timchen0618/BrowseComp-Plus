@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tongyi_utils.react_agent import MultiTurnReactAgent, SampleOutcomeAgent
+from tongyi_utils.react_agent import MultiTurnReactAgent, SampleOutcomeAgent, _load_and_validate_plans
 from tongyi_utils.tool_search import SearchToolHandler
 from searcher.searchers import SearcherType
 import re
@@ -183,6 +183,11 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
                 continue  # ignore corrupt files
     
     remaining = [(qid, qtext) for qid, qtext in queries if qid not in processed_ids]
+
+    # Load pre-generated plans when start_ext
+    if args.planning and args.planning_trigger == "start_ext":
+        agent.plans_by_id = _load_and_validate_plans(args.planning_file, queries)
+        print(f"Loaded {len(agent.plans_by_id)} plans from {args.planning_file}")
     
     print(f"Processing {len(remaining)} remaining queries (skipping {len(processed_ids)}) from {dataset_path}")
     
@@ -191,7 +196,8 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
             "item": {"question": qtext, "answer": ""},
             "main_agent_port": args.port,
             "planning_port": args.planning_port,
-            "query_rewriting_port": args.query_rewriting_port
+            "query_rewriting_port": args.query_rewriting_port,
+            "query_id": qid,
         }
         
         # try:
@@ -239,6 +245,24 @@ def main():
     parser.add_argument("--planning", action="store_true", help="Use planning mode")
     parser.add_argument("--planning-port", type=int, default=None, help="Planning server port")
     parser.add_argument("--planning-model", type=str, default=None, help="Planning model path")
+    parser.add_argument(
+        "--planning-trigger",
+        choices=["start", "after_steps", "start_and_after_steps", "start_ext"],
+        default="start",
+        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), or start_ext (load from file)",
+    )
+    parser.add_argument(
+        "--planning-steps",
+        type=int,
+        default=5,
+        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps or start_and_after_steps)",
+    )
+    parser.add_argument(
+        "--planning-file",
+        type=str,
+        default=None,
+        help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
+    )
     parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
     parser.add_argument("--query-rewriting-port", type=int, default=None, help="Query rewriting server port")
     parser.add_argument("--query-rewriting-model", type=str, default=None, help="Query rewriting model path")
@@ -258,6 +282,11 @@ def main():
     searcher_class.parse_args(parser)
 
     args = parser.parse_args()
+
+    if args.planning and args.planning_trigger == "start_ext":
+        if args.planning_file is None:
+            print("Error: start_ext requires --planning-file", file=sys.stderr)
+            sys.exit(1)
 
     model = args.model
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -302,6 +331,7 @@ def main():
         agent_class = MultiTurnReactAgent
 
     print(f"Using {agent_class.__name__}...")
+    plans_by_id = {}
     agent = agent_class(
         llm=llm_cfg,
         function_list=["search"],
@@ -311,7 +341,10 @@ def main():
         planning=args.planning,
         query_rewriting=args.query_rewriting,
         planning_model=args.planning_model,
-        query_rewriting_model=args.query_rewriting_model
+        query_rewriting_model=args.query_rewriting_model,
+        planning_trigger=args.planning_trigger,
+        planning_steps=args.planning_steps,
+        plans_by_id=plans_by_id,
     )
     
     # make a dummy call
