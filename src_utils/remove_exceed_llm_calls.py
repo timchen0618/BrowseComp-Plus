@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Iterable, List
 
 
-DEFAULT_STATUS = "exceed available llm calls"
+# DEFAULT_STATUS = "exceed available llm calls"
+DEFAULT_STATUS = "incomplete"
 
 
 def collect_trajectory_files(directory: Path) -> List[Path]:
@@ -26,6 +27,8 @@ def file_has_status(path: Path, status: str) -> bool:
     try:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
+        # if data.get("status") == status and len(data.get("tool_call_counts", {})) == 0:
+        #     print(data)
         return data.get("status") == status and len(data.get("tool_call_counts", {})) == 0
     except Exception as exc:
         print(f"Skip {path}: {exc}")
