@@ -358,6 +358,11 @@ def main(mapping_file: str, data_dir: str):
         displayed_count = 0
         for i, entry in enumerate(result):
             entry_type = entry.get('type', 'unknown')
+
+            # Skip the system-prompt entry injected as the first "user" message
+            output_text = entry.get('output', '')
+            if isinstance(output_text, str) and output_text.startswith("You are a deep research agent"):
+                continue
             
             if not show_flags.get(entry_type, True):
                 continue
