@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+from collections import Counter
 from pathlib import Path
 from typing import List, Any, Dict
 
@@ -48,6 +49,12 @@ def format_output(output: Any) -> str:
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
+def _text_area_height(text: str, min_h: int = 100, max_h: int = 600) -> int:
+    """Compute a reasonable text_area height from content."""
+    h = len(text.split('\n')) * 20
+    return max(min_h, min(h, max_h))
+
+
 def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_index: int, entry_index: int, display_index: int, action_type: str):
     """Display a single trace entry in an expandable box."""
     
@@ -62,16 +69,11 @@ def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_in
             output = entry.get('output', [])
             formatted_output = format_output(output)
             
-            # Calculate height based on content length (max 1000px, min 200px)
-            content_height = min(len(formatted_output.split('\n')) * 20, 1000)
-            content_height = max(content_height, 200)
-            
-            # Use code block for better formatting of long content
             st.markdown("**Reasoning Output:**")
             st.text_area(
                 "Content:",
                 value=formatted_output,
-                height=int(content_height),
+                height=_text_area_height(formatted_output, 200, 1000),
                 key=f"text_reasoning_{base_key}",
                 disabled=True,
                 label_visibility="collapsed"
@@ -90,14 +92,10 @@ def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_in
                 arguments = entry.get('arguments', None)
                 formatted_args = format_arguments(arguments)
                 
-                # Calculate height based on content length (max 600px)
-                args_height = min(len(formatted_args.split('\n')) * 20, 600)
-                args_height = max(args_height, 100)
-                
                 st.text_area(
                     "Content:",
                     value=formatted_args,
-                    height=int(args_height),
+                    height=_text_area_height(formatted_args),
                     key=f"text_args_{base_key}",
                     disabled=True,
                     label_visibility="collapsed"
@@ -108,15 +106,63 @@ def display_trace_entry(entry: Dict[str, Any], trace_uid: str, selected_trace_in
                 output = entry.get('output', None)
                 formatted_output = format_output(output)
                 
-                # Calculate height based on content length (max 600px)
-                output_height = min(len(formatted_output.split('\n')) * 20, 600)
-                output_height = max(output_height, 100)
-                
                 st.text_area(
                     "Content:",
                     value=formatted_output,
-                    height=int(output_height),
+                    height=_text_area_height(formatted_output),
                     key=f"text_output_{base_key}",
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+
+    elif action_type == "assistant":
+        with st.expander(
+            f"🤖 Assistant #{display_index+1} (Trace Index: {entry_index})",
+            expanded=False
+        ):
+            output = entry.get('output', '')
+            if isinstance(output, str):
+                st.info(output)
+            else:
+                st.text_area(
+                    "Content:",
+                    value=format_output(output),
+                    height=_text_area_height(format_output(output)),
+                    key=f"text_assistant_{base_key}",
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+
+    elif action_type == "user":
+        with st.expander(
+            f"📋 Plan #{display_index+1} (Trace Index: {entry_index})",
+            expanded=False
+        ):
+            output = entry.get('output', '')
+            formatted_output = format_output(output) if not isinstance(output, str) else output
+            st.text_area(
+                "Content:",
+                value=formatted_output,
+                height=_text_area_height(formatted_output, 200, 1000),
+                key=f"text_plan_{base_key}",
+                disabled=True,
+                label_visibility="collapsed"
+            )
+
+    elif action_type == "output_text":
+        with st.expander(
+            f"📝 Final Output #{display_index+1} (Trace Index: {entry_index})",
+            expanded=True
+        ):
+            output = entry.get('output', '')
+            if isinstance(output, str):
+                st.markdown(output)
+            else:
+                st.text_area(
+                    "Content:",
+                    value=format_output(output),
+                    height=_text_area_height(format_output(output), 200, 1000),
+                    key=f"text_final_{base_key}",
                     disabled=True,
                     label_visibility="collapsed"
                 )
@@ -281,17 +327,30 @@ def main(mapping_file: str, data_dir: str):
         })
         st.write(f"**Entry Types:**")
         entry_types = [entry.get('type', 'unknown') for entry in result]
-        st.write(f"Reasoning: {entry_types.count('reasoning')}, Tool Calls: {entry_types.count('tool_call')}")
+        st.write(dict(Counter(entry_types)))
     
-    # Filter buttons
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        show_reasoning = st.checkbox("Show Reasoning", value=True, key=f"show_reasoning_{trace_uid}")
-    with col2:
-        show_tool_calls = st.checkbox("Show Tool Calls", value=True, key=f"show_tool_calls_{trace_uid}")
-    with col3:
+    # Detect which entry types are present
+    entry_types_present = set(entry.get('type', 'unknown') for entry in result)
+
+    # Filter buttons — only show toggles for types that exist in this trace
+    filter_cols = st.columns(6)
+    show_flags: Dict[str, bool] = {}
+    col_idx = 0
+    type_labels = [
+        ("assistant", "Show Assistant"),
+        ("user", "Show Plans"),
+        ("reasoning", "Show Reasoning"),
+        ("tool_call", "Show Tool Calls"),
+        ("output_text", "Show Final Output"),
+    ]
+    for etype, label in type_labels:
+        if etype in entry_types_present:
+            with filter_cols[col_idx % 6]:
+                show_flags[etype] = st.checkbox(label, value=True, key=f"show_{etype}_{trace_uid}")
+            col_idx += 1
+    with filter_cols[min(col_idx, 5)]:
         st.write(f"Total Entries: {len(result)}")
-    
+
     # Wrap trace entries in a container with unique key to force re-render
     trace_container = st.container()
     with trace_container:
@@ -300,9 +359,7 @@ def main(mapping_file: str, data_dir: str):
         for i, entry in enumerate(result):
             entry_type = entry.get('type', 'unknown')
             
-            if entry_type == "reasoning" and not show_reasoning:
-                continue
-            if entry_type == "tool_call" and not show_tool_calls:
+            if not show_flags.get(entry_type, True):
                 continue
             
             # Display with trace UID, selected trace index, entry index, and display index
