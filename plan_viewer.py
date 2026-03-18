@@ -72,36 +72,43 @@ html, body {
 }
 
 /* Plan column card */
-.plan-card {
-    border-radius: 8px;
-    border: 1px solid #313244;
-    background: #181825;
-    height: 100%;
-    overflow: hidden;
-}
 .plan-header {
     padding: 10px 16px 8px 16px;
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    border-bottom: 1px solid #313244;
-}
-.plan-body {
-    padding: 14px 16px;
-    color: #CDD6F4;
-    font-size: 0.92rem;
-    line-height: 1.75;
-    word-wrap: break-word;
-    overflow-y: auto;
-    /* total viewport minus: top padding + title/caption + nav row + query card + plan header + margins */
-    height: calc(100vh - 360px);
+    border: 1px solid #313244;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: rgba(0,0,0,0.15);
 }
 .plan-missing {
     color: #585B70;
     font-style: italic;
     padding: 14px 16px;
     font-size: 0.88rem;
+    border: 1px solid #313244;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    background: #181825;
+}
+/* Style the plan text_area to connect seamlessly with the header */
+[data-testid="stTextArea"] { margin: 0 !important; }
+[data-testid="stTextArea"] > div { padding: 0 !important; }
+[data-testid="stTextArea"] textarea {
+    background-color: #181825 !important;
+    color: #CDD6F4 !important;
+    border: 1px solid #313244 !important;
+    border-top: none !important;
+    border-radius: 0 0 8px 8px !important;
+    font-size: 0.92rem !important;
+    font-family: inherit !important;
+    line-height: 1.75 !important;
+    resize: none !important;
+    padding: 14px 16px !important;
+    /* fill remaining viewport */
+    height: calc(100vh - 360px) !important;
 }
 
 /* Navigation bar */
@@ -188,19 +195,22 @@ def render_query_card(qid: str, query_text: str) -> None:
     )
 
 
-def render_plan_card(label: str, plan_text: Optional[str], accent: str) -> None:
-    header = f'<div class="plan-header" style="color:{accent}; background:rgba(0,0,0,0.15);">{label}</div>'
-    if plan_text is None:
-        body = '<div class="plan-missing">No plan available for this query.</div>'
-    else:
-        escaped = html_escape(plan_text)
-        # Convert both literal '\n' sequences and real newline characters to <br>
-        escaped = escaped.replace('\\n', '<br>').replace('\n', '<br>')
-        body = f'<div class="plan-body">{escaped}</div>'
+def render_plan_card(label: str, plan_text: Optional[str], accent: str, key: str) -> None:
     st.markdown(
-        f'<div class="plan-card">{header}{body}</div>',
+        f'<div class="plan-header" style="color:{accent};">{label}</div>',
         unsafe_allow_html=True,
     )
+    if plan_text is None:
+        st.markdown('<div class="plan-missing">No plan available for this query.</div>', unsafe_allow_html=True)
+    else:
+        st.text_area(
+            label="plan",
+            value=plan_text,
+            height=600,  # overridden to calc(100vh - 360px) by CSS
+            key=key,
+            disabled=True,
+            label_visibility="collapsed",
+        )
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
@@ -317,6 +327,7 @@ def main() -> None:
                 label=name.removesuffix(".jsonl"),
                 plan_text=plan_text,
                 accent=accent,
+                key=f"plan_{name}_{selected_qid}",
             )
 
 
