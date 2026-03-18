@@ -28,3 +28,4 @@ runs_first100*
 runs_musique
 runs_first50*
 output_plans
+*_plans.jsonl
