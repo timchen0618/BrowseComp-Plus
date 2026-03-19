@@ -1,21 +1,20 @@
 """
-Pairwise plan comparison using an LLM judge served by an external vLLM server.
+Pointwise plan scoring using an LLM judge served by an external vLLM server.
 
 Two modes:
-  inference  — Run LLM judge on plan pairs and write verdicts to JSONL.
-  compute    — Read an output JSONL and compute win-rate statistics.
+  inference  — Run LLM judge on individual plans and write scores to JSONL.
+  compute    — Read an output JSONL and compute score statistics.
 
 Usage:
     # Inference (default when no subcommand given)
-    python eval_plan_quality/compare_plans.py inference \
-        --plan-file-1 gemini_2.5_pro_plans.jsonl \
-        --plan-file-2 gpt-oss-120b_plans.jsonl \
-        --output-file eval_plan_quality/comparison_results.jsonl \
+    python eval_plan_quality/llm_judge.py inference \
+        --plan-file plans.jsonl \
+        --output-file eval_plan_quality/judge_scores.jsonl \
         --model Qwen/Qwen3-32B --num-threads 8
 
-    # Compute win rates from an existing output file
-    python eval_plan_quality/compare_plans.py compute \
-        --output-file eval_plan_quality/comparison_results.jsonl
+    # Compute score statistics from an existing output file
+    python eval_plan_quality/llm_judge.py compute \
+        --output-file eval_plan_quality/judge_scores.jsonl
 """
 
 import argparse
@@ -36,7 +35,7 @@ from tqdm import tqdm
 
 T = TypeVar("T")
 
-DEFAULT_PROMPT_TEMPLATE = "eval_plan_quality/prompts/naive_prompt.txt"
+DEFAULT_PROMPT_TEMPLATE = "eval_plan_quality/prompts/pointwise_prompt.txt"
 DEFAULT_MODEL_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_MODEL = "Qwen/Qwen3-32B"
 
@@ -47,7 +46,7 @@ def log(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Retry helpers (mirrors vllm_planner.py)
+# Retry helpers
 # ---------------------------------------------------------------------------
 
 def _call_with_timeout(fn: Callable[[], T], timeout_s: float) -> T:
@@ -128,7 +127,7 @@ def load_plans(path: Path) -> Dict[str, Dict[str, str]]:
 class PromptTemplate:
     """Parsed prompt template with separate system and user sections."""
     system: str
-    user: str  # contains {question}, {plan_1}, {plan_2} placeholders
+    user: str  # contains {question}, {plan} placeholders
 
     def render(self, **kwargs) -> List[Dict[str, str]]:
         """Format the user template with the given kwargs and return a messages list."""
@@ -143,7 +142,7 @@ def load_prompt_template(path: Path) -> PromptTemplate:
     """Parse a prompt template file with <start_system_prompt>/<end_system_prompt>
     and <start_user_prompt>/<end_user_prompt> tags.
 
-    The user section may contain {question}, {plan_1}, {plan_2} placeholders.
+    The user section may contain {question}, {plan} placeholders.
     """
     text = path.read_text(encoding="utf-8")
     if not text.strip():
@@ -216,22 +215,21 @@ class VLLMJudge:
     JUDGE_SCHEMA = {
         "type": "json_schema",
         "json_schema": {
-            "name": "plan_comparison",
+            "name": "plan_score",
             "strict": True,
             "schema": {
                 "type": "object",
                 "properties": {
                     "thinking": {
                         "type": "string",
-                        "description": "Step-by-step reasoning about the strengths and weaknesses of each plan.",
+                        "description": "Step-by-step reasoning about the strengths and weaknesses of the plan.",
                     },
-                    "verdict": {
-                        "type": "string",
-                        "enum": ["Plan 1 is better", "Plan 2 is better"],
-                        "description": "Which plan is better.",
+                    "score": {
+                        "type": "integer",
+                        "description": "Quality score from 1 to 5.",
                     },
                 },
-                "required": ["thinking", "verdict"],
+                "required": ["thinking", "score"],
                 "additionalProperties": False,
             },
         },
@@ -259,10 +257,10 @@ class VLLMJudge:
         output_file: Path,
         num_threads: int = 4,
     ) -> None:
-        """Run pairwise comparisons concurrently and write each result to file when done.
+        """Run pointwise scoring concurrently and write each result to file when done.
 
         Each item in *items* must have keys:
-            query_id, question, plan_1, plan_2, messages.
+            query_id, question, plan, messages.
         Each completed result is appended to output_file immediately.
         """
         file_lock = threading.Lock()
@@ -278,8 +276,7 @@ class VLLMJudge:
             result = {
                 "query_id": qid,
                 "question": item["question"],
-                "plan_1": item["plan_1"],
-                "plan_2": item["plan_2"],
+                "plan": item["plan"],
                 "judge_messages": item["messages"],
                 "judge_output": judge_output,
             }
@@ -302,43 +299,34 @@ class VLLMJudge:
 
 
 # ---------------------------------------------------------------------------
-# Verdict parsing
+# Score extraction
 # ---------------------------------------------------------------------------
 
-VERDICT_PATTERN = re.compile(r"<verdict>\s*(.*?)\s*</verdict>", re.DOTALL | re.IGNORECASE)
-PLAN1_PATTERN = re.compile(r"plan\s*1\s*(is\s+)?better", re.IGNORECASE)
-PLAN2_PATTERN = re.compile(r"plan\s*2\s*(is\s+)?better", re.IGNORECASE)
-
-
-def _match_verdict_text(text: str) -> Optional[str]:
-    if PLAN1_PATTERN.search(text):
-        return "plan_1"
-    if PLAN2_PATTERN.search(text):
-        return "plan_2"
-    return None
-
-
-def extract_verdict(judge_output: str) -> Optional[str]:
-    """Extract the verdict from a judge output string.
+def extract_score(judge_output: str) -> Optional[int]:
+    """Extract the integer score from a judge output string.
 
     Supports two formats:
-      1. JSON with a "verdict" field (structured output from the schema).
-      2. Legacy <verdict>...</verdict> XML tags.
+      1. JSON with a "score" field (structured output from the schema).
+      2. Fallback regex for "score": N patterns.
 
-    Returns "plan_1", "plan_2", or None if unparseable.
+    Returns an integer 1-5, or None if unparseable.
     """
     # Try JSON first
     try:
         obj = json.loads(judge_output)
-        if isinstance(obj, dict) and "verdict" in obj:
-            return _match_verdict_text(obj["verdict"])
-    except (json.JSONDecodeError, TypeError):
+        if isinstance(obj, dict) and "score" in obj:
+            score = int(obj["score"])
+            if 1 <= score <= 5:
+                return score
+    except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    # Fall back to <verdict> tags
-    m = VERDICT_PATTERN.search(judge_output)
+    # Fallback: look for "score": N or score: N
+    m = re.search(r'"?score"?\s*[:=]\s*(\d)', judge_output)
     if m:
-        return _match_verdict_text(m.group(1))
+        score = int(m.group(1))
+        if 1 <= score <= 5:
+            return score
 
     return None
 
@@ -348,7 +336,7 @@ def extract_verdict(judge_output: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def run_compute(args: argparse.Namespace) -> None:
-    """Read an output JSONL and compute win-rate statistics."""
+    """Read an output JSONL and compute score statistics."""
     output_file = args.output_file
     if not output_file.exists():
         print(f"Output file {output_file} does not exist.", file=sys.stderr)
@@ -358,12 +346,12 @@ def run_compute(args: argparse.Namespace) -> None:
     purge = getattr(args, "purge", False)
 
     total = 0
-    plan_1_wins = 0
-    plan_2_wins = 0
+    scores: List[int] = []
     parse_failures = 0
     failed_query_ids: List[str] = []
     failed_records: List[Dict[str, Any]] = []
     valid_lines: List[str] = []
+    score_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
     with output_file.open("r", encoding="utf-8") as f:
         for raw_line in f:
@@ -373,12 +361,10 @@ def run_compute(args: argparse.Namespace) -> None:
             obj = json.loads(line)
             total += 1
             judge_output = obj.get("judge_output", "")
-            verdict = extract_verdict(judge_output)
-            if verdict == "plan_1":
-                plan_1_wins += 1
-                valid_lines.append(line)
-            elif verdict == "plan_2":
-                plan_2_wins += 1
+            score = extract_score(judge_output)
+            if score is not None:
+                scores.append(score)
+                score_counts[score] += 1
                 valid_lines.append(line)
             else:
                 parse_failures += 1
@@ -391,19 +377,24 @@ def run_compute(args: argparse.Namespace) -> None:
         return
 
     parseable = total - parse_failures
-    p1_pct = (plan_1_wins / parseable * 100) if parseable else 0.0
-    p2_pct = (plan_2_wins / parseable * 100) if parseable else 0.0
+    avg_score = sum(scores) / len(scores) if scores else 0.0
 
     print(f"File: {output_file}")
     print(f"Total records:      {total}")
-    print(f"Parseable verdicts: {parseable}")
+    print(f"Parseable scores:   {parseable}")
     print(f"Parse failures:     {parse_failures}")
     if failed_query_ids:
         print(f"  Failed query_ids: {', '.join(failed_query_ids[:20])}"
               + (" ..." if len(failed_query_ids) > 20 else ""))
     print()
-    print(f"Plan 1 wins: {plan_1_wins:>4d} / {parseable}  ({p1_pct:.1f}%)")
-    print(f"Plan 2 wins: {plan_2_wins:>4d} / {parseable}  ({p2_pct:.1f}%)")
+    print(f"Average score: {avg_score:.2f}")
+    print()
+    print("Score distribution:")
+    for s in range(1, 6):
+        count = score_counts[s]
+        pct = (count / parseable * 100) if parseable else 0.0
+        bar = "#" * int(pct / 2)
+        print(f"  {s}: {count:>4d} ({pct:5.1f}%)  {bar}")
 
     if verbose and failed_records:
         print(f"\n{'=' * 72}")
@@ -428,47 +419,36 @@ def run_compute(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def run_inference(args: argparse.Namespace) -> None:
-    """Run LLM judge on plan pairs and write verdicts to JSONL."""
+    """Run LLM judge on individual plans and write scores to JSONL."""
     if args.port is not None:
         args.model_url = f"http://127.0.0.1:{args.port}/v1"
 
     # ------------------------------------------------------------------
     # Load inputs
     # ------------------------------------------------------------------
-    log(f"Loading plans from {args.plan_file_1}")
-    plans_1 = load_plans(args.plan_file_1)
-    log(f"  → {len(plans_1)} entries")
-
-    log(f"Loading plans from {args.plan_file_2}")
-    plans_2 = load_plans(args.plan_file_2)
-    log(f"  → {len(plans_2)} entries")
+    log(f"Loading plans from {args.plan_file}")
+    plans = load_plans(args.plan_file)
+    log(f"  → {len(plans)} entries")
 
     log(f"Loading prompt template from {args.prompt_template}")
     template: PromptTemplate = load_prompt_template(args.prompt_template)
     log(f"  system prompt: {len(template.system)} chars | user template: {len(template.user)} chars")
 
-    common_ids = sorted(set(plans_1.keys()) & set(plans_2.keys()))
-    only_1 = set(plans_1.keys()) - set(plans_2.keys())
-    only_2 = set(plans_2.keys()) - set(plans_1.keys())
+    all_ids = sorted(plans.keys())
+    log(f"  {len(all_ids)} query_ids to score")
 
-    if only_1:
-        log(f"  {len(only_1)} query_ids only in plan-file-1 (skipped)")
-    if only_2:
-        log(f"  {len(only_2)} query_ids only in plan-file-2 (skipped)")
-    log(f"  {len(common_ids)} query_ids in common")
-
-    if not common_ids:
-        print("No overlapping query_ids between the two plan files.", file=sys.stderr)
+    if not all_ids:
+        print("No plans found in the input file.", file=sys.stderr)
         sys.exit(1)
 
     # Resume support
     args.output_file.parent.mkdir(parents=True, exist_ok=True)
     completed_ids = load_completed_ids(args.output_file)
-    remaining_ids = [qid for qid in common_ids if qid not in completed_ids]
-    log(f"Total: {len(common_ids)} | Done: {len(common_ids) - len(remaining_ids)} | Remaining: {len(remaining_ids)}")
+    remaining_ids = [qid for qid in all_ids if qid not in completed_ids]
+    log(f"Total: {len(all_ids)} | Done: {len(all_ids) - len(remaining_ids)} | Remaining: {len(remaining_ids)}")
 
     if not remaining_ids:
-        print("All pairs already judged. Nothing to do.")
+        print("All plans already scored. Nothing to do.")
         return
 
     # ------------------------------------------------------------------
@@ -476,16 +456,14 @@ def run_inference(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     items: List[Dict[str, Any]] = []
     for qid in remaining_ids:
-        question = plans_1[qid]["query_text"] or plans_2[qid]["query_text"]
-        plan_1 = plans_1[qid]["plan"]
-        plan_2 = plans_2[qid]["plan"]
+        question = plans[qid]["query_text"]
+        plan = plans[qid]["plan"]
 
-        messages = template.render(question=question, plan_1=plan_1, plan_2=plan_2)
+        messages = template.render(question=question, plan=plan)
         items.append({
             "query_id": qid,
             "question": question,
-            "plan_1": plan_1,
-            "plan_2": plan_2,
+            "plan": plan,
             "messages": messages,
         })
 
@@ -505,9 +483,9 @@ def run_inference(args: argparse.Namespace) -> None:
     judge.judge_and_write(items, args.output_file, num_threads=args.num_threads)
 
     log(f"Wrote {len(items)} results to {args.output_file}")
-    print(f"\nDone. {len(items)} pairs judged → {args.output_file}")
+    print(f"\nDone. {len(items)} plans scored → {args.output_file}")
 
-    # Compute win rates over the full output file
+    # Compute score statistics over the full output file
     print()
     compute_args = argparse.Namespace(output_file=args.output_file, verbose=False)
     run_compute(compute_args)
@@ -519,7 +497,7 @@ def run_inference(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Pairwise plan comparison: run LLM judge (inference) or compute win rates (compute).",
+        description="Pointwise plan scoring: run LLM judge (inference) or compute score stats (compute).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="mode", help="Operating mode")
@@ -527,22 +505,20 @@ def main() -> None:
     # -- inference ---------------------------------------------------------
     inf = subparsers.add_parser(
         "inference",
-        help="Run LLM judge on plan pairs and write verdicts to JSONL",
+        help="Run LLM judge on plans and write scores to JSONL",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    inf.add_argument("--plan-file-1", required=True, type=Path,
-                     help="JSONL file with plans from the first model/method")
-    inf.add_argument("--plan-file-2", required=True, type=Path,
-                     help="JSONL file with plans from the second model/method")
+    inf.add_argument("--plan-file", required=True, type=Path,
+                     help="JSONL file with plans to score")
     inf.add_argument(
         "--prompt-template", type=Path, default=Path(DEFAULT_PROMPT_TEMPLATE),
         help="Prompt template with <start_system_prompt>/<end_system_prompt> and "
              "<start_user_prompt>/<end_user_prompt> tags. "
-             "User section must contain {question}, {plan_1}, {plan_2} placeholders.",
+             "User section must contain {question}, {plan} placeholders.",
     )
     inf.add_argument("--output-file", type=Path,
-                     default=Path("eval_plan_quality/comparison_results.jsonl"),
-                     help="Output JSONL for judge verdicts")
+                     default=Path("eval_plan_quality/judge_scores.jsonl"),
+                     help="Output JSONL for judge scores")
     inf.add_argument("--model-url", default=DEFAULT_MODEL_URL,
                      help="Base URL for the external vLLM OpenAI-compatible server")
     inf.add_argument("--port", type=int, default=None,
@@ -560,7 +536,7 @@ def main() -> None:
     # -- compute -----------------------------------------------------------
     comp = subparsers.add_parser(
         "compute",
-        help="Compute win-rate statistics from an existing output JSONL",
+        help="Compute score statistics from an existing output JSONL",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     comp.add_argument("--output-file", required=True, type=Path,
@@ -568,7 +544,7 @@ def main() -> None:
     comp.add_argument("--verbose", "-v", action="store_true",
                       help="Print the judge output for each failed (unparseable) query")
     comp.add_argument("--purge", action="store_true",
-                      help="Remove records with unparseable verdicts from the output file")
+                      help="Remove records with unparseable scores from the output file")
 
     # -- dispatch ----------------------------------------------------------
     args = parser.parse_args()
@@ -586,7 +562,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    # vllm serve Qwen/Qwen3.5-122B-A10B --tensor-parallel-size 2 --max-model-len 131072 --reasoning-parser qwen3 --port 8000
-    # python eval_plan_quality/compare_plans.py inference  --plan-file-1 gemini_2.5_pro_plans.jsonl --plan-file-2 gpt-oss-120b_plans.jsonl --output-file eval_plan_quality/comparison_results.jsonl --model Qwen/Qwen3.5-122B-A10B  --num-threads 8
-
-    # python eval_plan_quality/compare_plans.py compute --output-file eval_plan_quality/comparison_results.jsonl
