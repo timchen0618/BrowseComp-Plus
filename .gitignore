@@ -29,3 +29,4 @@ runs_musique
 runs_first50*
 output_plans
 *_plans.jsonl
+eval_plan_quality/*.jsonl

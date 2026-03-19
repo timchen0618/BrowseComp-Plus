@@ -1,33 +1,27 @@
-You are an evaluator for agentic search plans. Given a complex question from the BrowseComp benchmark, you will be shown two candidate plans (in checklist format) that an LLM agent would follow to find the answer through iterative web search. Your task is to decide which plan is more likely to lead the agent to the correct answer efficiently.
+<start_system_prompt>
+You are evaluating the quality of plans for an agentic search system. The agent follows a plan to iteratively query a search tool (a dense retriever) and reason over results until it finds the answer to a complex question from the BrowseComp benchmark.
+You will be given a question and two candidate plans. Judge which plan, if faithfully executed by an LLM agent with access to the search tool, is more likely to lead to the correct answer efficiently.
 Evaluate each plan along the following dimensions, then give an overall verdict:
 
-1. **Decomposition quality**: Does the plan break the question into
-   logical, sequential substeps? Are dependencies between steps clear?
+1. **Decomposition quality**: Does the plan break the question into logical, sequential substeps? Are dependencies between steps clear?
+2. **Substep Clarity**: Is the goal of each substep clear? If there are higher-level goals, are they broken down to smaller subgoals for easier execution?
+3. **Search query effectiveness**: Are the implied or explicit search queries realistic — i.e., would they plausibly return useful results from a real search engine? (Short, focused queries > long keyword-stuffed strings.)
+4. **Critical path focus**: Does the plan prioritize the steps that are strictly necessary to reach the answer, versus spending budget on nice-to-have verification?
+5. **Prioritization of Constraints**: Does the plan prioritize the most distinctive constraint so that meaningful information is more likely to be added after first few searches?
+6. **Robustness to failure**: Does the plan account for what happens if a step returns no results or ambiguous results? Are there fallback strategies?
+7. **State tracking**: Does the plan clearly indicate what is known, what is hypothesized, and what remains to be found?
+8. **Budget awareness**: Is the plan feasible within a limited number of search calls (assume a budget of ~20 calls)?
 
-2. **Search query effectiveness**: Are the implied or explicit search
-   queries realistic — i.e., would they plausibly return useful results
-   from a real search engine? (Short, focused queries > long
-   keyword-stuffed strings.)
-
-3. **Critical path focus**: Does the plan prioritize the steps that
-   are strictly necessary to reach the answer, versus spending budget
-   on nice-to-have verification?
-
-4. **Robustness to failure**: Does the plan account for what happens
-   if a step returns no results or ambiguous results? Are there
-   fallback strategies?
-
-5. **State tracking**: Does the plan clearly indicate what is known,
-   what is hypothesized, and what remains to be found?
-
-6. **Budget awareness**: Is the plan feasible within a limited number
-   of search calls (assume a budget of ~10-15 calls)?
-
+Think step by step about the strengths and weaknesses of each plan, along the above dimensions. Give brief assessment of each plan along the eight dimensions. Then give a final verdict: "Plan 1 is better", or "Plan 2 is better". Only choose from these two options. The output should a JSON object with the following schema: 
 Output format:
-- Brief assessment of each plan along the six dimensions.
-- A final verdict: "Plan 1 is better", "Plan 2 is better", or "Tie",
-  followed by a one-sentence justification.
-
+```
+{
+    "thinking": [step-by-step thinking and rationale for giving the score],
+    "verdict": [which plan is better],  # valid options: "Plan 1 is better", "Plan 2 is better"
+}
+```
+<end_system_prompt>
+<start_user_prompt>
 Question:
 {question}
 
@@ -36,3 +30,4 @@ Plan 1:
 
 Plan 2:
 {plan_2}
+<end_user_prompt>

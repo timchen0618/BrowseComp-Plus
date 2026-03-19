@@ -1,23 +1,25 @@
 """
 Pairwise plan comparison using an LLM judge served by an external vLLM server.
 
-Reads two plan JSONL files, matches entries by query_id, renders a comparison
-prompt from a user-supplied template, and writes judge verdicts to output JSONL.
+Two modes:
+  inference  — Run LLM judge on plan pairs and write verdicts to JSONL.
+  compute    — Read an output JSONL and compute win-rate statistics.
 
 Usage:
-    python eval_plan_quality/compare_plans.py \
+    # Inference (default when no subcommand given)
+    python eval_plan_quality/compare_plans.py inference \
         --plan-file-1 gemini_2.5_pro_plans.jsonl \
         --plan-file-2 gpt-oss-120b_plans.jsonl \
-        --prompt-template eval_plan_quality/prompts/naive_prompt.txt \
         --output-file eval_plan_quality/comparison_results.jsonl \
-        --model-url http://127.0.0.1:8000/v1 \
-        --model Qwen/Qwen3-32B \
-        --num-threads 8
+        --model Qwen/Qwen3-32B --num-threads 8
+
+    # Compute win rates from an existing output file
+    python eval_plan_quality/compare_plans.py compute \
+        --output-file eval_plan_quality/comparison_results.jsonl
 """
 
 import argparse
 import json
-import os
 import re
 import random
 import sys
@@ -211,6 +213,30 @@ class VLLMJudge:
             timeout=600.0,
         )
 
+    JUDGE_SCHEMA = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "plan_comparison",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "thinking": {
+                        "type": "string",
+                        "description": "Step-by-step reasoning about the strengths and weaknesses of each plan.",
+                    },
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["Plan 1 is better", "Plan 2 is better"],
+                        "description": "Which plan is better.",
+                    },
+                },
+                "required": ["thinking", "verdict"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
     def _judge_single(self, messages: List[Dict[str, str]]) -> str:
         """Send one judgment request with retries."""
 
@@ -221,6 +247,7 @@ class VLLMJudge:
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=self.max_tokens,
+                response_format=self.JUDGE_SCHEMA,
             )
             return resp.choices[0].message.content or ""
 
@@ -275,70 +302,123 @@ class VLLMJudge:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Verdict parsing
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Compare pairs of plans using an LLM judge via an external vLLM server.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
+VERDICT_PATTERN = re.compile(r"<verdict>\s*(.*?)\s*</verdict>", re.DOTALL | re.IGNORECASE)
+PLAN1_PATTERN = re.compile(r"plan\s*1\s*(is\s+)?better", re.IGNORECASE)
+PLAN2_PATTERN = re.compile(r"plan\s*2\s*(is\s+)?better", re.IGNORECASE)
 
-    # I/O
-    parser.add_argument(
-        "--plan-file-1", required=True, type=Path,
-        help="JSONL file with plans from the first model/method",
-    )
-    parser.add_argument(
-        "--plan-file-2", required=True, type=Path,
-        help="JSONL file with plans from the second model/method",
-    )
-    parser.add_argument(
-        "--prompt-template", type=Path, default=Path(DEFAULT_PROMPT_TEMPLATE),
-        help="Prompt template with <start_system_prompt>/<end_system_prompt> and "
-             "<start_user_prompt>/<end_user_prompt> tags. "
-             "User section must contain {question}, {plan_1}, {plan_2} placeholders.",
-    )
-    parser.add_argument(
-        "--output-file", type=Path, default=Path("eval_plan_quality/comparison_results.jsonl"),
-        help="Output JSONL for judge verdicts",
-    )
 
-    # vLLM server
-    parser.add_argument(
-        "--model-url", default=DEFAULT_MODEL_URL,
-        help="Base URL for the external vLLM OpenAI-compatible server",
-    )
-    parser.add_argument(
-        "--port", type=int, default=None,
-        help="vLLM server port (shorthand: sets --model-url to http://127.0.0.1:{port}/v1)",
-    )
-    parser.add_argument(
-        "--model", default=DEFAULT_MODEL,
-        help="Model name served by vLLM",
-    )
-    parser.add_argument(
-        "--api-key", default="EMPTY",
-        help="API key for the vLLM server",
-    )
+def _match_verdict_text(text: str) -> Optional[str]:
+    if PLAN1_PATTERN.search(text):
+        return "plan_1"
+    if PLAN2_PATTERN.search(text):
+        return "plan_2"
+    return None
 
-    # Generation
-    parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--top-p", type=float, default=0.95)
-    parser.add_argument("--max-tokens", type=int, default=4096)
 
-    # Concurrency
-    parser.add_argument(
-        "--num-threads", type=int, default=4,
-        help="Number of concurrent requests to the vLLM server",
-    )
-    parser.add_argument(
-        "--max-retries", type=int, default=3,
-        help="Max retries per request on transient failures",
-    )
+def extract_verdict(judge_output: str) -> Optional[str]:
+    """Extract the verdict from a judge output string.
 
-    args = parser.parse_args()
+    Supports two formats:
+      1. JSON with a "verdict" field (structured output from the schema).
+      2. Legacy <verdict>...</verdict> XML tags.
 
+    Returns "plan_1", "plan_2", or None if unparseable.
+    """
+    # Try JSON first
+    try:
+        obj = json.loads(judge_output)
+        if isinstance(obj, dict) and "verdict" in obj:
+            return _match_verdict_text(obj["verdict"])
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Fall back to <verdict> tags
+    m = VERDICT_PATTERN.search(judge_output)
+    if m:
+        return _match_verdict_text(m.group(1))
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Compute mode
+# ---------------------------------------------------------------------------
+
+def run_compute(args: argparse.Namespace) -> None:
+    """Read an output JSONL and compute win-rate statistics."""
+    output_file = args.output_file
+    if not output_file.exists():
+        print(f"Output file {output_file} does not exist.", file=sys.stderr)
+        sys.exit(1)
+
+    verbose = getattr(args, "verbose", False)
+
+    total = 0
+    plan_1_wins = 0
+    plan_2_wins = 0
+    parse_failures = 0
+    failed_query_ids: List[str] = []
+    failed_records: List[Dict[str, Any]] = []
+
+    with output_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            total += 1
+            judge_output = obj.get("judge_output", "")
+            verdict = extract_verdict(judge_output)
+            if verdict == "plan_1":
+                plan_1_wins += 1
+            elif verdict == "plan_2":
+                plan_2_wins += 1
+            else:
+                parse_failures += 1
+                failed_query_ids.append(str(obj.get("query_id", "?")))
+                if verbose:
+                    failed_records.append(obj)
+
+    if total == 0:
+        print("No records found in the output file.")
+        return
+
+    parseable = total - parse_failures
+    p1_pct = (plan_1_wins / parseable * 100) if parseable else 0.0
+    p2_pct = (plan_2_wins / parseable * 100) if parseable else 0.0
+
+    print(f"File: {output_file}")
+    print(f"Total records:      {total}")
+    print(f"Parseable verdicts: {parseable}")
+    print(f"Parse failures:     {parse_failures}")
+    if failed_query_ids:
+        print(f"  Failed query_ids: {', '.join(failed_query_ids[:20])}"
+              + (" ..." if len(failed_query_ids) > 20 else ""))
+    print()
+    print(f"Plan 1 wins: {plan_1_wins:>4d} / {parseable}  ({p1_pct:.1f}%)")
+    print(f"Plan 2 wins: {plan_2_wins:>4d} / {parseable}  ({p2_pct:.1f}%)")
+
+    if verbose and failed_records:
+        print(f"\n{'=' * 72}")
+        print(f"Failed queries ({len(failed_records)}):")
+        print(f"{'=' * 72}")
+        for rec in failed_records:
+            qid = rec.get("query_id", "?")
+            judge_output = rec.get("judge_output", "")
+            print(f"\n--- query_id: {qid} ---")
+            print(judge_output if judge_output else "(empty judge output)")
+            print()
+
+
+# ---------------------------------------------------------------------------
+# Inference mode
+# ---------------------------------------------------------------------------
+
+def run_inference(args: argparse.Namespace) -> None:
+    """Run LLM judge on plan pairs and write verdicts to JSONL."""
     if args.port is not None:
         args.model_url = f"http://127.0.0.1:{args.port}/v1"
 
@@ -418,7 +498,78 @@ def main() -> None:
     print(f"\nDone. {len(items)} pairs judged → {args.output_file}")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Pairwise plan comparison: run LLM judge (inference) or compute win rates (compute).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="mode", help="Operating mode")
+
+    # -- inference ---------------------------------------------------------
+    inf = subparsers.add_parser(
+        "inference",
+        help="Run LLM judge on plan pairs and write verdicts to JSONL",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    inf.add_argument("--plan-file-1", required=True, type=Path,
+                     help="JSONL file with plans from the first model/method")
+    inf.add_argument("--plan-file-2", required=True, type=Path,
+                     help="JSONL file with plans from the second model/method")
+    inf.add_argument(
+        "--prompt-template", type=Path, default=Path(DEFAULT_PROMPT_TEMPLATE),
+        help="Prompt template with <start_system_prompt>/<end_system_prompt> and "
+             "<start_user_prompt>/<end_user_prompt> tags. "
+             "User section must contain {question}, {plan_1}, {plan_2} placeholders.",
+    )
+    inf.add_argument("--output-file", type=Path,
+                     default=Path("eval_plan_quality/comparison_results.jsonl"),
+                     help="Output JSONL for judge verdicts")
+    inf.add_argument("--model-url", default=DEFAULT_MODEL_URL,
+                     help="Base URL for the external vLLM OpenAI-compatible server")
+    inf.add_argument("--port", type=int, default=None,
+                     help="vLLM server port (shorthand: sets --model-url to http://127.0.0.1:{port}/v1)")
+    inf.add_argument("--model", default=DEFAULT_MODEL, help="Model name served by vLLM")
+    inf.add_argument("--api-key", default="EMPTY", help="API key for the vLLM server")
+    inf.add_argument("--temperature", type=float, default=0.7)
+    inf.add_argument("--top-p", type=float, default=0.95)
+    inf.add_argument("--max-tokens", type=int, default=4096)
+    inf.add_argument("--num-threads", type=int, default=4,
+                     help="Number of concurrent requests to the vLLM server")
+    inf.add_argument("--max-retries", type=int, default=3,
+                     help="Max retries per request on transient failures")
+
+    # -- compute -----------------------------------------------------------
+    comp = subparsers.add_parser(
+        "compute",
+        help="Compute win-rate statistics from an existing output JSONL",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    comp.add_argument("--output-file", required=True, type=Path,
+                      help="JSONL file produced by the inference mode")
+    comp.add_argument("--verbose", "-v", action="store_true",
+                      help="Print the judge output for each failed (unparseable) query")
+
+    # -- dispatch ----------------------------------------------------------
+    args = parser.parse_args()
+
+    if args.mode is None or args.mode == "inference":
+        if args.mode is None:
+            args = inf.parse_args(sys.argv[1:])
+        run_inference(args)
+    elif args.mode == "compute":
+        run_compute(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
 
-    # python eval_plan_quality/compare_plans.py  --plan-file-1 gemini_2.5_pro_plans.jsonl --plan-file-2 gpt-oss-120b_plans.jsonl --output-file eval_plan_quality/comparison_results.jsonl --model Qwen/Qwen3.5-122B-A10B  --num-threads 8
+    # python eval_plan_quality/compare_plans.py inference  --plan-file-1 gemini_2.5_pro_plans.jsonl --plan-file-2 gpt-oss-120b_plans.jsonl --output-file eval_plan_quality/comparison_results.jsonl --model Qwen/Qwen3.5-122B-A10B  --num-threads 8
+
+    # python eval_plan_quality/compare_plans.py compute --output-file eval_plan_quality/comparison_results.jsonl
