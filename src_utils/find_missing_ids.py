@@ -56,12 +56,17 @@ def main():
         for leaf_dir in dirs_to_check:
             output_run_query_ids = collect_query_ids_from_dir(leaf_dir)
             print(f"\n--- Checking {leaf_dir} ({len(output_run_query_ids)} query ids) ---")
+            all_complete = True
             for reference_file in reference_files:
                 reference_data = read_tsv_file(reference_file)
                 query_ids = [row[0] for row in reference_data]
                 missing_query_ids = set(query_ids) - set(output_run_query_ids)
                 missing_query_ids = sorted(missing_query_ids)
-                print(f"***Missing {len(missing_query_ids)} query ids in {reference_file}:***\n {missing_query_ids}\n")
+                if missing_query_ids:
+                    all_complete = False
+                    print(f"***Missing {len(missing_query_ids)} query ids in {reference_file}:***\n {missing_query_ids}\n")
+            if all_complete:
+                print(f"All query files complete for {leaf_dir}")
         return
 
     if args.input_dir:
@@ -72,13 +77,17 @@ def main():
         output_run_query_ids = [item["query_id"] for item in read_jsonl_file(args.jsonl_file)]
         print(f"Found {len(output_run_query_ids)} output run query ids from {args.jsonl_file}")
 
+    all_complete = True
     for reference_file in reference_files:
-        print(f"Processing {reference_file}...")
         reference_data = read_tsv_file(reference_file)
         query_ids = [row[0] for row in reference_data]
         missing_query_ids = set(query_ids) - set(output_run_query_ids)
         missing_query_ids = sorted(missing_query_ids)
-        print(f"***Missing {len(missing_query_ids)} query ids in {reference_file}:***\n {missing_query_ids}\n")
+        if missing_query_ids:
+            all_complete = False
+            print(f"***Missing {len(missing_query_ids)} query ids in {reference_file}:***\n {missing_query_ids}\n")
+    if all_complete:
+        print("All query files are complete — no missing IDs.")
     
     
 if __name__ == "__main__":
