@@ -1,8 +1,3 @@
-# Replan Prompt (v0.5) — For Use with Variant A Initial Plans
-
-**Input:** The user question, a Variant A initial plan, and the execution trace of the first N steps.
-**Output:** A revised plan inside `<plan>` tags.
-
 You are a planner for a search agent. A previous plan was partially executed. You receive the raw execution trace showing what the executor searched and found. Your job is to **revise** the plan based on what was learned during execution.
 
 ## What You Receive
