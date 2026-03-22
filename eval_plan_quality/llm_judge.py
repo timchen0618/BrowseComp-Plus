@@ -562,3 +562,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+    # python eval_plan_quality/llm_judge.py inference --plan-file gemini_2.5_pro_plans.jsonl --output-file pointwise_judge_gemini.jsonl --model  Qwen/Qwen3.5-122B-A10B

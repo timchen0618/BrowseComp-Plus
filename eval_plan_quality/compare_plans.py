@@ -587,6 +587,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
     # vllm serve Qwen/Qwen3.5-122B-A10B --tensor-parallel-size 2 --max-model-len 131072 --reasoning-parser qwen3 --port 8000
-    # python eval_plan_quality/compare_plans.py inference  --plan-file-1 gemini_2.5_pro_plans.jsonl --plan-file-2 gpt-oss-120b_plans.jsonl --output-file eval_plan_quality/comparison_results.jsonl --model Qwen/Qwen3.5-122B-A10B  --num-threads 8
+    # python eval_plan_quality/compare_plans.py inference  --plan-file-1 output_plans/gemini/gemini_2.5_pro_plans.jsonl --plan-file-2 output_plans/gpt-oss-120b/gpt-oss-120b_plans.jsonl --output-file judge_results/qwen3.5-122B-A10B/compare_gemini_gpt-oss-120b.jsonl --model Qwen/Qwen3.5-122B-A10B  --num-threads 8
 
     # python eval_plan_quality/compare_plans.py compute --output-file eval_plan_quality/comparison_results.jsonl

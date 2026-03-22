@@ -827,3 +827,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+    # python eval_plan_quality/eval_plan_following.py inference --input-dir runs/gpt-oss-120b/gpt-oss-120b_planning_seed0/ --output-file eval_plan_quality/plan_following_score_gpt_planning_seed0.jsonl --model Qwen/Qwen3.5-122B-A10B
