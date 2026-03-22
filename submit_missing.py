@@ -18,21 +18,10 @@ import os
 
 TEMPLATE_PATH = "run_qwen3_planning.SBATCH"
 
-# Missing shards per leaf folder (from missing.txt analysis)
+# Missing shards per leaf folder (from missing_1.txt analysis)
 MISSING = {
-    "tongyi_planning_after_steps_5_seed1":                 [2, 6],
-    "tongyi_planning_after_steps_5_seed2":                 [0, 1, 2, 3, 7, 9],
-    "tongyi_planning_after_steps_5_seed3":                 [0, 1, 4],
-    "tongyi_planning_seed1":                               [0, 1, 2, 3, 8],
-    "tongyi_planning_seed2":                               [2, 3, 5],
-    "tongyi_planning_seed3":                               [1, 6],
-    "tongyi_planning_start_and_after_steps_5_seed1":       [4, 9],
-    "tongyi_planning_start_and_after_steps_5_seed2":       [1, 7, 9],
-    "tongyi_planning_start_and_after_steps_5_seed3":       [1],
-    "tongyi_planning_start_ext_seed1":                     [0, 1, 3, 5, 7],
-    "tongyi_planning_start_ext_seed2":                     [1, 2, 5, 6, 8, 9],
-    "tongyi_seed1":                                        [1, 4, 5, 6, 7, 8, 9],
-    "tongyi_seed2":                                        [3, 4, 5, 6, 7, 8, 9],
+    "gpt-oss-120b_planning_new_prompt_seed0": [2, 7],
+    "tongyi_planning_new_prompt_seed0":       [0, 3],
 }
 
 
@@ -61,6 +50,7 @@ def parse_run_name(name):
         "planning_start_and_after_steps_5": "planning_start_and_after_steps_5",
         "planning_start_ext":               "planning_start_ext",
         "planning":                         "planning",
+        "planning_new_prompt":                         "planning",
         "":                                 "org",
     }
     mode = mode_map.get(rest)

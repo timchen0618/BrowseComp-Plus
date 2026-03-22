@@ -263,6 +263,18 @@ def main():
         default=None,
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
     )
+    parser.add_argument(
+        "--plan-prompt-file",
+        type=str,
+        default="prompts/planning_prompt_v6.1.md",
+        help="Path to initial planner system prompt (relative to repo root if not absolute)",
+    )
+    parser.add_argument(
+        "--plan-prompt-mid-file",
+        type=str,
+        default="prompts/planning_prompt_v6.1_context.md",
+        help="Path to mid-conversation planner system prompt (relative to repo root if not absolute)",
+    )
     parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
     parser.add_argument("--query-rewriting-port", type=int, default=None, help="Query rewriting server port")
     parser.add_argument("--query-rewriting-model", type=str, default=None, help="Query rewriting model path")
@@ -300,6 +312,19 @@ def main():
         args.planning_model = args.model
     if args.query_rewriting_model is None:
         args.query_rewriting_model = args.model
+
+    repo_root = Path(__file__).resolve().parent.parent
+    plan_prompt_text = None
+    plan_prompt_mid_text = None
+    if args.planning:
+        plan_path = Path(args.plan_prompt_file)
+        if not plan_path.is_absolute():
+            plan_path = repo_root / plan_path
+        plan_prompt_text = plan_path.read_text(encoding="utf-8")
+        mid_path = Path(args.plan_prompt_mid_file)
+        if not mid_path.is_absolute():
+            mid_path = repo_root / mid_path
+        plan_prompt_mid_text = mid_path.read_text(encoding="utf-8")
     
     print(f"Model: {model}")
     print(f"Output directory: {output_dir}")
@@ -345,6 +370,8 @@ def main():
         planning_trigger=args.planning_trigger,
         planning_steps=args.planning_steps,
         plans_by_id=plans_by_id,
+        plan_prompt=plan_prompt_text,
+        plan_prompt_mid=plan_prompt_mid_text,
     )
     
     # make a dummy call

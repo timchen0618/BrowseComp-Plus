@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import PROMPT_PLANNER, PROMPT_PLANNER_MID, format_query
+from prompts import format_query
 from rich import print as rprint
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -259,6 +259,7 @@ def run_conversation_with_tools(
                 planning_url=planning_config["planning_url"],
                 raw_question=planning_config["raw_question"],
                 messages=new_messages,
+                plan_mid_system_prompt=planning_config["plan_mid_system_prompt"],
                 verbose=planning_config.get("verbose", False),
             )
             plan_messages = _inject_plan_into_messages(planner_response)
@@ -278,13 +279,15 @@ def call_planner(
     planning_model: str,
     planning_url: str,
     raw_question: str,
+    *,
+    plan_system_prompt: str,
     max_tries: int = 10,
     verbose: bool = False,
 ) -> str:
     """Call the planner model to produce a step sequence for the question."""
     base_sleep_time = 1
     messages = [
-        {"role": "system", "content": PROMPT_PLANNER},
+        {"role": "system", "content": plan_system_prompt},
         {"role": "user", "content": raw_question},
     ]
 
@@ -400,6 +403,8 @@ def call_planner_mid(
     planning_url: str,
     raw_question: str,
     messages: list,
+    *,
+    plan_mid_system_prompt: str,
     max_tries: int = 10,
     verbose: bool = False,
 ) -> str:
@@ -416,7 +421,7 @@ def call_planner_mid(
 
 Based on the question and conversation history above, output the revised plan within <plan></plan> tags."""
     planner_messages = [
-        {"role": "system", "content": PROMPT_PLANNER_MID},
+        {"role": "system", "content": plan_mid_system_prompt},
         {"role": "user", "content": user_content},
     ]
 
@@ -723,6 +728,7 @@ def _process_tsv_dataset(
                     args.planning_model,
                     args.planning_url,
                     raw_question=qtext,
+                    plan_system_prompt=args.plan_system_prompt,
                     verbose=args.verbose,
                 )
                 plan_messages = _inject_plan_into_messages(planner_response)
@@ -742,6 +748,7 @@ def _process_tsv_dataset(
                     "raw_question": qtext,
                     "planning_model": args.planning_model,
                     "planning_url": args.planning_url,
+                    "plan_mid_system_prompt": args.plan_mid_system_prompt,
                     "verbose": args.verbose,
                 }
 
@@ -895,6 +902,18 @@ def main():
         default=None,
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
     )
+    parser.add_argument(
+        "--plan-prompt-file",
+        type=str,
+        default="prompts/planning_prompt_v6.1.md",
+        help="Path to initial planner system prompt (relative to repo root if not absolute)",
+    )
+    parser.add_argument(
+        "--plan-prompt-mid-file",
+        type=str,
+        default="prompts/planning_prompt_v6.1_context.md",
+        help="Path to mid-conversation planner system prompt (relative to repo root if not absolute)",
+    )
 
     # Searcher selection and shared tool options --------------------------
     parser.add_argument(
@@ -942,6 +961,27 @@ def main():
         args.planning_model = args.model
     if args.planning_url is None:
         args.planning_url = args.model_url
+
+    repo_root = Path(__file__).resolve().parent.parent
+    args.plan_system_prompt = None
+    if args.planning and args.planning_trigger in (
+        "start",
+        "start_and_after_steps",
+    ):
+        plan_path = Path(args.plan_prompt_file)
+        if not plan_path.is_absolute():
+            plan_path = repo_root / plan_path
+        args.plan_system_prompt = plan_path.read_text(encoding="utf-8")
+
+    args.plan_mid_system_prompt = None
+    if args.planning and args.planning_trigger in (
+        "after_steps",
+        "start_and_after_steps",
+    ):
+        mid_path = Path(args.plan_prompt_mid_file)
+        if not mid_path.is_absolute():
+            mid_path = repo_root / mid_path
+        args.plan_mid_system_prompt = mid_path.read_text(encoding="utf-8")
 
     if args.hf_token:
         os.environ["HF_TOKEN"] = args.hf_token
@@ -1000,6 +1040,7 @@ def main():
                 args.planning_model,
                 args.planning_url,
                 raw_question=raw_question,
+                plan_system_prompt=args.plan_system_prompt,
                 verbose=args.verbose,
             )
             plan_messages = _inject_plan_into_messages(planner_response)
@@ -1011,6 +1052,7 @@ def main():
                 "raw_question": raw_question,
                 "planning_model": args.planning_model,
                 "planning_url": args.planning_url,
+                "plan_mid_system_prompt": args.plan_mid_system_prompt,
                 "verbose": args.verbose,
             }
 

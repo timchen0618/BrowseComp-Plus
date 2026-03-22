@@ -158,6 +158,8 @@ class MultiTurnReactAgent(FnCallAgent):
                  planning_trigger: Optional[str] = "start",
                  planning_steps: Optional[int] = 5,
                  plans_by_id: Optional[dict] = None,
+                 plan_prompt: Optional[str] = None,
+                 plan_prompt_mid: Optional[str] = None,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
@@ -173,7 +175,10 @@ class MultiTurnReactAgent(FnCallAgent):
         self.plans_by_id = plans_by_id or {}
         if self.planning:
             print(f"Planning mode enabled (trigger={self.planning_trigger}, steps={self.planning_steps})", flush=True)
-            self.planner_prompt = PROMPT_PLANNER
+            self.planner_prompt = plan_prompt if plan_prompt is not None else PROMPT_PLANNER
+            self.planner_mid_prompt = (
+                plan_prompt_mid if plan_prompt_mid is not None else PROMPT_PLANNER_MID
+            )
             self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING
         if self.query_rewriting:
             print("Query rewriting mode enabled", flush=True)
@@ -256,7 +261,7 @@ class MultiTurnReactAgent(FnCallAgent):
     def call_planner(self, raw_question: str, planning_port: int, max_tries: int = 10) -> str:
         """Call the planner model to produce a step sequence for the question."""
         msgs = [
-            {"role": "system", "content": PROMPT_PLANNER},
+            {"role": "system", "content": self.planner_prompt},
             {"role": "user", "content": raw_question},
         ]
         content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")
@@ -275,7 +280,7 @@ class MultiTurnReactAgent(FnCallAgent):
 
 Based on the question and conversation history above, output the revised plan within <plan></plan> tags."""
         msgs = [
-            {"role": "system", "content": PROMPT_PLANNER_MID},
+            {"role": "system", "content": self.planner_mid_prompt},
             {"role": "user", "content": user_content},
         ]
         content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")

@@ -2,7 +2,7 @@
 vLLM-based plan generator with the same interface/params as portkey.py.
 
 - Uses OpenAI-compatible chat.completions API served by a vLLM instance.
-- Reads queries from a TSV file, generates plans via PROMPT_PLANNER, writes JSONL.
+- Reads queries from a TSV file, generates plans via prompts/planning_prompt_v6.md, writes JSONL.
 - Supports resume (skips already-processed query_ids) and threaded concurrency.
 """
 
@@ -23,9 +23,10 @@ from pathlib import Path
 import openai
 from tqdm import tqdm
 
-from search_agent.tongyi_utils.prompts import PROMPT_PLANNER
-
 DEFAULT_STOPS = None
+
+_PLANNER_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planning_prompt_v6.1.md"
+PLANNER_SYSTEM_PROMPT = _PLANNER_PROMPT_PATH.read_text(encoding="utf-8")
 
 T = TypeVar("T")
 
@@ -383,7 +384,7 @@ def main():
 
         output = model.generate(
             messages=[
-                {"role": "system", "content": PROMPT_PLANNER},
+                {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
                 {"role": "user", "content": f"User Question: {query_text}"},
             ],
             params=gen_params,

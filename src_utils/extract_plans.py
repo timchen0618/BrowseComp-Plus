@@ -128,3 +128,5 @@ if __name__ == "__main__":
     main()
 
     # python src_utils/extract_plans.py --input-dir runs_first50/Qwen3-Embedding-8B/tongyi_planning_seed0/ --output-file tongyi_plans.jsonl --query-file topics-qrels/queries_first50.tsv
+    # python src_utils/extract_plans.py --input-dir runs/Qwen3-Embedding-8B/tongyi_planning_seed3/ --output-file output_plans/tongyi/tongyi_plans.jsonl --query-file topics-qrels/queries.tsv
+    # python src_utils/extract_plans.py --input-dir runs/Qwen3-Embedding-8B/gpt-oss-120b_planning_seed3/ --output-file output_plans/gpt-oss-120b/gpt-oss-120b_plans.jsonl --query-file topics-qrels/queries.tsv

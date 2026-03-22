@@ -29,6 +29,7 @@ as your Llama33_70B / OpenAIChat wrappers.
 from dataclasses import dataclass
 from typing import Dict, Any, List, Union, Optional, Callable, TypeVar
 import os
+import threading
 import time
 import random
 import concurrent.futures
@@ -36,6 +37,7 @@ import concurrent.futures
 from portkey_ai import Portkey  # pip install portkey-ai
 
 import sys
+from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 
@@ -70,7 +72,7 @@ class RetryConfig:
     per_attempt_timeout_s: float = 90.0  # hard wall-clock timeout per attempt
     total_deadline_s: float = 240.0      # total wall-clock deadline across all attempts
     base_backoff_s: float = 1.0
-    max_backoff_s: float = 20.0
+    max_backoff_s: float = 60.0          # longer cap for gateway 504s
 
 
 def _call_with_timeout(fn: Callable[[], T], timeout_s: float) -> T:
@@ -134,9 +136,12 @@ def _retry_with_deadline(fn: Callable[[], T], cfg: RetryConfig) -> T:
             if attempt >= attempts_total - 1:
                 raise
 
-            # jittered exponential backoff (capped)
-            backoff = min(cfg.max_backoff_s, cfg.base_backoff_s * (2 ** attempt))
+            # Use longer backoff for gateway 504s to let the server recover
+            is_504 = "504" in repr(last_err) or "Gateway Time-out" in repr(last_err)
+            base = cfg.base_backoff_s * (3 if is_504 else 1)
+            backoff = min(cfg.max_backoff_s, base * (2 ** attempt))
             backoff *= 0.5 + random.random()  # jitter in [0.5, 1.5)
+            log_err(f"Backoff {backoff:.1f}s before next attempt (504={is_504})")
             time.sleep(backoff)
 
     # unreachable, but keeps type-checkers happy
@@ -187,11 +192,11 @@ class Gemini25Pro:
         # Generic retry config (can be overridden by env vars without touching call sites)
         if retry_cfg is None:
             retry_cfg = RetryConfig(
-                max_retries=int(os.getenv("LLM_MAX_RETRIES", os.getenv("PORTKEY_MAX_RETRIES", "3"))),
+                max_retries=int(os.getenv("LLM_MAX_RETRIES", os.getenv("PORTKEY_MAX_RETRIES", "4"))),
                 per_attempt_timeout_s=float(os.getenv("LLM_PER_ATTEMPT_TIMEOUT_S", os.getenv("PORTKEY_TIMEOUT_S", "180"))),
-                total_deadline_s=float(os.getenv("LLM_TOTAL_DEADLINE_S", os.getenv("PORTKEY_DEADLINE_S", "720"))),
-                base_backoff_s=float(os.getenv("LLM_BASE_BACKOFF_S", "1.0")),
-                max_backoff_s=float(os.getenv("LLM_MAX_BACKOFF_S", "20.0")),
+                total_deadline_s=float(os.getenv("LLM_TOTAL_DEADLINE_S", os.getenv("PORTKEY_DEADLINE_S", "1800"))),
+                base_backoff_s=float(os.getenv("LLM_BASE_BACKOFF_S", "2.0")),
+                max_backoff_s=float(os.getenv("LLM_MAX_BACKOFF_S", "60.0")),
             )
         self._retry_cfg = retry_cfg
 
@@ -274,12 +279,18 @@ class Gemini25Pro:
                     f"(max_tokens={kwargs_api['max_tokens']})")
 
             start = time.time()
-            resp = self.client.chat.completions.create(**kwargs_api)
+            # Use streaming to avoid intermediate gateway 504 timeouts.
+            # The gateway stays alive as long as chunks keep arriving.
+            stream = self.client.chat.completions.create(**kwargs_api, stream=True)
+            content_parts = []
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content_parts.append(chunk.choices[0].delta.content)
             duration = time.time() - start
 
             log_err(f"[{self.model_name}] API call finished in {duration:.2f}s")
 
-            return resp.choices[0].message.content or ""
+            return "".join(content_parts)
 
         log_err(f"[{self.model_name}] generate() called")
 
@@ -315,10 +326,13 @@ class Gemini25Pro:
         
         
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--num-threads", type=int, default=4)
+    cli = ap.parse_args()
+
     model = Gemini25Pro(base_url="https://ai-gateway.apps.cloud.rt.nyu.edu/v1/")
-    gen_params = GenParams(max_new_tokens=4096, temperature=0.7, top_p=0.95)
-    # output = model.generate(messages=[{"role": "user", "content": "What is the capital of France?"}], params=gen_params)
-    # print(output)
+    gen_params = GenParams(max_new_tokens=2048, temperature=0.7, top_p=0.95)
     
     def read_tsv(file_path: str) -> List[Dict[str, str]]:
         import csv
@@ -332,21 +346,68 @@ if __name__ == "__main__":
             for item in data:
                 f.write(json.dumps(item) + "\n")
                 
+    def load_completed_ids(file_path: str) -> set:
+        import json
+        ids: set = set()
+        p = Path(file_path)
+        if not p.exists():
+            return ids
+        with p.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    qid = obj.get("query_id")
+                    if qid is not None:
+                        ids.add(str(qid))
+                except json.JSONDecodeError:
+                    continue
+        return ids
+
       
     
-    from search_agent.tongyi_utils.prompts import PROMPT_PLANNER
-    NUM_QUERIES = 100
+    planner_system = (
+        Path(__file__).resolve().parent / "prompts" / "planning_prompt_v6.1.md"
+    ).read_text(encoding="utf-8")
+    NUM_QUERIES = 0
     data = read_tsv("topics-qrels/queries.tsv")
     
-    output_file = "gemini_2.5_pro_plans.jsonl"
-    for query in tqdm(data[NUM_QUERIES:], desc="Generating plans"):
+    output_file = "gemini_2.5_pro_plans_updated.jsonl"
+    queries = data[NUM_QUERIES:]
+    completed_ids = load_completed_ids(output_file)
+    remaining = [q for q in queries if q[0] not in completed_ids]
+    print(f"Total queries: {len(queries)} | Already done: {len(queries) - len(remaining)} | Remaining: {len(remaining)}")
+
+    write_lock = threading.Lock()
+
+    def process_query(query):
         query_id = query[0]
         query_text = query[1]
-        output = model.generate(messages=[{"role": "system", "content": PROMPT_PLANNER}, {"role": "user", "content": f"User Question: {query_text}"}], params=gen_params)
-        print("-"*100)
+        output = model.generate(
+            messages=[
+                {"role": "system", "content": planner_system},
+                {"role": "user", "content": f"User Question: {query_text}"},
+            ],
+            params=gen_params,
+        )
+        print("-" * 100)
         print(f"Query ID: {query_id}")
         print(f"Query Text: {query_text}")
         print(f"Output: {output}")
-        
-        
-        append_jsonl(output_file, [{"query_id": query_id, "query_text": query_text, "output": output}])
+        with write_lock:
+            append_jsonl(output_file, [{"query_id": query_id, "query_text": query_text, "output": output}])
+
+    if cli.num_threads <= 1:
+        for query in tqdm(remaining, desc="Generating plans"):
+            process_query(query)
+    else:
+        with (
+            concurrent.futures.ThreadPoolExecutor(max_workers=cli.num_threads) as executor,
+            tqdm(total=len(remaining), desc="Generating plans") as pbar,
+        ):
+            futures = [executor.submit(process_query, q) for q in remaining]
+            for fut in concurrent.futures.as_completed(futures):
+                fut.result()
+                pbar.update(1)
