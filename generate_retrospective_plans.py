@@ -115,6 +115,48 @@ as if it were a plan written BEFORE execution.
 {_PLAN_FORMAT_EXAMPLE}
 """
 
+LEGACY_RETROSPECTIVE_SYSTEM_PROMPT = """\
+You are an expert at reconstructing search strategies from agent trajectories.
+
+Given a question and the ordered list of search queries (with brief reasoning
+notes) that an agent actually issued while solving the question, produce a
+RETROSPECTIVE PLAN in the legacy checklist format — as if it were written
+BEFORE execution, but reflecting only what the agent actually did.
+
+### Status markers
+Since this is a retrospective plan, mark all executed steps as [x] done.
+Use [!] for searches that clearly failed (returned no useful results) and
+[~] for partially successful ones, if apparent from the reasoning notes.
+
+### Rules
+1. Reflect the agent's ACTUAL search trajectory — do not invent steps.
+2. Group searches with the same logical intent under a single numbered step.
+3. Use sub-branches (1.1, 1.2, ...) for alternative approaches tried in
+   sequence (e.g., first tried English query, then Arabic).
+4. Log the search count per step as (Query=N) at the end of each leaf.
+5. End with a synthesis step for producing the final answer.
+6. Output ONLY the plan inside <plan></plan> tags, nothing else.
+
+### Plan Format
+<plan>
+1. [x] Find initial candidates using the most distinctive constraint
+   1.1 [x] Broad search for candidates (Query=1)
+   1.2 [x] Reformulate after weak results (Query=1)
+   1.3 [x] Candidate A: [Name] — verify immediately after surfacing
+      1.3.1 [x] Verify constraint X for Candidate A (Query=1)
+      1.3.2 [x] Verify constraint Y for Candidate A (Query=1)
+      1.3.3 [!] Verify constraint Z — failed, candidate rejected (Query=1)
+   1.4 [x] Candidate B: [Name] — pivot to next candidate after A rejected
+      1.4.1 [x] Verify constraint X for Candidate B (Query=1)
+      1.4.2 [x] Verify constraint Y for Candidate B (Query=1)
+      1.4.3 [x] Verify constraint Z for Candidate B — confirmed (Query=1)
+2. [x] Verify remaining constraints on the confirmed candidate
+   2.1 [x] Confirm additional detail (Query=1)
+   2.2 [~] Partial evidence found, sufficient for conclusion (Query=1)
+3. [x] Synthesize findings and produce final answer
+</plan>
+"""
+
 
 # ---------------------------------------------------------------------------
 # Retry / timeout helpers (same pattern as vllm_planner.py)
@@ -430,6 +472,11 @@ def main() -> None:
         help="Max traces per directory (for testing)",
     )
     parser.add_argument(
+        "--plan-format", choices=["v6", "legacy"], default="v6",
+        help="'v6' uses the structured planning_prompt_v6.1 format (Goal/Steps/Type/Depends); "
+             "'legacy' uses the PROMPT_PLANNER checklist format ([ ]/[x] status markers)",
+    )
+    parser.add_argument(
         "--resume", action="store_true",
         help="Skip traces already present in output file",
     )
@@ -441,16 +488,23 @@ def main() -> None:
     # Retry deadline: Portkey/Gemini needs a longer total timeout for gateway calls
     total_deadline = 1800.0 if args.backend == "portkey" else 720.0
 
+    # Select system prompt based on plan format
+    system_prompt = (
+        LEGACY_RETROSPECTIVE_SYSTEM_PROMPT
+        if args.plan_format == "legacy"
+        else RETROSPECTIVE_SYSTEM_PROMPT
+    )
+
     # Build generate function
     if args.backend == "anthropic":
         def generate_fn(messages: List[Dict]) -> str:
             return generate_anthropic(args.model, messages,
-                                      RETROSPECTIVE_SYSTEM_PROMPT, args.max_tokens)
+                                      system_prompt, args.max_tokens)
     elif args.backend == "portkey":
         default_model = "@vertexai-gemini-ec5413/gemini-2.5-pro"
         portkey_model = args.model if args.model != "Qwen/Qwen3.5-122B-A10B" else default_model
         def generate_fn(messages: List[Dict]) -> str:
-            full = [{"role": "system", "content": RETROSPECTIVE_SYSTEM_PROMPT}] + messages
+            full = [{"role": "system", "content": system_prompt}] + messages
             return generate_portkey(portkey_model, full, args.portkey_base_url, args.max_tokens)
     else:
         api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")
@@ -458,7 +512,7 @@ def main() -> None:
                                timeout=600.0)
         # Prepend system message
         def generate_fn(messages: List[Dict]) -> str:
-            full = [{"role": "system", "content": RETROSPECTIVE_SYSTEM_PROMPT}] + messages
+            full = [{"role": "system", "content": system_prompt}] + messages
             return generate_openai(client, args.model, full, args.max_tokens)
 
     # Collect trajectory files

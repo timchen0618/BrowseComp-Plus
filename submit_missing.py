@@ -20,8 +20,7 @@ TEMPLATE_PATH = "run_qwen3_planning.SBATCH"
 
 # Missing shards per leaf folder (from missing_1.txt analysis)
 MISSING = {
-    "gpt-oss-120b_planning_new_prompt_seed0": [2, 7],
-    "tongyi_planning_new_prompt_seed0":       [0, 3],
+    "tongyi_planning_new_prompt_start_ext_seed0": [0, 1, 2, 9],
 }
 
 
@@ -49,8 +48,9 @@ def parse_run_name(name):
         "planning_after_steps_5":          "planning_after_steps_5",
         "planning_start_and_after_steps_5": "planning_start_and_after_steps_5",
         "planning_start_ext":               "planning_start_ext",
+        "planning_new_prompt_start_ext":    "planning_start_ext",
         "planning":                         "planning",
-        "planning_new_prompt":                         "planning",
+        "planning_new_prompt":              "planning",
         "":                                 "org",
     }
     mode = mode_map.get(rest)
