@@ -743,6 +743,57 @@ def run_compute(args: argparse.Namespace) -> None:
         print(f"Leaf subgoal completion rate: {completed_leaves}/{total_leaves} "
               f"({completed_leaves / total_leaves:.1%})")
 
+    # Per depth-1 subgoal position breakdown
+    from collections import defaultdict
+
+    def _sort_key(sid: str) -> List[int]:
+        try:
+            return [int(p) for p in sid.split(".")]
+        except ValueError:
+            return [0]
+
+    depth1_by_pos: Dict[int, List[float]] = defaultdict(list)
+    for r in valid:
+        d1_scores = r.get("depth1_scores") or {}
+        sorted_d1 = sorted(d1_scores.keys(), key=_sort_key)
+        for pos, key in enumerate(sorted_d1):
+            depth1_by_pos[pos].append(d1_scores[key])
+
+    if depth1_by_pos:
+        print()
+        print("Plan-following rate by subgoal position (depth-1):")
+        for pos in sorted(depth1_by_pos.keys()):
+            vals = depth1_by_pos[pos]
+            avg_val = sum(vals) / len(vals)
+            print(f"  Subgoal {pos + 1}: mean={avg_val:.3f} (n={len(vals)})")
+
+    # Leaf completion rate by position quartile
+    quartile_counts = [0, 0, 0, 0]
+    quartile_completed = [0, 0, 0, 0]
+    for r in valid:
+        leaves = r.get("leaf_subgoals", [])
+        if not leaves:
+            continue
+        try:
+            sorted_leaves = sorted(leaves, key=lambda sg: _sort_key(sg.get("subgoal_id", "0")))
+        except Exception:
+            sorted_leaves = leaves
+        n = len(sorted_leaves)
+        for i, sg in enumerate(sorted_leaves):
+            q = min(3, int(i * 4 / n))
+            quartile_counts[q] += 1
+            if sg.get("completed", False) or sg.get("score", 0) > 0.5:
+                quartile_completed[q] += 1
+
+    if any(quartile_counts):
+        print()
+        labels = ["First 25%", "26-50%", "51-75%", "Last 25%"]
+        print("Leaf completion rate by position quartile:")
+        for q in range(4):
+            if quartile_counts[q] > 0:
+                rate = quartile_completed[q] / quartile_counts[q]
+                print(f"  {labels[q]}: {quartile_completed[q]}/{quartile_counts[q]} ({rate:.1%})")
+
     # Avg number of subgoals / leaves
     avg_subgoals = sum(r.get("num_subgoals", 0) for r in valid) / len(valid)
     avg_leaves = sum(r.get("num_leaf_subgoals", 0) for r in valid) / len(valid)

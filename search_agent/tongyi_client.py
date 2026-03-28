@@ -264,6 +264,12 @@ def main():
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
     )
     parser.add_argument(
+        "--plan-reinject-every",
+        type=int,
+        default=0,
+        help="Re-inject the plan as a reminder every N iterations (0 = disabled, e.g. 5 or 10)",
+    )
+    parser.add_argument(
         "--plan-prompt-file",
         type=str,
         default="prompts/planning_prompt_v6.1.md",
@@ -369,6 +375,7 @@ def main():
         query_rewriting_model=args.query_rewriting_model,
         planning_trigger=args.planning_trigger,
         planning_steps=args.planning_steps,
+        plan_reinject_every=getattr(args, 'plan_reinject_every', 0),
         plans_by_id=plans_by_id,
         plan_prompt=plan_prompt_text,
         plan_prompt_mid=plan_prompt_mid_text,

@@ -157,6 +157,7 @@ class MultiTurnReactAgent(FnCallAgent):
                  query_rewriting_model: Optional[str] = None,
                  planning_trigger: Optional[str] = "start",
                  planning_steps: Optional[int] = 5,
+                 plan_reinject_every: Optional[int] = 0,
                  plans_by_id: Optional[dict] = None,
                  plan_prompt: Optional[str] = None,
                  plan_prompt_mid: Optional[str] = None,
@@ -172,6 +173,7 @@ class MultiTurnReactAgent(FnCallAgent):
         self.query_rewriting_model = query_rewriting_model
         self.planning_trigger = planning_trigger if planning else "start"
         self.planning_steps = planning_steps or 5
+        self.plan_reinject_every = plan_reinject_every or 0
         self.plans_by_id = plans_by_id or {}
         if self.planning:
             print(f"Planning mode enabled (trigger={self.planning_trigger}, steps={self.planning_steps})", flush=True)
@@ -317,6 +319,8 @@ Based on the question and conversation history above, output the revised plan wi
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
         mid_planning_done = False
+        last_reinject_at = 0  # iteration count at last plan re-injection
+        injected_plan_text = ""
 
         ## Start Planning (oss_client structure: start, after_steps, start_and_after_steps, start_ext).
         if self.planning:
@@ -325,12 +329,14 @@ Based on the question and conversation history above, output the revised plan wi
                 planner_response = self.call_planner(question, planning_port)
                 plan_messages = _inject_plan_into_messages(planner_response)
                 messages.extend(plan_messages)
-                print("Planning response: ", _parse_plan_from_response(planner_response), flush=True)
+                injected_plan_text = _parse_plan_from_response(planner_response)
+                print("Planning response: ", injected_plan_text, flush=True)
             elif self.planning_trigger == "start_ext":
                 query_id = data.get("query_id", "")
                 plan_output = self.plans_by_id.get(query_id, "")
                 plan_messages = _inject_plan_into_messages(plan_output)
                 messages.extend(plan_messages)
+                injected_plan_text = _parse_plan_from_response(plan_output)
                 print(f"Injected external plan for query_id={query_id}", flush=True)
 
         while num_llm_calls_available > 0:
@@ -434,6 +440,21 @@ Based on the question and conversation history above, output the revised plan wi
                     messages.extend(plan_messages)
                     mid_planning_done = True
                     print("Injected revised plan into messages", flush=True)
+
+                ## Plan re-injection: periodic lightweight reminder.
+                reinject_every = getattr(self, 'plan_reinject_every', 0)
+                if (
+                    reinject_every > 0
+                    and injected_plan_text
+                    and round - last_reinject_at >= reinject_every
+                ):
+                    messages.append({
+                        "role": "user",
+                        "content": f"Reminder — here is the plan you were given at the start. "
+                                   f"Use it to guide your next steps:\n{injected_plan_text}",
+                    })
+                    last_reinject_at = round
+                    print(f"Re-injected plan reminder at iteration {round}", flush=True)
 
             total_tool_call_time += (time.time() - start_tool_call_time)
                 

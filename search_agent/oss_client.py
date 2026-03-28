@@ -166,6 +166,7 @@ def run_conversation_with_tools(
     messages = initial_request["input"]
     iteration = 1
     mid_planning_done = False
+    last_reinject_at = 0  # iteration count at last plan re-injection
 
     while iteration <= max_iterations:
         try:
@@ -267,6 +268,23 @@ def run_conversation_with_tools(
             mid_planning_done = True
             if verbose:
                 print("Injected revised plan into messages")
+
+        # --- Plan re-injection: periodic lightweight reminder ---
+        reinject_every = (planning_config or {}).get("reinject_every", 0)
+        plan_text = (planning_config or {}).get("plan_text", "")
+        if (
+            reinject_every > 0
+            and plan_text
+            and iteration - last_reinject_at >= reinject_every
+        ):
+            new_messages.append({
+                "role": "user",
+                "content": f"Reminder — here is the plan you were given at the start. "
+                           f"Use it to guide your next steps:\n{plan_text}",
+            })
+            last_reinject_at = iteration
+            if verbose:
+                print(f"Re-injected plan reminder at iteration {iteration}")
 
         messages = new_messages
         iteration += 1
@@ -539,6 +557,7 @@ def _persist_response(
     planning_trigger: str | None = None,
     planning_steps: int | None = None,
     planning_file: str | None = None,
+    plan_reinject_every: int = 0,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -647,6 +666,8 @@ def _persist_response(
         metadata["planning_steps"] = planning_steps
     if planning and planning_trigger == "start_ext" and planning_file:
         metadata["planning_file"] = planning_file
+    if plan_reinject_every > 0:
+        metadata["plan_reinject_every"] = plan_reinject_every
 
     normalized_record = {
         "metadata": metadata,
@@ -719,6 +740,7 @@ def _process_tsv_dataset(
         ]
 
         planning_config = None
+        injected_plan_text = ""  # track the plan text for re-injection
         if args.planning:
             if args.planning_trigger in ("start", "start_and_after_steps"):
                 if args.verbose:
@@ -733,12 +755,14 @@ def _process_tsv_dataset(
                 )
                 plan_messages = _inject_plan_into_messages(planner_response)
                 input_messages.extend(plan_messages)
+                injected_plan_text = _parse_plan_from_response(planner_response)
                 if args.verbose:
                     print(f"[{qid}] Injected plan into messages", flush=True)
             elif args.planning_trigger == "start_ext":
                 plan_output = plans_by_id.get(qid, "")
                 plan_messages = _inject_plan_into_messages(plan_output)
                 input_messages.extend(plan_messages)
+                injected_plan_text = _parse_plan_from_response(plan_output)
                 if args.verbose:
                     print(f"[{qid}] Injected external plan into messages", flush=True)
             if args.planning_trigger in ("after_steps", "start_and_after_steps"):
@@ -751,6 +775,12 @@ def _process_tsv_dataset(
                     "plan_mid_system_prompt": args.plan_mid_system_prompt,
                     "verbose": args.verbose,
                 }
+            # Set up re-injection config if enabled
+            if args.plan_reinject_every > 0 and injected_plan_text:
+                if planning_config is None:
+                    planning_config = {}
+                planning_config["reinject_every"] = args.plan_reinject_every
+                planning_config["plan_text"] = injected_plan_text
 
         initial_request = {
             "model": args.model,
@@ -791,6 +821,7 @@ def _process_tsv_dataset(
                     if args.planning_trigger == "start_ext"
                     else None
                 ),
+                plan_reinject_every=args.plan_reinject_every,
             )
 
         except Exception as exc:
@@ -901,6 +932,12 @@ def main():
         type=str,
         default=None,
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
+    )
+    parser.add_argument(
+        "--plan-reinject-every",
+        type=int,
+        default=0,
+        help="Re-inject the plan as a reminder every N iterations (0 = disabled, e.g. 5 or 10)",
     )
     parser.add_argument(
         "--plan-prompt-file",
@@ -1032,6 +1069,7 @@ def main():
     messages = [{"role": "user", "content": args.query}]
 
     planning_config = None
+    injected_plan_text = ""
     if args.planning:
         if args.planning_trigger in ("start", "start_and_after_steps"):
             print("Planning mode (start), calling planner...", flush=True)
@@ -1045,6 +1083,7 @@ def main():
             )
             plan_messages = _inject_plan_into_messages(planner_response)
             messages.extend(plan_messages)
+            injected_plan_text = _parse_plan_from_response(planner_response)
         if args.planning_trigger in ("after_steps", "start_and_after_steps"):
             planning_config = {
                 "trigger": "after_steps",
@@ -1055,6 +1094,11 @@ def main():
                 "plan_mid_system_prompt": args.plan_mid_system_prompt,
                 "verbose": args.verbose,
             }
+        if args.plan_reinject_every > 0 and injected_plan_text:
+            if planning_config is None:
+                planning_config = {}
+            planning_config["reinject_every"] = args.plan_reinject_every
+            planning_config["plan_text"] = injected_plan_text
 
     initial_request = {
         "model": args.model,
@@ -1077,6 +1121,7 @@ def main():
             if args.planning_trigger in ("after_steps", "start_and_after_steps")
             else None
         ),
+        plan_reinject_every=args.plan_reinject_every,
     )
 
     rprint(messages)
