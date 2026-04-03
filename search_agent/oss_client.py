@@ -519,6 +519,76 @@ def _load_and_validate_plans(
     return plan_dict
 
 
+def _load_and_validate_trajectories(
+    trajectory_file: str, query_tuples: list[tuple[str, str]]
+) -> dict[str, dict]:
+    """Load external trajectories from JSONL and validate against query list."""
+    traj_path = Path(trajectory_file)
+    if not traj_path.is_file():
+        raise FileNotFoundError(f"Trajectory file not found: {trajectory_file}")
+
+    traj_dict: dict[str, dict] = {}
+    with traj_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            qid = str(obj.get("query_id", ""))
+            if qid:
+                traj_dict[qid] = obj
+
+    query_ids = {qid for qid, _ in query_tuples}
+
+    if len(traj_dict) != len(query_tuples):
+        raise ValueError(
+            f"Trajectory file has {len(traj_dict)} entries but query file has {len(query_tuples)}; "
+            "lengths must match"
+        )
+    if set(traj_dict.keys()) != query_ids:
+        missing = query_ids - set(traj_dict.keys())
+        extra = set(traj_dict.keys()) - query_ids
+        parts = []
+        if missing:
+            parts.append(f"query IDs missing from trajectory file: {sorted(missing)}")
+        if extra:
+            parts.append(f"trajectory file has extra IDs not in queries: {sorted(extra)}")
+        raise ValueError("Query IDs do not match between trajectory file and query file: " + "; ".join(parts))
+
+    return traj_dict
+
+
+def _format_trajectory_for_prompt(trajectory: dict) -> str:
+    """Serialize a trajectory's result steps into readable text for prompt prepending."""
+    parts = []
+    for step in trajectory.get("result", []):
+        stype = step.get("type")
+        if stype == "reasoning":
+            output = step.get("output", [])
+            text = " ".join(str(o) for o in output) if isinstance(output, list) else str(output)
+            if text.strip():
+                parts.append(f"[Reasoning]: {text.strip()}")
+        elif stype == "tool_call":
+            tool_name = step.get("tool_name", "?")
+            args = step.get("arguments", "{}")
+            try:
+                args_dict = json.loads(args) if isinstance(args, str) else args
+                q = args_dict.get("user_query") or args_dict.get("query") or str(args)[:100]
+            except (json.JSONDecodeError, AttributeError):
+                q = str(args)[:100]
+            parts.append(f"[Tool call] {tool_name}: {q}")
+            output = step.get("output")
+            if output is not None:
+                out_str = json.dumps(output) if not isinstance(output, str) else output
+                parts.append(f"[Tool result]: {out_str[:500]}{'...' if len(out_str) > 500 else ''}")
+        elif stype == "output_text":
+            text = str(step.get("output", "")).strip()
+            if text:
+                parts.append(f"[Final answer]: {text}")
+
+    return "\n\n".join(parts) if parts else "(no trajectory steps)"
+
+
 def _parse_plan_from_response(response: str) -> str:
     """Extract plan content from planner response. Fallback to full response or empty."""
     if "<plan>" in response and "</plan>" in response:
@@ -557,6 +627,7 @@ def _persist_response(
     planning_trigger: str | None = None,
     planning_steps: int | None = None,
     planning_file: str | None = None,
+    trajectory_file: str | None = None,
     plan_reinject_every: int = 0,
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -666,6 +737,8 @@ def _persist_response(
         metadata["planning_steps"] = planning_steps
     if planning and planning_trigger == "start_ext" and planning_file:
         metadata["planning_file"] = planning_file
+    if planning and planning_trigger == "traj_ext" and trajectory_file:
+        metadata["trajectory_file"] = trajectory_file
     if plan_reinject_every > 0:
         metadata["plan_reinject_every"] = plan_reinject_every
 
@@ -728,6 +801,11 @@ def _process_tsv_dataset(
         plans_by_id = _load_and_validate_plans(args.planning_file, queries)
         print(f"Loaded {len(plans_by_id)} plans from {args.planning_file}")
 
+    trajectories_by_id: dict[str, dict] = {}
+    if args.planning and args.planning_trigger == "traj_ext":
+        trajectories_by_id = _load_and_validate_trajectories(args.trajectory_file, queries)
+        print(f"Loaded {len(trajectories_by_id)} trajectories from {args.trajectory_file}")
+
     import threading
 
     completed_lock = threading.Lock()
@@ -765,6 +843,23 @@ def _process_tsv_dataset(
                 injected_plan_text = _parse_plan_from_response(plan_output)
                 if args.verbose:
                     print(f"[{qid}] Injected external plan into messages", flush=True)
+            elif args.planning_trigger == "traj_ext":
+                traj = trajectories_by_id.get(qid, {})
+                traj_text = _format_trajectory_for_prompt(traj)
+                formatted_q = format_query(qtext, args.query_template)
+                input_messages = [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Here is a related research trajectory for context:\n\n"
+                            + traj_text
+                            + "\n\nNow answer the following question:\n\n"
+                            + formatted_q
+                        ),
+                    }
+                ]
+                if args.verbose:
+                    print(f"[{qid}] Prepended external trajectory to prompt", flush=True)
             if args.planning_trigger in ("after_steps", "start_and_after_steps"):
                 planning_config = {
                     "trigger": "after_steps",
@@ -819,6 +914,11 @@ def _process_tsv_dataset(
                 planning_file=(
                     args.planning_file
                     if args.planning_trigger == "start_ext"
+                    else None
+                ),
+                trajectory_file=(
+                    args.trajectory_file
+                    if args.planning_trigger == "traj_ext"
                     else None
                 ),
                 plan_reinject_every=args.plan_reinject_every,
@@ -917,9 +1017,9 @@ def main():
     )
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps", "start_and_after_steps", "start_ext"],
+        choices=["start", "after_steps", "start_and_after_steps", "start_ext", "traj_ext"],
         default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), or start_ext (load from file)",
+        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), start_ext (load plan from file), or traj_ext (prepend external trajectory to prompt)",
     )
     parser.add_argument(
         "--planning-steps",
@@ -932,6 +1032,12 @@ def main():
         type=str,
         default=None,
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
+    )
+    parser.add_argument(
+        "--trajectory-file",
+        type=str,
+        default=None,
+        help="JSONL file with external trajectories to prepend to the prompt (required when --planning-trigger=traj_ext)",
     )
     parser.add_argument(
         "--plan-reinject-every",
@@ -992,6 +1098,11 @@ def main():
     if args.planning and args.planning_trigger == "start_ext":
         if args.planning_file is None:
             print("Error: start_ext requires --planning-file", file=sys.stderr)
+            sys.exit(1)
+
+    if args.planning and args.planning_trigger == "traj_ext":
+        if args.trajectory_file is None:
+            print("Error: traj_ext requires --trajectory-file", file=sys.stderr)
             sys.exit(1)
 
     if args.planning_model is None:
@@ -1055,9 +1166,9 @@ def main():
             except OSError:
                 pass
 
-        if args.planning and args.planning_trigger == "start_ext":
+        if args.planning and args.planning_trigger in ("start_ext", "traj_ext"):
             print(
-                "Error: start_ext requires a TSV query file; use --query path/to/queries.tsv",
+                f"Error: {args.planning_trigger} requires a TSV query file; use --query path/to/queries.tsv",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1120,6 +1231,11 @@ def main():
         planning_steps=(
             args.planning_steps
             if args.planning_trigger in ("after_steps", "start_and_after_steps")
+            else None
+        ),
+        trajectory_file=(
+            args.trajectory_file
+            if args.planning_trigger == "traj_ext"
             else None
         ),
         plan_reinject_every=args.plan_reinject_every,
