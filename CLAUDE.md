@@ -16,10 +16,12 @@ BrowseComp-Plus/
 ├── src_utils/              # Data loading, filtering, and preprocessing utilities
 ├── scripts_evaluation/     # Evaluation pipeline (grading, metrics, dedup)
 ├── scripts_build_index/    # Index construction scripts
-├── data/                   # Queries, ground truth, and decrypted run files
-│   └── decrypted_run_files/{retriever}/{model}/  # Agent trajectories
+├── data/                   # Ground truth and decrypted run files
+│   ├── browsecomp_plus_decrypted.jsonl            # BCP ground truth (answers + gold docs)
+│   └── decrypted_run_files/{retriever}/{model}/   # Agent trajectories
 ├── indexes/                # Prebuilt BM25 and FAISS indexes
-├── runs/                   # Output trajectories from agent experiments
+├── runs/                   # All agent trajectories: runs/{dataset}/{retriever}/{split}/{run_name}/
+├── evals/                  # All evaluation results: evals/{dataset}/{retriever}/{split}/{run_name}/
 ├── docs/                   # Integration guides per provider
 ├── parametric/             # Parametric experiment configs
 ├── qampari_experiments/    # QAMPARI benchmark scripts
@@ -59,11 +61,41 @@ BaseSearcher.get_document(docid) → {"docid", "text"}
 
 ### Output Directory Convention
 
+All runs live under `runs/`, organized as `runs/{dataset}/{retriever}/{split}/{agent_model}/`:
+
+| Dataset folder | Benchmark |
+|----------------|-----------|
+| `bcp/` | BrowseComp-Plus |
+| `frames/` | FRAMES benchmark |
+
+| Split folder | Queries |
+|--------------|---------|
+| `full/` | All queries |
+| `first_50/` | First 50 queries |
+| `first_100/` | First 100 queries |
+
+| Agent model folder | Examples |
+|--------------------|---------|
+| `tongyi/` | Tongyi-DeepResearch |
+| `gpt-oss-120b/` | GPT-4 OSS 120B |
+| (other model names) | Named by model/run identifier |
+
 ```
 runs/
-└── {retriever}/        # e.g., bm25, qwen3-embed-8b
-    └── {model}/        # e.g., gpt4, claude, o3
-        └── {query_id}.json
+└── {dataset}/              # e.g., bcp, frames
+    └── {retriever}/        # e.g., Qwen3-Embedding-8B
+        └── {split}/        # e.g., full, first_50, first_100
+            └── {agent_model}/  # e.g., tongyi, gpt-oss-120b
+                └── {run_name}/ # e.g., planning_v8_prompt_seed0
+                    └── {query_id}.json
+
+evals/
+└── {dataset}/              # e.g., bcp, frames
+    └── {retriever}/        # e.g., Qwen3-Embedding-8B
+        └── {split}/        # e.g., full, first_50, first_100
+            └── {agent_model}/  # mirrors runs/ structure
+                └── {run_name}/
+                    └── eval results
 ```
 
 ---
@@ -134,14 +166,49 @@ runs/
 }
 ```
 
-### Ground Truth (data/dev_data_gt_quest.jsonl)
+### Queries (topics-qrels/)
+
+Queries are stored as TSV files (`{query_id}\t{query_text}`):
+
+```
+topics-qrels/
+├── bcp/
+│   ├── queries.tsv               # Full query set
+│   ├── queries_first10.tsv
+│   ├── queries_first50.tsv
+│   ├── queries_first100.tsv
+│   ├── queries_last730.tsv
+│   ├── qrel_golds.txt            # Gold relevance judgments (TREC format)
+│   ├── qrel_evidence.txt         # Evidence relevance judgments (TREC format)
+│   └── bcp_10_shards/q_{0-9}.tsv
+├── frames/
+│   ├── queries.tsv               # Full query set
+│   ├── queries_first50.tsv
+│   └── frames_10_shards/q_{0-9}.tsv
+├── fanoutqa/
+├── musique/
+├── nq/
+├── qampari/
+├── quest/
+└── webqsp/
+```
+
+### Ground Truth (data/)
+
+```
+data/
+├── browsecomp_plus_decrypted.jsonl  # BCP ground truth (answers + gold docs)
+└── frames_ground_truth.jsonl        # FRAMES ground truth (answers + wiki links)
+```
 
 ```json
 {
   "query_id": "Q001",
   "query": "...",
   "answer": "...",
-  "gold_docs": [{"docid": "...", "text": "...", "score": 1.0}]
+  "gold_docs": [...],
+  "negative_docs": [...],
+  "evidence_docs": [...]
 }
 ```
 
@@ -159,14 +226,15 @@ python searcher/mcp_server.py --searcher-type bm25 --index-path indexes/bm25 --p
 export OPENAI_API_KEY="sk-..."
 python search_agent/openai_client.py \
   --model gpt-4 \
-  --output-dir runs/bm25/gpt4 \
+  --output-dir runs/bcp/bm25/full/gpt4 \
   --searcher-type bm25 \
   --index-path indexes/bm25 \
   --num-threads 10
 
 # 3. Evaluate
 python scripts_evaluation/evaluate_run.py \
-  --input_dir runs/bm25/gpt4 \
+  --input_dir runs/bcp/bm25/full/gpt4 \
+  --output_dir evals/bcp/bm25/full/gpt4 \
   --tensor_parallel_size 1
 ```
 
@@ -181,7 +249,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 python search_agent/anthropic_client.py \
   --model claude-opus-4-20250514 \
   --mcp-url https://xxxx.ngrok-free.app/mcp \
-  --output-dir runs/bm25/claude
+  --output-dir runs/bcp/bm25/full/claude
 ```
 
 ### Implement a Custom Retriever
@@ -209,10 +277,10 @@ Typical resources: 2× A100 GPU, 10 CPU, 300 GB RAM, 12–48 h.
 
 ```bash
 # String-based (fast)
-python compute_repeats.py --input-dir runs/bm25/gpt4
+python compute_repeats.py --input-dir runs/bcp/bm25/full/gpt4
 
 # LLM-based (semantic, requires vLLM with Qwen3-30B)
-python compute_repeats_vllm.py --input-dir runs/bm25/gpt4
+python compute_repeats_vllm.py --input-dir runs/bcp/bm25/full/gpt4
 ```
 
 ### Browse Traces (Streamlit UI)

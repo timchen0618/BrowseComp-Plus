@@ -533,16 +533,11 @@ def main() -> None:
 
     # Resume support
     completed = load_completed_ids(args.output_file) if args.resume else set()
-    remaining = [
-        p for p in all_files
-        if not args.resume or (str(json.loads(p.read_text()).get("query_id", "")), p.name) not in completed
-    ] if not args.resume else [
-        p for p in all_files
-        if True  # simplified: load once below
-    ]
-    if args.resume:
-        remaining = []
-        for p in all_files:
+    remaining = []
+    for p in all_files:
+        if not args.resume:
+            remaining.append(p)
+        else:
             try:
                 qid = str(json.loads(p.read_text(encoding="utf-8")).get("query_id", ""))
             except Exception:
