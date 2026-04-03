@@ -17,10 +17,59 @@ import tempfile
 import os
 
 TEMPLATE_PATH = "run_qwen3_planning.SBATCH"
+TEMPLATE_PATH_FIRST50 = "run_qwen3_first50.SBATCH"
 
-# Missing shards per leaf folder (from missing_1.txt analysis)
-MISSING = {
-    "tongyi_planning_new_prompt_start_ext_seed0": [0, 1, 2, 9],
+# Missing shards per leaf folder for full split (from missing_1.txt analysis)
+MISSING = {}
+
+# Missing runs for first50 split (no shards — each entry is a full re-run).
+# Value is None to auto-parse model/mode/seed from the run name,
+# or an explicit (model, mode, seed) tuple for names that can't be parsed.
+MISSING_FIRST50 = {
+    # "tongyi_planning_v1_start_ext_seed0": None,
+    # "tongyi_planning_v1_start_ext_reinject_every_5_seed0":   None,
+    # "tongyi_planning_v2_seed0":                              None,
+    # "tongyi_planning_v2_start_ext_seed0":                    None,
+    # "tongyi_planning_v2_start_ext_reinject_every_5_seed0":   None,
+    # "tongyi_planning_v0.5_reinject_every_5_seed0":           None,
+    # "tongyi_planning_v0.5_start_ext_seed0":                  None,
+    # "tongyi_planning_v0.5_start_ext_reinject_every_5_seed0": None,
+    # "tongyi_planning_v3_reinject_every_5_seed0":             None,
+    # "tongyi_planning_v3_start_ext_seed0":                    None,
+    # "tongyi_planning_v3_start_ext_reinject_every_5_seed0":   None,
+    # "tongyi_planning_v4_seed0":                              None,
+    # "tongyi_planning_v4_reinject_every_5_seed0":             None,
+    # "tongyi_planning_retrospective_seed0":                   None,
+    # "tongyi_planning_retrospective_reinject_every_5_seed0":  None,
+}
+
+# Missing runs for frames/first50 split — gpt-oss-120b model.
+# Saves to runs/frames/Qwen3-Embedding-0.6B/first50/gpt-oss-120b/
+MISSING_FRAMES_FIRST50 = {
+    # "gpt-oss-120b_planning_v0.5_start_ext_seed0":                 None,
+    # "gpt-oss-120b_planning_v0.5_start_ext_reinject_every_5_seed0": None,
+    # "gpt-oss-120b_planning_v1_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v1_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v2_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v2_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v3_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v3_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v4_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v4_start_ext_reinject_every_5_seed0":  None,
+}
+
+MISSING_MUSIQUE_FIRST50 = {
+    "gpt-oss-120b_seed0":                 None,
+    "gpt-oss-120b_planning_v0.5_seed0":                 None,
+    "gpt-oss-120b_planning_v0.5_reinject_every_5_seed0": None,
+    "gpt-oss-120b_planning_v1_seed0":                   None,
+    "gpt-oss-120b_planning_v1_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v2_seed0":                   None,
+    "gpt-oss-120b_planning_v2_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v3_seed0":                   None,
+    "gpt-oss-120b_planning_v3_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v4_seed0":                   None,
+    "gpt-oss-120b_planning_v4_reinject_every_5_seed0":  None,
 }
 
 
@@ -38,34 +87,29 @@ def parse_run_name(name):
 
     # Extract seed (always at end; may be "_seedN" or just "seedN" when mode is org)
     seed_match = re.search(r"_?seed(\d+)$", rest)
-    if not seed_match:
-        raise ValueError(f"No seed found in: {name}")
-    seed = int(seed_match.group(1))
-    rest = rest[:seed_match.start()]
+    if seed_match:
+        seed = int(seed_match.group(1))
+        rest = rest[:seed_match.start()]
+    else:
+        seed = 0  # no seed suffix — default to 0
 
-    # Map remainder to mode
-    mode_map = {
-        "planning_after_steps_5":          "planning_after_steps_5",
-        "planning_start_and_after_steps_5": "planning_start_and_after_steps_5",
-        "planning_start_ext":               "planning_start_ext",
-        "planning_new_prompt_start_ext":    "planning_start_ext",
-        "planning":                         "planning",
-        "planning_new_prompt":              "planning",
-        "":                                 "org",
+    # Aliases only — everything else passes through as-is
+    aliases = {
+        "":                    "org",
     }
-    mode = mode_map.get(rest)
-    if mode is None:
-        raise ValueError(f"Unknown mode fragment '{rest}' in: {name}")
+    mode = aliases.get(rest, rest)
 
     return model, mode, seed
 
 
-def patch_sbatch(template: str, run_name: str, model: str, mode: str, seed: int, shards: list) -> str:
-    array_str = ",".join(str(s) for s in sorted(shards))
+def patch_sbatch(template: str, run_name: str, model: str, mode: str, seed: int,
+                 shards: list = None, dataset: str = "bcp") -> str:
     content = template
 
     # Patch SLURM directives
-    content = re.sub(r"#SBATCH --array=.*",      f"#SBATCH --array={array_str}", content)
+    if shards is not None:
+        array_str = ",".join(str(s) for s in sorted(shards))
+        content = re.sub(r"#SBATCH --array=.*", f"#SBATCH --array={array_str}", content)
     content = re.sub(r"#SBATCH --job-name=.*",   f"#SBATCH --job-name={run_name}_missing", content)
     content = re.sub(r"#SBATCH --output=.*",     f"#SBATCH --output=sbatch_outputs/{run_name}_missing.out", content)
 
@@ -73,6 +117,7 @@ def patch_sbatch(template: str, run_name: str, model: str, mode: str, seed: int,
     content = re.sub(r'^MODEL_NAME=".*?"', f'MODEL_NAME="{model}"', content, flags=re.MULTILINE)
     content = re.sub(r'^mode=".*?"',       f'mode="{mode}"',        content, flags=re.MULTILINE)
     content = re.sub(r'^seed=\d+',         f'seed={seed}',          content, flags=re.MULTILINE)
+    content = re.sub(r'^dataset=".*?"',    f'dataset="{dataset}"',  content, flags=re.MULTILINE)
 
     return content
 
@@ -83,19 +128,28 @@ def main():
     args = parser.parse_args()
 
     with open(TEMPLATE_PATH) as f:
-        template = f.read()
+        template_full = f.read()
+    with open(TEMPLATE_PATH_FIRST50) as f:
+        template_first50 = f.read()
 
     os.makedirs("sbatch_outputs", exist_ok=True)
 
-    for run_name, shards in MISSING.items():
-        model, mode, seed = parse_run_name(run_name)
-        content = patch_sbatch(template, run_name, model, mode, seed, shards)
+    jobs = (
+        [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
+        [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
+        [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
+        [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()]
+    )
 
-        array_str = ",".join(str(s) for s in sorted(shards))
+    for run_name, shards, template, split, dataset in jobs:
+        model, mode, seed = parse_run_name(run_name)
+        content = patch_sbatch(template, run_name, model, mode, seed, shards, dataset=dataset)
+
         print(f"\n{'='*60}")
         print(f"Run:    {run_name}")
-        print(f"Model:  {model} | Mode: {mode} | Seed: {seed}")
-        print(f"Shards: {array_str}")
+        print(f"Split:  {split} | Model: {model} | Mode: {mode} | Seed: {seed}")
+        if shards is not None:
+            print(f"Shards: {','.join(str(s) for s in sorted(shards))}")
 
         if args.submit:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".SBATCH", delete=False) as tmp:

@@ -413,7 +413,7 @@ def main():
     )
     parser.add_argument(
         "--qrel_evidence",
-        default="topics-qrels/qrel_evidence.txt",
+        default="topics-qrels/bcp/qrel_evidence.txt",
         help="Path to qrel positives file",
     )
     parser.add_argument(

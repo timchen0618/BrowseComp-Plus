@@ -272,13 +272,13 @@ def main():
     parser.add_argument(
         "--plan-prompt-file",
         type=str,
-        default="prompts/planning_prompt_v6.1.md",
+        default="prompts/planning_prompt_v2.md",
         help="Path to initial planner system prompt (relative to repo root if not absolute)",
     )
     parser.add_argument(
         "--plan-prompt-mid-file",
         type=str,
-        default="prompts/planning_prompt_v6.1_context.md",
+        default="prompts/planning_prompt_v2_context.md",
         help="Path to mid-conversation planner system prompt (relative to repo root if not absolute)",
     )
     parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
