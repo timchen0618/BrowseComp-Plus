@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import format_query
+from prompts import format_query, format_query_with_trajectory, format_query_for_planning
 from rich import print as rprint
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -520,29 +520,29 @@ def _load_and_validate_plans(
 
 
 def _load_and_validate_trajectories(
-    trajectory_file: str, query_tuples: list[tuple[str, str]]
+    trajectory_dir: str, query_tuples: list[tuple[str, str]]
 ) -> dict[str, dict]:
-    """Load external trajectories from JSONL and validate against query list."""
-    traj_path = Path(trajectory_file)
-    if not traj_path.is_file():
-        raise FileNotFoundError(f"Trajectory file not found: {trajectory_file}")
+    """Load external trajectories from a directory of JSON files and validate against query list."""
+    traj_path = Path(trajectory_dir)
+    if not traj_path.is_dir():
+        raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
 
     traj_dict: dict[str, dict] = {}
-    with traj_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
+    for json_file in sorted(traj_path.glob("*.json")):
+        try:
+            with json_file.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
             qid = str(obj.get("query_id", ""))
             if qid:
                 traj_dict[qid] = obj
+        except Exception:
+            continue
 
     query_ids = {qid for qid, _ in query_tuples}
 
     if len(traj_dict) != len(query_tuples):
         raise ValueError(
-            f"Trajectory file has {len(traj_dict)} entries but query file has {len(query_tuples)}; "
+            f"Trajectory directory has {len(traj_dict)} entries but query file has {len(query_tuples)}; "
             "lengths must match"
         )
     if set(traj_dict.keys()) != query_ids:
@@ -550,10 +550,10 @@ def _load_and_validate_trajectories(
         extra = set(traj_dict.keys()) - query_ids
         parts = []
         if missing:
-            parts.append(f"query IDs missing from trajectory file: {sorted(missing)}")
+            parts.append(f"query IDs missing from trajectory directory: {sorted(missing)}")
         if extra:
-            parts.append(f"trajectory file has extra IDs not in queries: {sorted(extra)}")
-        raise ValueError("Query IDs do not match between trajectory file and query file: " + "; ".join(parts))
+            parts.append(f"trajectory directory has extra IDs not in queries: {sorted(extra)}")
+        raise ValueError("Query IDs do not match between trajectory directory and query file: " + "; ".join(parts))
 
     return traj_dict
 
@@ -627,7 +627,7 @@ def _persist_response(
     planning_trigger: str | None = None,
     planning_steps: int | None = None,
     planning_file: str | None = None,
-    trajectory_file: str | None = None,
+    trajectory_dir: str | None = None,
     plan_reinject_every: int = 0,
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -737,8 +737,8 @@ def _persist_response(
         metadata["planning_steps"] = planning_steps
     if planning and planning_trigger == "start_ext" and planning_file:
         metadata["planning_file"] = planning_file
-    if planning and planning_trigger == "traj_ext" and trajectory_file:
-        metadata["trajectory_file"] = trajectory_file
+    if planning and planning_trigger == "traj_ext" and trajectory_dir:
+        metadata["trajectory_dir"] = trajectory_dir
     if plan_reinject_every > 0:
         metadata["plan_reinject_every"] = plan_reinject_every
 
@@ -803,8 +803,8 @@ def _process_tsv_dataset(
 
     trajectories_by_id: dict[str, dict] = {}
     if args.planning and args.planning_trigger == "traj_ext":
-        trajectories_by_id = _load_and_validate_trajectories(args.trajectory_file, queries)
-        print(f"Loaded {len(trajectories_by_id)} trajectories from {args.trajectory_file}")
+        trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
+        print(f"Loaded {len(trajectories_by_id)} trajectories from {args.trajectory_dir}")
 
     import threading
 
@@ -812,10 +812,23 @@ def _process_tsv_dataset(
     completed_count = [0]
 
     def _handle_single_query(qid: str, qtext: str, pbar=None):
+        print('-------------Handling single query-------------------')
         """Build request, send and persist response for one query."""
-        input_messages = [
-            {"role": "user", "content": format_query(qtext, args.query_template)}
-        ]
+        if args.planning and args.planning_trigger == "traj_ext":
+            traj = trajectories_by_id.get(qid, {})
+            traj_text = _format_trajectory_for_prompt(traj)
+            input_messages = [
+                {
+                    "role": "user",
+                    "content": format_query_with_trajectory(qtext, traj_text, args.query_template)
+                }
+            ]
+            if args.verbose:
+                print(f"[{qid}] Prepended external trajectory to prompt", flush=True)
+        else:
+            input_messages = [
+                {"role": "user", "content": format_query(qtext, args.query_template)}
+            ]
 
         planning_config = None
         injected_plan_text = ""  # track the plan text for re-injection
@@ -843,23 +856,7 @@ def _process_tsv_dataset(
                 injected_plan_text = _parse_plan_from_response(plan_output)
                 if args.verbose:
                     print(f"[{qid}] Injected external plan into messages", flush=True)
-            elif args.planning_trigger == "traj_ext":
-                traj = trajectories_by_id.get(qid, {})
-                traj_text = _format_trajectory_for_prompt(traj)
-                formatted_q = format_query(qtext, args.query_template)
-                input_messages = [
-                    {
-                        "role": "user",
-                        "content": (
-                            "Here is a related research trajectory for context:\n\n"
-                            + traj_text
-                            + "\n\nNow answer the following question:\n\n"
-                            + formatted_q
-                        ),
-                    }
-                ]
-                if args.verbose:
-                    print(f"[{qid}] Prepended external trajectory to prompt", flush=True)
+            
             if args.planning_trigger in ("after_steps", "start_and_after_steps"):
                 planning_config = {
                     "trigger": "after_steps",
@@ -877,6 +874,9 @@ def _process_tsv_dataset(
                 planning_config["reinject_every"] = args.plan_reinject_every
                 planning_config["plan_text"] = injected_plan_text
 
+
+        print('-------------Getting initial request-------------------')
+        print("input_messages", input_messages)
         initial_request = {
             "model": args.model,
             "max_output_tokens": args.max_tokens,
@@ -916,8 +916,8 @@ def _process_tsv_dataset(
                     if args.planning_trigger == "start_ext"
                     else None
                 ),
-                trajectory_file=(
-                    args.trajectory_file
+                trajectory_dir=(
+                    args.trajectory_dir
                     if args.planning_trigger == "traj_ext"
                     else None
                 ),
@@ -975,6 +975,8 @@ def main():
             "QUERY_TEMPLATE",
             "QUERY_TEMPLATE_NO_GET_DOCUMENT",
             "QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION",
+            "QUERY_TEMPLATE_FOR_PLANNING",
+            "QUERY_TEMPLATE_GIVEN_TRAJECTORY",
         ],
         default="QUERY_TEMPLATE_NO_GET_DOCUMENT",
         help="Specify the query template to use (default: %(default)s)",
@@ -1034,10 +1036,10 @@ def main():
         help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
     )
     parser.add_argument(
-        "--trajectory-file",
+        "--trajectory-dir",
         type=str,
         default=None,
-        help="JSONL file with external trajectories to prepend to the prompt (required when --planning-trigger=traj_ext)",
+        help="Directory of JSON trajectory files to prepend to the prompt (required when --planning-trigger=traj_ext)",
     )
     parser.add_argument(
         "--plan-reinject-every",
@@ -1101,8 +1103,15 @@ def main():
             sys.exit(1)
 
     if args.planning and args.planning_trigger == "traj_ext":
-        if args.trajectory_file is None:
+        if args.trajectory_dir is None:
             print("Error: traj_ext requires --trajectory-file", file=sys.stderr)
+            sys.exit(1)
+        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJECTORY"):
+            print(
+                f"Error: traj_ext requires --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY "
+                f"(got {args.query_template!r})",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     if args.planning_model is None:
@@ -1206,6 +1215,11 @@ def main():
                 "plan_mid_system_prompt": args.plan_mid_system_prompt,
                 "verbose": args.verbose,
             }
+        if args.planning_trigger == "traj_ext":
+            messages= [{
+                "role": "user",
+                "content": format_query_for_planning(raw_question, injected_plan_text, args.query_template)
+            }]
         if args.plan_reinject_every > 0 and injected_plan_text:
             if planning_config is None:
                 planning_config = {}
@@ -1233,8 +1247,8 @@ def main():
             if args.planning_trigger in ("after_steps", "start_and_after_steps")
             else None
         ),
-        trajectory_file=(
-            args.trajectory_file
+        trajectory_dir=(
+            args.trajectory_dir
             if args.planning_trigger == "traj_ext"
             else None
         ),

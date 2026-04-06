@@ -117,6 +117,44 @@ tool_response here
 
 User: """
 
+########################################################
+# System / User prompts added for planning
+########################################################
+
+QUERY_TEMPLATE_FOR_PLANNING = """
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times.
+
+You are also given a high-level plan for the question. You need to follow the plan step by step, and use the search tool to answer the question. The plan is enclosed within <plan></plan> tags.
+
+Question: {Question}
+
+Your response should be in the following format:
+Explanation: {{your explanation for your final answer. For this explanation section only, you should cite your evidence documents inline by enclosing their docids in square brackets [] at the end of sentences. For example, [20].}}
+Exact Answer: {{your succinct, final answer}}
+Confidence: {{your confidence score between 0% and 100% for your answer}}
+""".strip()
+
+QUERY_TEMPLATE_GIVEN_TRAJECTORY = """
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times.
+
+You are also given a previous trajectory of the agent's search and tool calls for the question, and the outputs of the tool calls. The trajectory is enclosed within <trajectory></trajectory> tags. Use the information in the trajectory to search more efficiently.
+
+Question: {Question}
+
+Your response should be in the following format:
+Explanation: {{your explanation for your final answer. For this explanation section only, you should cite your evidence documents inline by enclosing their docids in square brackets [] at the end of sentences. For example, [20].}}
+Exact Answer: {{your succinct, final answer}}
+Confidence: {{your confidence score between 0% and 100% for your answer}}
+
+<trajectory>
+{trajectory}
+</trajectory>
+""".strip()
+
+########################################################
+# Prompts for planning
+########################################################
+
 PROMPT_PLANNER = """
 You are a planner for a deep research agent to solve a complex information seeking question. Given the user question, your task is to plan a sequence of actions to answer the user's question.
 Do NOT use the search tool in your planning. Do NOT hallucinate search results in your planning.
@@ -176,5 +214,25 @@ def format_query(query: str, query_template: str | None = None) -> str:
         return QUERY_TEMPLATE_NO_GET_DOCUMENT.format(Question=query)
     elif query_template == "QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION":
         return QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION.format(Question=query)
+    else:
+        raise ValueError(f"Unknown query template: {query_template}")
+      
+      
+def format_query_with_trajectory(query: str, trajectory: str, query_template: str | None = None) -> str:
+    """Format the query with the specified template if provided."""
+    if query_template is None:
+        return QUERY_TEMPLATE_GIVEN_TRAJECTORY.format(Question=query, trajectory=trajectory)
+    elif query_template == "QUERY_TEMPLATE_GIVEN_TRAJECTORY":
+        return QUERY_TEMPLATE_GIVEN_TRAJECTORY.format(Question=query, trajectory=trajectory)
+    else:
+        raise ValueError(f"Unknown query template: {query_template}")
+
+
+def format_query_for_planning(query: str, plan: str, query_template: str | None = None) -> str:
+    """Format the query with the specified template if provided."""
+    if query_template is None:
+        return QUERY_TEMPLATE_FOR_PLANNING.format(Question=query, plan=plan)
+    elif query_template == "QUERY_TEMPLATE_FOR_PLANNING":
+        return QUERY_TEMPLATE_FOR_PLANNING.format(Question=query, plan=plan)
     else:
         raise ValueError(f"Unknown query template: {query_template}")

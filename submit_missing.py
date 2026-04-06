@@ -59,17 +59,16 @@ MISSING_FRAMES_FIRST50 = {
 }
 
 MISSING_MUSIQUE_FIRST50 = {
-    "gpt-oss-120b_seed0":                 None,
-    "gpt-oss-120b_planning_v0.5_seed0":                 None,
-    "gpt-oss-120b_planning_v0.5_reinject_every_5_seed0": None,
-    "gpt-oss-120b_planning_v1_seed0":                   None,
-    "gpt-oss-120b_planning_v1_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v2_seed0":                   None,
-    "gpt-oss-120b_planning_v2_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v3_seed0":                   None,
-    "gpt-oss-120b_planning_v3_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v4_seed0":                   None,
-    "gpt-oss-120b_planning_v4_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v0.5_start_ext_seed0":                 None,
+    "gpt-oss-120b_planning_v0.5_start_ext_reinject_every_5_seed0": None,
+    "gpt-oss-120b_planning_v1_start_ext_seed0":                   None,
+    "gpt-oss-120b_planning_v1_start_ext_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v2_start_ext_seed0":                   None,
+    "gpt-oss-120b_planning_v2_start_ext_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v3_start_ext_seed0":                   None,
+    "gpt-oss-120b_planning_v3_start_ext_reinject_every_5_seed0":  None,
+    "gpt-oss-120b_planning_v4_start_ext_seed0":                   None,
+    "gpt-oss-120b_planning_v4_start_ext_reinject_every_5_seed0":  None,
 }
 
 
