@@ -20,14 +20,8 @@ Think step by step about the strengths and weaknesses of the plan along each dim
   4 = Good — well-structured with minor issues
   5 = Excellent — comprehensive, efficient, and robust
 
-The output should be a JSON object with the following schema:
-Output format:
-```
-{
-    "thinking": [step-by-step thinking and rationale for giving the score],
-    "score": [integer score from 1 to 5]
-}
-```
+First, think step by step about the strengths and weaknesses. Then, output your integer score wrapped in score tags, like this:
+<score>3</score>
 <end_system_prompt>
 <start_user_prompt>
 Question:

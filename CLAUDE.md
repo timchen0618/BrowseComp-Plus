@@ -6,6 +6,13 @@
 
 ---
 
+## General Rules
+
+- Before editing files, confirm which files are in scope. Never edit files the user hasn't mentioned or has explicitly excluded (e.g., model.py, finetuning.py).
+- Prefer reusing existing functions and modifying existing files over creating new ones, unless explicitly asked to create something new.
+
+---
+
 ## Repository Structure
 
 ```
@@ -35,6 +42,24 @@ BrowseComp-Plus/
 ├── write_sbatch.py         # Generate SLURM SBATCH scripts from templates
 └── pyproject.toml          # Minimal project config (only tqdm required)
 ```
+
+---
+
+## File Operations
+
+- When reorganizing or renaming directories, always ask the user for the explicit naming convention and full path structure (including all subdirectory levels like {run_name}) before executing bulk operations.
+
+---
+
+## Project Structure
+
+- When working with this project's eval results, the directory structure is: `evals/{dataset}/{retriever}/{split}/{run_name}/`. Always verify the correct directory path with the user before scanning for results.
+
+---
+
+## Data Analysis
+
+- When the user asks for analysis or summaries, do not include categories or data the user explicitly asked to exclude. Ask for clarification rather than guessing what to include.
 
 ---
 

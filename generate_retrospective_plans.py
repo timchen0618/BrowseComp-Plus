@@ -420,6 +420,7 @@ def load_completed_ids(output_file: Path) -> set:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # python generate_retrospective_plans.py --input-dirs runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b --output-file retrospective_plans/gpt-oss-120b_seed0_gemini_legacy.jsonl --model-url http://127.0.0.1:8000/v1 --backend portkey  --model "@vertexai-gemini-ec5413/gemini-2.5-pro"  --num-threads 4  --plan-format legacy  --resume
     parser = argparse.ArgumentParser(
         description="Generate retrospective plans from agent trajectories.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

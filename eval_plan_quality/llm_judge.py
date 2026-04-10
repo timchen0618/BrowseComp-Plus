@@ -38,6 +38,7 @@ T = TypeVar("T")
 DEFAULT_PROMPT_TEMPLATE = "eval_plan_quality/prompts/pointwise_prompt.txt"
 DEFAULT_MODEL_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_MODEL = "Qwen/Qwen3-32B"
+DEFAULT_MAX_TOKENS = 8192
 
 
 def log(msg: str) -> None:
@@ -166,7 +167,17 @@ def load_prompt_template(path: Path) -> PromptTemplate:
     return PromptTemplate(system=system_text, user=user_text)
 
 
+def _is_valid_judge_output(judge_output: str) -> bool:
+    """Return True if a score can be extracted from the judge output."""
+    return extract_score(judge_output) is not None
+
+
 def load_completed_ids(path: Path) -> set:
+    """Load query_ids that have *valid* judge outputs (parseable JSON with a score).
+
+    Records with empty or truncated judge_output are excluded so they get
+    retried on the next run.
+    """
     ids: set = set()
     if not path.exists():
         return ids
@@ -178,7 +189,7 @@ def load_completed_ids(path: Path) -> set:
             try:
                 obj = json.loads(line)
                 qid = obj.get("query_id")
-                if qid is not None:
+                if qid is not None and _is_valid_judge_output(obj.get("judge_output", "")):
                     ids.add(str(qid))
             except json.JSONDecodeError:
                 continue
@@ -197,7 +208,7 @@ class VLLMJudge:
         api_key: str = "EMPTY",
         temperature: float = 0.7,
         top_p: float = 0.95,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         max_retries: int = 3,
     ):
         self.model = model
@@ -212,31 +223,12 @@ class VLLMJudge:
             timeout=600.0,
         )
 
-    JUDGE_SCHEMA = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "plan_score",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "thinking": {
-                        "type": "string",
-                        "description": "Step-by-step reasoning about the strengths and weaknesses of the plan.",
-                    },
-                    "score": {
-                        "type": "integer",
-                        "description": "Quality score from 1 to 5.",
-                    },
-                },
-                "required": ["thinking", "score"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
     def _judge_single(self, messages: List[Dict[str, str]]) -> str:
-        """Send one judgment request with retries."""
+        """Send one judgment request with retries.
+
+        Raises on truncated output (finish_reason='length') so the retry
+        logic can re-attempt with a fresh request.
+        """
 
         def _call() -> str:
             resp = self.client.chat.completions.create(
@@ -245,9 +237,15 @@ class VLLMJudge:
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=self.max_tokens,
-                response_format=self.JUDGE_SCHEMA,
             )
-            return resp.choices[0].message.content or ""
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            if choice.finish_reason == "length":
+                raise RuntimeError(
+                    f"response truncated (finish_reason='length', "
+                    f"got {len(content)} chars). Increase --max-tokens."
+                )
+            return content
 
         return _retry_with_deadline(_call, max_retries=self.max_retries)
 
@@ -270,8 +268,8 @@ class VLLMJudge:
             try:
                 judge_output = self._judge_single(item["messages"])
             except Exception as e:
-                log(f"[{qid}] judge failed: {e!r}")
-                judge_output = ""
+                log(f"[{qid}] judge failed after retries: {e!r} — skipping (will retry on next run)")
+                return
 
             result = {
                 "query_id": qid,
@@ -305,13 +303,24 @@ class VLLMJudge:
 def extract_score(judge_output: str) -> Optional[int]:
     """Extract the integer score from a judge output string.
 
-    Supports two formats:
-      1. JSON with a "score" field (structured output from the schema).
-      2. Fallback regex for "score": N patterns.
+    Tries these formats in order:
+      1. <score>N</score> tags (primary — used by the current prompt).
+      2. JSON with a "score" field (legacy structured output).
+      3. Fallback regex for "score": N patterns.
 
     Returns an integer 1-5, or None if unparseable.
     """
-    # Try JSON first
+    if not judge_output:
+        return None
+
+    # 1. <score>N</score> tags
+    m = re.search(r"<score>\s*(\d)\s*</score>", judge_output)
+    if m:
+        score = int(m.group(1))
+        if 1 <= score <= 5:
+            return score
+
+    # 2. JSON with a "score" field (legacy)
     try:
         obj = json.loads(judge_output)
         if isinstance(obj, dict) and "score" in obj:
@@ -321,7 +330,7 @@ def extract_score(judge_output: str) -> Optional[int]:
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    # Fallback: look for "score": N or score: N
+    # 3. Fallback: look for "score": N or score: N
     m = re.search(r'"?score"?\s*[:=]\s*(\d)', judge_output)
     if m:
         score = int(m.group(1))
@@ -527,10 +536,10 @@ def main() -> None:
     inf.add_argument("--api-key", default="EMPTY", help="API key for the vLLM server")
     inf.add_argument("--temperature", type=float, default=0.7)
     inf.add_argument("--top-p", type=float, default=0.95)
-    inf.add_argument("--max-tokens", type=int, default=4096)
+    inf.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     inf.add_argument("--num-threads", type=int, default=4,
                      help="Number of concurrent requests to the vLLM server")
-    inf.add_argument("--max-retries", type=int, default=3,
+    inf.add_argument("--max-retries", type=int, default=5,
                      help="Max retries per request on transient failures")
 
     # -- compute -----------------------------------------------------------

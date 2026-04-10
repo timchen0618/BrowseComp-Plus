@@ -151,6 +151,39 @@ Confidence: {{your confidence score between 0% and 100% for your answer}}
 </trajectory>
 """.strip()
 
+QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY = """
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times.
+
+You are also given a summary of a previous agent's research trajectory for this question. The summary is enclosed within <trajectory_summary></trajectory_summary> tags. Use the information in the summary to search more efficiently and avoid repeating prior work.
+
+Question: {Question}
+
+Your response should be in the following format:
+Explanation: {{your explanation for your final answer. For this explanation section only, you should cite your evidence documents inline by enclosing their docids in square brackets [] at the end of sentences. For example, [20].}}
+Exact Answer: {{your succinct, final answer}}
+Confidence: {{your confidence score between 0% and 100% for your answer}}
+
+<trajectory_summary>
+{trajectory_summary}
+</trajectory_summary>
+""".strip()
+
+PROMPT_TRAJECTORY_SUMMARIZER = """
+You are a research assistant. Given a question and a detailed trajectory of an agent's search process (including reasoning, tool calls, and tool results), produce a concise summary that captures:
+
+1. **Key findings**: What information was discovered, including relevant document IDs and facts.
+2. **Search strategies tried**: What queries were used and which were effective vs. ineffective.
+3. **Candidates identified**: Any candidate answers or entities found during the search.
+4. **Remaining gaps**: What the agent was unable to find or verify.
+5. **Final answer (if any)**: The agent's conclusion and confidence level.
+
+Be concise but preserve all actionable information that would help a new agent continue the research efficiently. Do not include raw tool outputs — summarize them instead. Output the trajectory summary in simple markdown format, covering all the above information. DO NOT directly output the answer or any tool call outputs. Your should ALWAYS output the summary in the following format: (always enclose the summary within <trajectory_summary> tags.)
+
+<trajectory_summary>
+{trajectory_summary}
+</trajectory_summary>
+""".strip()
+
 ########################################################
 # Prompts for planning
 ########################################################
@@ -224,6 +257,16 @@ def format_query_with_trajectory(query: str, trajectory: str, query_template: st
         return QUERY_TEMPLATE_GIVEN_TRAJECTORY.format(Question=query, trajectory=trajectory)
     elif query_template == "QUERY_TEMPLATE_GIVEN_TRAJECTORY":
         return QUERY_TEMPLATE_GIVEN_TRAJECTORY.format(Question=query, trajectory=trajectory)
+    else:
+        raise ValueError(f"Unknown query template: {query_template}")
+
+
+def format_query_with_traj_summary(query: str, trajectory_summary: str, query_template: str | None = None) -> str:
+    """Format the query with trajectory summary template."""
+    if query_template is None:
+        return QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY.format(Question=query, trajectory_summary=trajectory_summary)
+    elif query_template == "QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY":
+        return QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY.format(Question=query, trajectory_summary=trajectory_summary)
     else:
         raise ValueError(f"Unknown query template: {query_template}")
 

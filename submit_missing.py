@@ -20,27 +20,41 @@ TEMPLATE_PATH = "run_qwen3_planning.SBATCH"
 TEMPLATE_PATH_FIRST50 = "run_qwen3_first50.SBATCH"
 
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
-MISSING = {}
+MISSING = {
+    # "gpt-oss-120b_planning_retrospective_seed0":                                     list(range(10)),
+    # "gpt-oss-120b_planning_retrospective_reinject_every_5_seed0":                     list(range(10)),
+    # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_seed0":                     list(range(10)),
+    # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_reinject_every_5_seed0":    list(range(10)),
+    # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
+    # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             list(range(10)),
+    # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":              list(range(10)),
+    # "gpt-oss-120b_planning_v4_seed0":                                                list(range(10)),
+    # "gpt-oss-120b_planning_v4_reinject_every_5_seed0":                               list(range(10)),
+    # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_seed0":                       [1, 2, 4, 5, 6],
+    # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      list(range(10)),
+    # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                       list(range(10)),
+    # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
+    "gpt-oss-120b_seed4":      list(range(10)),
+    "gpt-oss-120b_seed5":      list(range(10)),
+    "gpt-oss-120b_seed6":      list(range(10)),
+    "gpt-oss-120b_seed7":      list(range(10)),
+}
 
 # Missing runs for first50 split (no shards — each entry is a full re-run).
 # Value is None to auto-parse model/mode/seed from the run name,
 # or an explicit (model, mode, seed) tuple for names that can't be parsed.
 MISSING_FIRST50 = {
-    # "tongyi_planning_v1_start_ext_seed0": None,
-    # "tongyi_planning_v1_start_ext_reinject_every_5_seed0":   None,
-    # "tongyi_planning_v2_seed0":                              None,
-    # "tongyi_planning_v2_start_ext_seed0":                    None,
-    # "tongyi_planning_v2_start_ext_reinject_every_5_seed0":   None,
-    # "tongyi_planning_v0.5_reinject_every_5_seed0":           None,
-    # "tongyi_planning_v0.5_start_ext_seed0":                  None,
-    # "tongyi_planning_v0.5_start_ext_reinject_every_5_seed0": None,
-    # "tongyi_planning_v3_reinject_every_5_seed0":             None,
-    # "tongyi_planning_v3_start_ext_seed0":                    None,
-    # "tongyi_planning_v3_start_ext_reinject_every_5_seed0":   None,
-    # "tongyi_planning_v4_seed0":                              None,
-    # "tongyi_planning_v4_reinject_every_5_seed0":             None,
-    # "tongyi_planning_retrospective_seed0":                   None,
-    # "tongyi_planning_retrospective_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                   None,
+    # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":          None,
+    # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v1_start_ext_gemini_2.5_pro_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v2_start_ext_gemini_2.5_pro_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v1_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v2_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v3_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_planning_v4_revise_every_5_seed0":    None,
 }
 
 # Missing runs for frames/first50 split — gpt-oss-120b model.
@@ -59,16 +73,16 @@ MISSING_FRAMES_FIRST50 = {
 }
 
 MISSING_MUSIQUE_FIRST50 = {
-    "gpt-oss-120b_planning_v0.5_start_ext_seed0":                 None,
-    "gpt-oss-120b_planning_v0.5_start_ext_reinject_every_5_seed0": None,
-    "gpt-oss-120b_planning_v1_start_ext_seed0":                   None,
-    "gpt-oss-120b_planning_v1_start_ext_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v2_start_ext_seed0":                   None,
-    "gpt-oss-120b_planning_v2_start_ext_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v3_start_ext_seed0":                   None,
-    "gpt-oss-120b_planning_v3_start_ext_reinject_every_5_seed0":  None,
-    "gpt-oss-120b_planning_v4_start_ext_seed0":                   None,
-    "gpt-oss-120b_planning_v4_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v0.5_start_ext_seed0":                 None,
+    # "gpt-oss-120b_planning_v0.5_start_ext_reinject_every_5_seed0": None,
+    # "gpt-oss-120b_planning_v1_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v1_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v2_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v2_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v3_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v3_start_ext_reinject_every_5_seed0":  None,
+    # "gpt-oss-120b_planning_v4_start_ext_seed0":                   None,
+    # "gpt-oss-120b_planning_v4_start_ext_reinject_every_5_seed0":  None,
 }
 
 
@@ -91,6 +105,18 @@ def parse_run_name(name):
         rest = rest[:seed_match.start()]
     else:
         seed = 0  # no seed suffix — default to 0
+
+    # Strip known plan-model names embedded in start_ext output dirs
+    # e.g. "planning_v0.5_start_ext_gemini_2.5_pro" → "planning_v0.5_start_ext"
+    rest = re.sub(r"(_start_ext)_gemini_2\.5_pro", r"\1", rest)
+
+    # Handle traj_ext_{traj_model} and traj_summary_ext_{traj_model} patterns
+    # e.g. "traj_ext_gpt-oss-120b" → "traj_ext"
+    # e.g. "traj_summary_ext_gpt-oss-120b" → "traj_summary_ext"
+    # e.g. "traj_summary_ext_selected_tools_gpt-oss-120b" → "traj_summary_ext_selected_tools"
+    rest = re.sub(r"^traj_summary_ext_selected_tools_.*", "traj_summary_ext_selected_tools", rest)
+    rest = re.sub(r"^traj_summary_ext_(?!selected_tools).*", "traj_summary_ext", rest)
+    rest = re.sub(r"^traj_ext_.*", "traj_ext", rest)
 
     # Aliases only — everything else passes through as-is
     aliases = {
