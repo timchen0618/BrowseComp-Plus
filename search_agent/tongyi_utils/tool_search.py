@@ -38,6 +38,12 @@ class SearchToolHandler(BaseTool):
         self.tokenizer = None
         if snippet_max_tokens and snippet_max_tokens > 0:
             self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+            # Pre-tokenize all document snippets once at load time.  The tokenizer
+            # is kept (needed for generated-doc truncation in GAR), but search results
+            # will carry pre-truncated text so _truncate() runs on 512-token snippets
+            # instead of 5000-token full documents — ~10x cheaper per call.
+            if hasattr(searcher, "precompute_snippets"):
+                searcher.precompute_snippets(self.tokenizer, snippet_max_tokens)
 
     def _truncate(self, text: str, max_tokens: int) -> str:
         if max_tokens <= 0 or not self.tokenizer:
