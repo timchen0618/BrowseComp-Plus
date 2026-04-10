@@ -89,6 +89,7 @@ class FaissSearcher(BaseSearcher):
         self.tokenizer = None
         self.lookup = None
         self.docid_to_text = None
+        self.docid_to_snippet: Optional[Dict[str, str]] = None
 
         logger.info("Initializing FAISS searcher...")
 
@@ -255,6 +256,35 @@ class FaissSearcher(BaseSearcher):
                 f"Failed to load dataset '{self.args.dataset_name}': {e}"
             )
 
+    def precompute_snippets(self, tokenizer, max_tokens: int) -> None:
+        """Pre-tokenize and cache truncated snippets for all documents at load time.
+
+        Call this once after _load_dataset().  Subsequent search() calls return the
+        cached snippet as ``text`` so the caller avoids per-search tokenization.
+        """
+        if self.docid_to_text is None:
+            raise RuntimeError("Dataset not loaded; call _load_dataset() first")
+        logger.info(
+            f"Pre-computing snippets (max_tokens={max_tokens}) "
+            f"for {len(self.docid_to_text)} documents..."
+        )
+        self.docid_to_snippet = {}
+        for docid, text in self.docid_to_text.items():
+            tokens = tokenizer.encode(text, add_special_tokens=False)
+            if len(tokens) > max_tokens:
+                self.docid_to_snippet[docid] = tokenizer.decode(
+                    tokens[:max_tokens], skip_special_tokens=True
+                )
+            else:
+                self.docid_to_snippet[docid] = text
+        logger.info("Snippet pre-computation complete.")
+
+    def _resolve_text(self, passage_id: str) -> str:
+        """Return pre-computed snippet if available, otherwise full text."""
+        if self.docid_to_snippet is not None:
+            return self.docid_to_snippet.get(passage_id, "Text not found")
+        return self.docid_to_text.get(passage_id, "Text not found")
+
     def search(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
         if not all([self.retriever, self.model, self.tokenizer, self.lookup]):
             raise RuntimeError("Searcher not properly initialized")
@@ -268,7 +298,7 @@ class FaissSearcher(BaseSearcher):
         )
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        batch_dict = {k: v.to(device) for k, v in batch_dict.items()}
+        batch_dict = {key: val.to(device) for key, val in batch_dict.items()}
 
         with torch.amp.autocast(device):
             with torch.no_grad():
@@ -280,13 +310,60 @@ class FaissSearcher(BaseSearcher):
         results = []
         for score, index in zip(all_scores[0], psg_indices[0]):
             passage_id = self.lookup[index]
-            passage_text = self.docid_to_text.get(passage_id, "Text not found")
-
             results.append(
-                {"docid": passage_id, "score": float(score), "text": passage_text}
+                {
+                    "docid": passage_id,
+                    "score": float(score),
+                    "text": self._resolve_text(passage_id),
+                }
             )
 
         return results
+
+    def search_batch(self, queries: List[str], k: int = 10) -> List[List[Dict[str, Any]]]:
+        """Encode a list of queries in a single GPU forward pass and search.
+
+        Returns one result list per input query (same format as search()).
+        Use this instead of calling search() in a loop to maximise GPU utilisation
+        when multiple queries are available simultaneously.
+        """
+        if not all([self.retriever, self.model, self.tokenizer, self.lookup]):
+            raise RuntimeError("Searcher not properly initialized")
+
+        prefixed = [self.args.task_prefix + q for q in queries]
+        batch_dict = self.tokenizer(
+            prefixed,
+            padding=True,
+            truncation=True,
+            max_length=self.args.max_length,
+            return_tensors="pt",
+        )
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        batch_dict = {key: val.to(device) for key, val in batch_dict.items()}
+
+        with torch.amp.autocast(device):
+            with torch.no_grad():
+                q_reps = self.model.encode_query(batch_dict)
+                q_reps = q_reps.cpu().detach().numpy()
+
+        all_scores, psg_indices = self.retriever.search(q_reps, k)
+
+        batch_results: List[List[Dict[str, Any]]] = []
+        for scores_row, indices_row in zip(all_scores, psg_indices):
+            results = []
+            for score, index in zip(scores_row, indices_row):
+                passage_id = self.lookup[index]
+                results.append(
+                    {
+                        "docid": passage_id,
+                        "score": float(score),
+                        "text": self._resolve_text(passage_id),
+                    }
+                )
+            batch_results.append(results)
+
+        return batch_results
 
     def get_document(self, docid: str) -> Optional[Dict[str, Any]]:
         if not self.docid_to_text:

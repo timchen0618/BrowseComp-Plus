@@ -4,8 +4,11 @@ import argparse
 import csv
 import json
 import os
+import queue
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +22,63 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from utils import extract_retrieved_docids_from_result
 
 from searcher.searchers import SearcherType
+
+
+class _BatchSearchCoordinator:
+    """Coalesces concurrent search() calls into batched GPU forward passes.
+
+    When multiple threads call search() simultaneously, this coordinator
+    collects them within ``timeout_s`` seconds and dispatches the whole batch
+    via ``searcher.search_batch()`` — a single GPU forward pass instead of N
+    sequential ones.  Each caller blocks on its own Future and gets its result
+    as soon as the batch completes.
+    """
+
+    def __init__(self, searcher, max_batch: int = 64, timeout_s: float = 0.015):
+        self._searcher = searcher
+        self._max_batch = max_batch
+        self._timeout_s = timeout_s
+        self._queue: queue.Queue = queue.Queue()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def search(self, query: str, k: int) -> list:
+        fut: Future = Future()
+        self._queue.put((query, k, fut))
+        return fut.result()
+
+    def _run(self):
+        while True:
+            # Block until the first item arrives
+            try:
+                first = self._queue.get(timeout=5.0)
+            except queue.Empty:
+                continue
+
+            batch = [first]
+            k = first[1]
+            deadline = time.monotonic() + self._timeout_s
+
+            # Drain additional items that arrive within the timeout window
+            while len(batch) < self._max_batch:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    item = self._queue.get(timeout=remaining)
+                    batch.append(item)
+                except queue.Empty:
+                    break
+
+            queries = [item[0] for item in batch]
+            try:
+                results = self._searcher.search_batch(queries, k)
+                for item, result in zip(batch, results):
+                    item[2].set_result(result)
+            except Exception as exc:
+                for item in batch:
+                    if not item[2].done():
+                        item[2].set_exception(exc)
 
 
 class SearchToolHandler:
@@ -38,6 +98,17 @@ class SearchToolHandler:
         self.tokenizer = None
         if snippet_max_tokens and snippet_max_tokens > 0:
             self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+            # Pre-tokenize all document snippets once at load time so _search()
+            # never has to call tokenizer.encode() per document per search call.
+            if hasattr(searcher, "precompute_snippets"):
+                searcher.precompute_snippets(self.tokenizer, snippet_max_tokens)
+                self.tokenizer = None  # snippets cached in searcher; not needed again
+
+        # Use dynamic batching when the searcher supports search_batch() — coalesces
+        # concurrent calls from multiple threads into a single GPU forward pass.
+        self._batch_coordinator: _BatchSearchCoordinator | None = None
+        if hasattr(searcher, "search_batch"):
+            self._batch_coordinator = _BatchSearchCoordinator(searcher)
 
     def execute_tool(self, tool_name: str, arguments: dict):
         if tool_name == "local_knowledge_base_retrieval":
@@ -92,9 +163,16 @@ class SearchToolHandler:
         return tools
 
     def _search(self, query: str):
-        candidates = self.searcher.search(query, self.k)
+        # Use the batch coordinator when available (coalesces concurrent thread calls
+        # into a single GPU forward pass); otherwise fall back to a direct search call.
+        if self._batch_coordinator is not None:
+            candidates = self._batch_coordinator.search(query, self.k)
+        else:
+            candidates = self.searcher.search(query, self.k)
 
         if self.snippet_max_tokens and self.snippet_max_tokens > 0 and self.tokenizer:
+            # Fallback: tokenizer is set only when precompute_snippets() was not
+            # available (e.g. non-FAISS searcher).  Truncate on the fly as before.
             for cand in candidates:
                 text = cand["text"]
                 tokens = self.tokenizer.encode(text, add_special_tokens=False)
@@ -106,6 +184,7 @@ class SearchToolHandler:
                 else:
                     cand["snippet"] = text
         else:
+            # Snippets were pre-computed at load time (or no truncation needed).
             for cand in candidates:
                 cand["snippet"] = cand["text"]
 
