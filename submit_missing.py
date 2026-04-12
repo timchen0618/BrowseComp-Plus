@@ -38,8 +38,8 @@ MISSING = {
     # "gpt-oss-120b_seed5":      list(range(10)),
     # "gpt-oss-120b_seed6":      list(range(10)),
     # "gpt-oss-120b_seed7":      list(range(10)),
-    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed1":      [2,3,4,5,6,7,8,9],
-    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
+    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
+    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
     "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),
 }
 
@@ -64,8 +64,8 @@ MISSING_FIRST50 = {
     # "gpt-oss-120b_seed5":      None,
     # "gpt-oss-120b_seed6":      None,
     # "gpt-oss-120b_seed7":      None,
-    #  "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
-    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,
+    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
+    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,
     "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      None,
 }
 
@@ -127,7 +127,8 @@ def parse_run_name(name):
     # e.g. "traj_summary_ext_gpt-oss-120b" → "traj_summary_ext"
     # e.g. "traj_summary_ext_selected_tools_gpt-oss-120b" → "traj_summary_ext_selected_tools"
     rest = re.sub(r"^traj_orig_ext_.*", "traj_orig_ext", rest)
-    rest = re.sub(r"^traj_summary_orig_ext_.*", "traj_summary_orig_ext", rest)
+    rest = re.sub(r"^traj_summary_orig_ext_selected_tools_.*", "traj_summary_orig_ext_selected_tools", rest)
+    rest = re.sub(r"^traj_summary_orig_ext_(?!selected_tools).*", "traj_summary_orig_ext", rest)
     rest = re.sub(r"^traj_summary_ext_selected_tools_.*", "traj_summary_ext_selected_tools", rest)
     rest = re.sub(r"^traj_summary_ext_(?!selected_tools).*", "traj_summary_ext", rest)
     rest = re.sub(r"^traj_ext_.*", "traj_ext", rest)
