@@ -63,6 +63,23 @@ Rules:
 """
 
 
+def format_original_messages_for_prompt(
+    trajectory: dict,
+    *,
+    max_chars: int = 0,
+) -> str:
+    """Serialize a trajectory's original_messages into a plain string.
+
+    Dumps the entire original_messages list as a JSON string, preserving the
+    original structure without any reformatting.
+    """
+    msgs = trajectory.get("original_messages", [])
+    result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
+    if max_chars > 0 and len(result) > max_chars:
+        result = result[:max_chars] + "\n\n... (messages truncated)"
+    return result
+
+
 def format_trajectory_for_prompt(
     trajectory: dict,
     *,
@@ -367,6 +384,7 @@ def run_one(
     context_reasoning_max: int,
     context_tool_max: int,
     dry_run: bool,
+    use_original_messages: bool = False,
 ) -> dict:
     with path.open(encoding="utf-8") as f:
         traj = json.load(f)
@@ -393,12 +411,18 @@ def run_one(
 
     catalog_lines = build_catalog_lines(traj, candidates, preview_chars)
     question = traj.get("query") or traj.get("question") or ""
-    context_block = format_trajectory_for_prompt(
-        traj,
-        max_chars=context_max_chars,
-        reasoning_max_chars=context_reasoning_max,
-        tool_output_max_chars=context_tool_max,
-    )
+    if use_original_messages:
+        context_block = format_original_messages_for_prompt(
+            traj,
+            max_chars=context_max_chars,
+        )
+    else:
+        context_block = format_trajectory_for_prompt(
+            traj,
+            max_chars=context_max_chars,
+            reasoning_max_chars=context_reasoning_max,
+            tool_output_max_chars=context_tool_max,
+        )
 
     user_parts = [
         f"User question:\n{question}\n",
@@ -478,6 +502,7 @@ def run_one(
 
 
 def main() -> None:
+    # python select_useful_tool_calls.py --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ --output selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl --use-original-messages --num-threads 8
     ap = argparse.ArgumentParser(description="Select k useful tool calls via Gemini; verbatim excerpts in output.")
     ap.add_argument(
         "--trajectory-dir",
@@ -522,12 +547,18 @@ def main() -> None:
         type=str,
         default=os.getenv("PORTKEY_BASE_URL", "https://ai-gateway.apps.cloud.rt.nyu.edu/v1/"),
     )
-    ap.add_argument("--temperature", type=float, default=0.4)
+    ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-tokens", type=int, default=4096)
+    ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--preview-chars", type=int, default=400, help="Per-tool output preview length in catalog")
     ap.add_argument("--context-max-chars", type=int, default=120_000, help="Cap full trajectory context in prompt")
     ap.add_argument("--context-reasoning-max-chars", type=int, default=0, help="Per reasoning block cap (0=none)")
     ap.add_argument("--context-tool-max-chars", type=int, default=500, help="Per tool result cap in context block")
+    ap.add_argument(
+        "--use-original-messages",
+        action="store_true",
+        help="Use original_messages from trajectory instead of the reformatted trajectory context",
+    )
 
     args = ap.parse_args()
     traj_dir: Path = args.trajectory_dir
@@ -581,7 +612,7 @@ def main() -> None:
         gen_params = GenParams(
             temperature=args.temperature,
             max_new_tokens=args.max_tokens,
-            top_p=0.95,
+            top_p=args.top_p,
         )
         model = Gemini25Pro(model=args.model, base_url=args.base_url or None)
 
@@ -606,6 +637,7 @@ def main() -> None:
             context_reasoning_max=args.context_reasoning_max_chars,
             context_tool_max=args.context_tool_max_chars,
             dry_run=args.dry_run,
+            use_original_messages=args.use_original_messages,
         )
 
     if args.dry_run:

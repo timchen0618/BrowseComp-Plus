@@ -34,10 +34,13 @@ MISSING = {
     # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                       list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
-    "gpt-oss-120b_seed4":      list(range(10)),
-    "gpt-oss-120b_seed5":      list(range(10)),
-    "gpt-oss-120b_seed6":      list(range(10)),
-    "gpt-oss-120b_seed7":      list(range(10)),
+    # "gpt-oss-120b_seed4":      list(range(10)),
+    # "gpt-oss-120b_seed5":      list(range(10)),
+    # "gpt-oss-120b_seed6":      list(range(10)),
+    # "gpt-oss-120b_seed7":      list(range(10)),
+    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed1":      [2,3,4,5,6,7,8,9],
+    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),
 }
 
 # Missing runs for first50 split (no shards — each entry is a full re-run).
@@ -55,6 +58,15 @@ MISSING_FIRST50 = {
     # "gpt-oss-120b_planning_v2_revise_every_5_seed0":    None,
     # "gpt-oss-120b_planning_v3_revise_every_5_seed0":    None,
     # "gpt-oss-120b_planning_v4_revise_every_5_seed0":    None,
+    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
+    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,  # complete
+    # "gpt-oss-120b_seed4":      None,
+    # "gpt-oss-120b_seed5":      None,
+    # "gpt-oss-120b_seed6":      None,
+    # "gpt-oss-120b_seed7":      None,
+    #  "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
+    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      None,
 }
 
 # Missing runs for frames/first50 split — gpt-oss-120b model.
@@ -114,6 +126,8 @@ def parse_run_name(name):
     # e.g. "traj_ext_gpt-oss-120b" → "traj_ext"
     # e.g. "traj_summary_ext_gpt-oss-120b" → "traj_summary_ext"
     # e.g. "traj_summary_ext_selected_tools_gpt-oss-120b" → "traj_summary_ext_selected_tools"
+    rest = re.sub(r"^traj_orig_ext_.*", "traj_orig_ext", rest)
+    rest = re.sub(r"^traj_summary_orig_ext_.*", "traj_summary_orig_ext", rest)
     rest = re.sub(r"^traj_summary_ext_selected_tools_.*", "traj_summary_ext_selected_tools", rest)
     rest = re.sub(r"^traj_summary_ext_(?!selected_tools).*", "traj_summary_ext", rest)
     rest = re.sub(r"^traj_ext_.*", "traj_ext", rest)
@@ -160,8 +174,8 @@ def main():
     os.makedirs("sbatch_outputs", exist_ok=True)
 
     jobs = (
-        [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
         [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
+        [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
         [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
         [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()]
     )

@@ -686,6 +686,26 @@ def _format_trajectory_for_prompt(
     return result
 
 
+def _format_original_messages_for_prompt(
+    trajectory: dict,
+    max_chars: int = 0,
+) -> str:
+    """Serialize a trajectory's original_messages into a plain string.
+
+    Dumps the entire original_messages list as a JSON string, preserving the
+    original structure without any reformatting.
+
+    Args:
+        trajectory: The trajectory dict with an "original_messages" list.
+        max_chars: If >0, truncate the final text to this many characters.
+    """
+    msgs = trajectory.get("original_messages", [])
+    result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
+    if max_chars > 0 and len(result) > max_chars:
+        result = result[:max_chars] + "\n\n... (messages truncated)"
+    return result
+
+
 def _assistant_text_from_message(message) -> str:
     """Prefer message.content; fall back to reasoning_content (vLLM GPT-OSS channel split)."""
     content = getattr(message, "content", None)
@@ -828,6 +848,7 @@ def _persist_response(
     plan_revise_every: int = 0,
     plan_text: str | None = None,
     plan_text_history: list | None = None,
+    save_raw_messages: bool = False,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -936,9 +957,9 @@ def _persist_response(
         metadata["planning_steps"] = planning_steps
     if planning and planning_trigger == "start_ext" and planning_file:
         metadata["planning_file"] = planning_file
-    if planning and planning_trigger in ("traj_ext", "traj_summary_ext") and trajectory_dir:
+    if planning and planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext") and trajectory_dir:
         metadata["trajectory_dir"] = trajectory_dir
-    if planning and planning_trigger == "traj_summary_ext" and trajectory_summary_file:
+    if planning and planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and trajectory_summary_file:
         metadata["trajectory_summary_file"] = trajectory_summary_file
     if plan_reinject_every > 0:
         metadata["plan_reinject_every"] = plan_reinject_every
@@ -956,8 +977,9 @@ def _persist_response(
         "status": status,
         "retrieved_docids": extract_retrieved_docids_from_result(normalized_results),
         "result": normalized_results,
-        "original_messages": messages,
     }
+    if save_raw_messages:
+        normalized_record["original_messages"] = messages
 
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
     filename = os.path.join(str(out_dir), f"run_{ts}.json")
@@ -1010,12 +1032,12 @@ def _process_tsv_dataset(
         print(f"Loaded {len(plans_by_id)} plans from {args.planning_file}")
 
     summaries_by_id: dict[str, str] = {}
-    if args.planning and args.planning_trigger == "traj_summary_ext" and args.trajectory_summary_file:
+    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and args.trajectory_summary_file:
         summaries_by_id = _load_trajectory_summaries(args.trajectory_summary_file, queries)
         print(f"Loaded {len(summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}")
 
     trajectories_by_id: dict[str, dict] = {}
-    need_raw_trajectories = args.planning and args.planning_trigger in ("traj_ext", "traj_summary_ext") and not summaries_by_id
+    need_raw_trajectories = args.planning and args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext") and not summaries_by_id
     if need_raw_trajectories:
         trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
         print(f"Loaded {len(trajectories_by_id)} trajectories from {args.trajectory_dir}")
@@ -1028,7 +1050,18 @@ def _process_tsv_dataset(
     def _handle_single_query(qid: str, qtext: str, pbar=None):
         print('-------------Handling single query-------------------')
         """Build request, send and persist response for one query."""
-        if args.planning and args.planning_trigger == "traj_ext":
+        if args.planning and args.planning_trigger == "traj_orig_ext":
+            traj = trajectories_by_id.get(qid, {})
+            traj_text = _format_original_messages_for_prompt(traj)
+            input_messages = [
+                {
+                    "role": "user",
+                    "content": format_query_with_trajectory(qtext, traj_text, args.query_template)
+                }
+            ]
+            if args.verbose:
+                print(f"[{qid}] Prepended original messages to prompt", flush=True)
+        elif args.planning and args.planning_trigger == "traj_ext":
             traj = trajectories_by_id.get(qid, {})
             traj_text = _format_trajectory_for_prompt(traj)
             # traj_text = _format_trajectory_for_prompt(traj, tool_output_max_chars=5000)
@@ -1074,6 +1107,38 @@ def _process_tsv_dataset(
             ]
             if args.verbose:
                 print(f"[{qid}] Prepended trajectory summary to prompt", flush=True)
+        elif args.planning and args.planning_trigger == "traj_summary_orig_ext":
+            if qid in summaries_by_id:
+                traj_summary = summaries_by_id[qid]
+                if args.verbose:
+                    print(f"[{qid}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+            else:
+                traj = trajectories_by_id.get(qid, {})
+                traj_text = _format_original_messages_for_prompt(
+                    traj,
+                    max_chars=400000,
+                )
+                if args.verbose:
+                    print(f"[{qid}] Summarizing original messages...", flush=True)
+                traj_summary = call_trajectory_summarizer(
+                    client,
+                    args.model,
+                    args.model_url,
+                    question=qtext,
+                    trajectory_text=traj_text,
+                    verbose=args.verbose,
+                    max_tokens=8192,
+                )
+                # get the summary text from the enclosed <trajectory_summary> tags
+                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+            input_messages = [
+                {
+                    "role": "user",
+                    "content": format_query_with_traj_summary(qtext, traj_summary, args.query_template)
+                }
+            ]
+            if args.verbose:
+                print(f"[{qid}] Prepended original-message summary to prompt", flush=True)
         else:
             input_messages = [
                 {"role": "user", "content": format_query(qtext, args.query_template)}
@@ -1189,12 +1254,12 @@ def _process_tsv_dataset(
                 ),
                 trajectory_dir=(
                     args.trajectory_dir
-                    if args.planning_trigger in ("traj_ext", "traj_summary_ext")
+                    if args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext")
                     else None
                 ),
                 trajectory_summary_file=(
                     args.trajectory_summary_file
-                    if args.planning_trigger == "traj_summary_ext"
+                    if args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext")
                     else None
                 ),
                 plan_reinject_every=args.plan_reinject_every,
@@ -1209,6 +1274,7 @@ def _process_tsv_dataset(
                     if planning_config
                     else None
                 ),
+                save_raw_messages=args.save_raw_messages,
             )
 
         except Exception as exc:
@@ -1307,9 +1373,9 @@ def main():
     )
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps", "start_and_after_steps", "start_ext", "traj_ext", "traj_summary_ext"],
+        choices=["start", "after_steps", "start_and_after_steps", "start_ext", "traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext"],
         default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), start_ext (load plan from file), traj_ext (prepend external trajectory to prompt), or traj_summary_ext (summarize trajectory then prepend summary). "
+        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), start_ext (load plan from file), traj_ext (prepend external trajectory to prompt), traj_summary_ext (summarize trajectory then prepend summary), traj_orig_ext (use original_messages from trajectory as conversation input), or traj_summary_orig_ext (summarize original_messages then prepend summary). "
         "after_steps and start_and_after_steps cannot be combined with --plan-revise-every or --plan-reinject-every.",
     )
     parser.add_argument(
@@ -1328,15 +1394,15 @@ def main():
         "--trajectory-dir",
         type=str,
         default=None,
-        help="Directory of JSON trajectory files to prepend to the prompt (required when --planning-trigger=traj_ext or traj_summary_ext)",
+        help="Directory of JSON trajectory files to prepend to the prompt (required when --planning-trigger=traj_ext, traj_summary_ext, traj_orig_ext, or traj_summary_orig_ext)",
     )
     parser.add_argument(
         "--trajectory-summary-file",
         type=str,
         default=None,
         help="JSONL file with pre-computed trajectory summaries (fields: 'summary' or 'excerpt'). "
-        "When provided with --planning-trigger=traj_summary_ext, skips LLM summarization and uses these directly. "
-        "Takes precedence over --trajectory-dir for traj_summary_ext.",
+        "When provided with --planning-trigger=traj_summary_ext or traj_summary_orig_ext, skips LLM summarization and uses these directly. "
+        "Takes precedence over --trajectory-dir for traj_summary_ext and traj_summary_orig_ext.",
     )
     parser.add_argument(
         "--plan-reinject-every",
@@ -1364,6 +1430,11 @@ def main():
         type=str,
         default="prompts/planning_prompt_v2_context.md",
         help="Path to mid-conversation planner system prompt (relative to repo root if not absolute)",
+    )
+    parser.add_argument(
+        "--save-raw-messages",
+        action="store_true",
+        help="Save raw messages to the output directory",
     )
 
     # Searcher selection and shared tool options --------------------------
@@ -1420,13 +1491,25 @@ def main():
             )
             sys.exit(1)
 
-    if args.planning and args.planning_trigger == "traj_summary_ext":
+    if args.planning and args.planning_trigger == "traj_orig_ext":
+        if args.trajectory_dir is None:
+            print("Error: traj_orig_ext requires --trajectory-dir", file=sys.stderr)
+            sys.exit(1)
+        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJECTORY"):
+            print(
+                f"Error: traj_orig_ext requires --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY "
+                f"(got {args.query_template!r})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
         if args.trajectory_summary_file is None and args.trajectory_dir is None:
-            print("Error: traj_summary_ext requires --trajectory-summary-file or --trajectory-dir", file=sys.stderr)
+            print(f"Error: {args.planning_trigger} requires --trajectory-summary-file or --trajectory-dir", file=sys.stderr)
             sys.exit(1)
         if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"):
             print(
-                f"Error: traj_summary_ext requires --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY "
+                f"Error: {args.planning_trigger} requires --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY "
                 f"(got {args.query_template!r})",
                 file=sys.stderr,
             )
@@ -1515,7 +1598,7 @@ def main():
             except OSError:
                 pass
 
-        if args.planning and args.planning_trigger in ("start_ext", "traj_ext", "traj_summary_ext"):
+        if args.planning and args.planning_trigger in ("start_ext", "traj_ext", "traj_summary_ext", "traj_summary_orig_ext"):
             print(
                 f"Error: {args.planning_trigger} requires a TSV query file; use --query path/to/queries.tsv",
                 file=sys.stderr,
