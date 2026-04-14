@@ -172,6 +172,48 @@ Just output the tree-structured checklist within <plan></plan> tags, and nothing
 """
 
 
+QUERY_TEMPLATE_GIVEN_TRAJECTORY = """
+Question: {Question}
+
+<trajectory>
+{trajectory}
+</trajectory>
+""".strip()
+
+
+QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY = """
+Question: {Question}
+
+<trajectory_summary>
+{trajectory_summary}
+</trajectory_summary>
+""".strip()
+
+
+TRAJECTORY_SYSTEM_NOTE = (
+    "You are also given a previous trajectory of the agent's search and tool calls "
+    "for the question, and the outputs of the tool calls. The trajectory is enclosed "
+    "within <trajectory></trajectory> tags. Use the information in the trajectory to "
+    "search more efficiently."
+)
+
+
+TRAJ_SUMMARY_SYSTEM_NOTE = (
+    "You are also given a summary of a previous agent's research trajectory for this "
+    "question. The summary is enclosed within <trajectory_summary></trajectory_summary> "
+    "tags. Use the information in the summary to search more efficiently and avoid "
+    "repeating prior work."
+)
+
+
+def format_query_with_trajectory(query: str, trajectory: str) -> str:
+    return QUERY_TEMPLATE_GIVEN_TRAJECTORY.format(Question=query, trajectory=trajectory)
+
+
+def format_query_with_traj_summary(query: str, trajectory_summary: str) -> str:
+    return QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY.format(Question=query, trajectory_summary=trajectory_summary)
+
+
 PROMPT_QUERY_REWRITER="""
 You are a query rewriter for a deep research agent to solve a complex information seeking question. 
 Given the user's original question, all the previous search calls, the immediate previous search tool call and its response, your task is to rewrite the query to the search tool to be more specific and focused.

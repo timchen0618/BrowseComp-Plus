@@ -15,6 +15,10 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from tongyi_utils.react_agent import MultiTurnReactAgent, SampleOutcomeAgent, _load_and_validate_plans
 from tongyi_utils.tool_search import SearchToolHandler
+from trajectory_utils import (
+    _load_and_validate_trajectories,
+    _load_trajectory_summaries,
+)
 from searcher.searchers import SearcherType
 import re
 
@@ -122,7 +126,7 @@ def persist_response(output_dir: Path, query_id: str | None, query: str, result:
     }
 
     if getattr(args, 'store_raw', False):
-        output_data["raw_messages"] = result.get("messages", [])
+        output_data["original_messages"] = result.get("messages", [])
 
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
@@ -188,7 +192,23 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
     if args.planning and args.planning_trigger == "start_ext":
         agent.plans_by_id = _load_and_validate_plans(args.planning_file, queries)
         print(f"Loaded {len(agent.plans_by_id)} plans from {args.planning_file}")
-    
+
+    # Load pre-computed summaries if provided (takes precedence over trajectory_dir).
+    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and args.trajectory_summary_file:
+        agent.summaries_by_id = _load_trajectory_summaries(args.trajectory_summary_file, queries)
+        print(f"Loaded {len(agent.summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}")
+
+    # Load raw trajectories if needed (either as the prepended content or as
+    # input for on-the-fly summarization).
+    need_raw_trajectories = (
+        args.planning
+        and args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext")
+        and not agent.summaries_by_id
+    )
+    if need_raw_trajectories:
+        agent.trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
+        print(f"Loaded {len(agent.trajectories_by_id)} trajectories from {args.trajectory_dir}")
+
     print(f"Processing {len(remaining)} remaining queries (skipping {len(processed_ids)}) from {dataset_path}")
     
     def handle_single_query(qid: str, qtext: str):
@@ -247,9 +267,24 @@ def main():
     parser.add_argument("--planning-model", type=str, default=None, help="Planning model path")
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps", "start_and_after_steps", "start_ext"],
+        choices=[
+            "start",
+            "after_steps",
+            "start_and_after_steps",
+            "start_ext",
+            "traj_ext",
+            "traj_summary_ext",
+            "traj_orig_ext",
+            "traj_summary_orig_ext",
+        ],
         default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), or start_ext (load from file)",
+        help="When to run planning: start (before loop), after_steps (mid-conversation), "
+        "start_and_after_steps (both), start_ext (load plan from file), "
+        "traj_ext (prepend external trajectory to prompt), "
+        "traj_summary_ext (summarize trajectory then prepend summary), "
+        "traj_orig_ext (use original_messages from trajectory as prepended text), "
+        "or traj_summary_orig_ext (summarize original_messages then prepend summary). "
+        "after_steps and start_and_after_steps cannot be combined with --plan-revise-every or --plan-reinject-every.",
     )
     parser.add_argument(
         "--planning-steps",
@@ -267,7 +302,32 @@ def main():
         "--plan-reinject-every",
         type=int,
         default=0,
-        help="Re-inject the plan as a reminder every N iterations (0 = disabled, e.g. 5 or 10)",
+        help="Re-inject the current plan as a user reminder every N iterations (0 = disabled). "
+        "Mutually exclusive with --plan-revise-every and with --planning-trigger after_steps/start_and_after_steps.",
+    )
+    parser.add_argument(
+        "--plan-revise-every",
+        type=int,
+        default=0,
+        help="Every N iterations, call the planner to revise the plan from the conversation "
+        "so far and inject it (same format as mid-conversation planning; 0 = disabled). "
+        "Mutually exclusive with --plan-reinject-every and with --planning-trigger after_steps/start_and_after_steps.",
+    )
+    parser.add_argument(
+        "--trajectory-dir",
+        type=str,
+        default=None,
+        help="Directory of JSON trajectory files to prepend to the prompt (required when "
+        "--planning-trigger=traj_ext, traj_summary_ext, traj_orig_ext, or traj_summary_orig_ext)",
+    )
+    parser.add_argument(
+        "--trajectory-summary-file",
+        type=str,
+        default=None,
+        help="JSONL file with pre-computed trajectory summaries (fields: 'summary' or 'excerpt'). "
+        "When provided with --planning-trigger=traj_summary_ext or traj_summary_orig_ext, skips "
+        "LLM summarization and uses these directly. Takes precedence over --trajectory-dir for "
+        "traj_summary_ext and traj_summary_orig_ext.",
     )
     parser.add_argument(
         "--plan-prompt-file",
@@ -305,6 +365,41 @@ def main():
         if args.planning_file is None:
             print("Error: start_ext requires --planning-file", file=sys.stderr)
             sys.exit(1)
+
+    if args.planning and args.planning_trigger in ("traj_ext", "traj_orig_ext"):
+        if args.trajectory_dir is None:
+            print(f"Error: {args.planning_trigger} requires --trajectory-dir", file=sys.stderr)
+            sys.exit(1)
+
+    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
+        if args.trajectory_summary_file is None and args.trajectory_dir is None:
+            print(
+                f"Error: {args.planning_trigger} requires --trajectory-summary-file or --trajectory-dir",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Mid-conversation planning (after_steps / start_and_after_steps) vs periodic
+    # plan revision vs static reinject: at most one mechanism.
+    use_after_steps_planning = args.planning and args.planning_trigger in (
+        "after_steps",
+        "start_and_after_steps",
+    )
+    use_plan_revise_every = args.plan_revise_every > 0
+    use_plan_reinject_every = args.plan_reinject_every > 0
+    if use_after_steps_planning and (use_plan_revise_every or use_plan_reinject_every):
+        print(
+            "Error: --planning-trigger after_steps or start_and_after_steps cannot be combined "
+            "with --plan-revise-every or --plan-reinject-every (choose at most one).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if use_plan_revise_every and use_plan_reinject_every:
+        print(
+            "Error: --plan-revise-every and --plan-reinject-every cannot be used together.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     model = args.model
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -376,6 +471,7 @@ def main():
         planning_trigger=args.planning_trigger,
         planning_steps=args.planning_steps,
         plan_reinject_every=getattr(args, 'plan_reinject_every', 0),
+        plan_revise_every=getattr(args, 'plan_revise_every', 0),
         plans_by_id=plans_by_id,
         plan_prompt=plan_prompt_text,
         plan_prompt_mid=plan_prompt_mid_text,

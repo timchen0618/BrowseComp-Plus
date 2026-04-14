@@ -13,6 +13,7 @@ any query_id already present (including failed rows).
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -31,6 +32,7 @@ except ImportError:
 
 # Repo-local: same directory as this script
 _REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_BCP_QUERIES_TSV = _REPO_ROOT / "topics-qrels" / "bcp" / "queries.tsv"
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -77,6 +79,72 @@ def format_original_messages_for_prompt(
     result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
     if max_chars > 0 and len(result) > max_chars:
         result = result[:max_chars] + "\n\n... (messages truncated)"
+    return result
+
+
+
+
+def format_trajectory_for_prompt_orig(
+    trajectory: dict,
+    *,
+    max_chars: int = 0,
+    reasoning_max_chars: int = 0,
+    tool_output_max_chars: int = 500,
+    query_max_chars: int = 1000,
+) -> str:
+    """Same structure as search_agent/oss_client._format_trajectory_for_prompt (truncation optional)."""
+    parts: List[str] = []
+    for step in trajectory.get("original_messages", []):
+        # clone the whole thing to keep the original messages intact
+        step_clone = copy.deepcopy(step)
+        role = step_clone.get("role", "")
+        stype = step_clone.get("type", "")
+        if role == "user":
+            try:
+                parts.append(json.dumps(step_clone, ensure_ascii=False))
+            except Exception as e:
+                print(f"Error dumping user step: {e}")
+        else:
+            if stype == "reasoning":
+                if "content" in step_clone and isinstance(step_clone["content"], list):
+                    if reasoning_max_chars > 0:
+                        for i in range(len(step_clone["content"])):
+                            # truncate the content if it is too long
+                            step_clone["content"][i] = step_clone["content"][i][:reasoning_max_chars] + "..."
+                try:
+                    parts.append(json.dumps(step_clone, ensure_ascii=False))
+                except Exception as e:
+                    print(f"Error dumping reasoning step: {e}")
+            elif stype == "function_call":
+                try:
+                    parts.append(json.dumps(step_clone, ensure_ascii=False))
+                except Exception as e:
+                    print(f"Error dumping function call step: {e}")
+            elif stype == "function_call_output":
+                if "output" in step_clone and isinstance(step_clone["output"], str):
+                    if tool_output_max_chars > 0 and len(step["output"]) > tool_output_max_chars:
+                        step_clone["output"] = step_clone["output"][:tool_output_max_chars] + "..."
+                try:
+                    parts.append(json.dumps(step_clone, ensure_ascii=False))
+                except Exception as e:
+                    print(f"Error dumping function call output step: {e}")
+            elif stype == "message":
+                try:
+                    parts.append(json.dumps(step_clone, ensure_ascii=False))
+                except Exception as e:
+                    print(f"Error dumping message step: {e}")
+            else:
+                print(f"Unknown step type: {stype}")
+                print(step)
+                try:
+                    parts.append(json.dumps(step_clone, ensure_ascii=False))
+                except Exception as e:
+                    print(f"Error dumping unknown step: {e}")
+                
+
+    result = "\n\n".join(parts) if parts else "(no trajectory steps)"
+    if max_chars > 0 and len(result) > max_chars:
+        result = result[:max_chars] + "\n\n... (trajectory truncated)"
     return result
 
 
@@ -241,20 +309,185 @@ def build_full_excerpt(
     return separator.join(chunks)
 
 
+# ---------------------------------------------------------------------------
+# original_messages helpers — mirror the result-based helpers above but
+# operate on the raw API message list stored in trajectory["original_messages"].
+# ---------------------------------------------------------------------------
+
+
+def _om_build_call_id_to_output(messages: List[dict]) -> dict:
+    """Map call_id -> output string from all function_call_output items."""
+    mapping: dict = {}
+    for m in messages:
+        if m.get("type") == "function_call_output":
+            cid = m.get("call_id", "")
+            if cid:
+                mapping[cid] = json.dumps(m, ensure_ascii=False)
+    return mapping
+
+def find_candidate_tool_indices_om(
+    trajectory: dict,
+    allowed_tool_names: Set[str],
+) -> List[int]:
+    """Like find_candidate_tool_indices but indexes into original_messages."""
+    out: List[int] = []
+    for i, item in enumerate(trajectory.get("original_messages", [])):
+        if item.get("type") != "function_call":
+            continue
+        name = item.get("name") or ""
+        if name in allowed_tool_names:
+            out.append(i)
+    return out
+
+
+def _preview_tool_step_om(
+    step: dict,
+    preview_chars: int,
+    call_id_to_output: dict,
+) -> str:
+    """Like _preview_tool_step but for an original_messages function_call item."""
+    args_raw = step.get("arguments", "{}")
+    try:
+        ad = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+        if isinstance(ad, dict):
+            hint = ad.get("user_query") or ad.get("query") or ad.get("docid") or json.dumps(ad)[:200]
+        else:
+            hint = str(ad)[:200]
+    except (json.JSONDecodeError, TypeError):
+        hint = str(args_raw)[:200]
+    cid = step.get("call_id", "")
+    body = call_id_to_output.get(cid, "")
+    if not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=False)
+
+    if len(body) > preview_chars:
+        output_preview = body[:preview_chars] + "..."
+    else:
+        output_preview = body
+    return f"args_hint={hint!r} | output_preview={output_preview!r}"
+
+
+def build_catalog_lines_om(
+    trajectory: dict,
+    indices: Sequence[int],
+    preview_chars: int,
+) -> List[str]:
+    """Like build_catalog_lines but indexes into original_messages."""
+    messages = trajectory.get("original_messages", [])
+    call_id_to_output = _om_build_call_id_to_output(messages)
+    lines: List[str] = []
+    for idx in indices:
+        step = messages[idx]
+        name = step.get("name", "?")
+        prev = _preview_tool_step_om(step, preview_chars, call_id_to_output)
+        lines.append(f"  index={idx}  tool={name}  {prev}")
+    return lines
+
+
+def _om_previous_tool_index(messages: List[dict], tool_idx: int) -> int:
+    """Like previous_tool_index but scans for type=='function_call'."""
+    for j in range(tool_idx - 1, -1, -1):
+        if messages[j].get("type") == "function_call":
+            return j
+    return -1
+
+
+def verbatim_excerpt_for_tool_om(
+    trajectory: dict,
+    tool_idx: int,
+) -> str:
+    """Like verbatim_excerpt_for_tool but reads from original_messages."""
+    messages = trajectory.get("original_messages", [])
+    if tool_idx < 0 or tool_idx >= len(messages):
+        raise IndexError(f"tool_idx {tool_idx} out of range")
+    step = messages[tool_idx]
+    if step.get("type") != "function_call":
+        raise ValueError(f"step {tool_idx} is not function_call")
+
+    call_id_to_output = _om_build_call_id_to_output(messages)
+    prev = _om_previous_tool_index(messages, tool_idx)
+    parts: List[str] = []
+
+    for i in range(prev + 1, tool_idx):
+        s = messages[i]
+        if s.get("type") == "reasoning":
+            parts.append(json.dumps(s, ensure_ascii=False))
+
+    # tool_name = step.get("name", "?")
+    # args_raw = step.get("arguments", "")
+    # if isinstance(args_raw, str):
+    #     args_display = args_raw
+    # else:
+    #     args_display = json.dumps(args_raw, ensure_ascii=False)
+    # parts.append(f"[Tool call] {tool_name}\narguments:\n{args_display}")
+    parts.append(json.dumps(step, ensure_ascii=False))
+
+    cid = step.get("call_id", "")
+    out_str = call_id_to_output.get(cid, "")
+    if not isinstance(out_str, str):
+        out_str = json.dumps(out_str, ensure_ascii=False)
+    parts.append(f"{out_str}")
+
+    return "\n\n".join(parts)
+
+
+def build_full_excerpt_om(
+    trajectory: dict,
+    selected_indices: Sequence[int],
+    separator: str = "\n\n---\n\n",
+) -> str:
+    """Like build_full_excerpt but reads from original_messages."""
+    chunks = [verbatim_excerpt_for_tool_om(trajectory, i) for i in selected_indices]
+    return separator.join(chunks)
+
+
 def parse_json_response(text: str) -> dict:
     text = text.strip()
-    # Strip markdown fences if present
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if m:
-        text = m.group(1).strip()
+
+    # Strip markdown fences if present. Handle both complete fences (```json ... ```)
+    # and truncated outputs that start with ```json but never close.
+    if text.startswith("```"):
+        nl = text.find("\n")
+        if nl != -1:
+            text = text[nl + 1 :].strip()
+        if text.endswith("```"):
+            text = text[: -3].strip()
+    else:
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        if m:
+            text = m.group(1).strip()
+
+    # First try strict JSON parsing.
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
+        pass
+
+    # Second try: parse the first complete {...} span.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
             return json.loads(text[start : end + 1])
-        raise
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: recover `selected_indices` from incomplete JSON (common failure mode).
+    m_sel = re.search(r"\"selected_indices\"\s*:\s*\[(.*?)\]", text, flags=re.DOTALL)
+    if not m_sel:
+        raise json.JSONDecodeError("Could not parse or recover selected_indices", text, 0)
+    nums = re.findall(r"\b\d+\b", m_sel.group(1))
+    if not nums:
+        raise json.JSONDecodeError("Recovered selected_indices was empty", text, 0)
+    selected_indices = [int(x) for x in nums]
+
+    # Rationale is optional; it may be truncated, so we keep it best-effort.
+    rationale = ""
+    m_rat = re.search(r"\"rationale\"\s*:\s*\"(.*?)\"", text, flags=re.DOTALL)
+    if m_rat:
+        rationale = m_rat.group(1)
+
+    return {"selected_indices": selected_indices, "rationale": rationale}
 
 
 def validate_and_sort_indices(
@@ -272,8 +505,8 @@ def validate_and_sort_indices(
     if bad:
         raise ValueError(f"Invalid indices not in candidate set: {bad}")
     uniq.sort()
-    if len(uniq) != k:
-        raise ValueError(f"Expected {k} distinct valid indices, got {len(uniq)}: {uniq}")
+    # if len(uniq) != k:
+    #     raise ValueError(f"Expected {k} distinct valid indices, got {len(uniq)}: {uniq}")
     return uniq
 
 
@@ -361,6 +594,39 @@ def filter_paths_by_query_ids(
     return kept, skipped
 
 
+def load_query_id_to_text(tsv_path: Path) -> dict[str, str]:
+    """Load query_id -> question text from a TSV with one tab separating id from the rest of the line."""
+    out: dict[str, str] = {}
+    with tsv_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n\r")
+            if not line.strip():
+                continue
+            tab = line.find("\t")
+            if tab == -1:
+                continue
+            qid = line[:tab].strip()
+            text = line[tab + 1 :]
+            if qid:
+                out[qid] = text
+    return out
+
+
+def question_from_bcp_map(query_by_id: dict[str, str], qid: str) -> str:
+    """Resolve question text; try exact id, then id without leading zeros."""
+    qid = (qid or "").strip()
+    if not qid or not query_by_id:
+        return ""
+    if qid in query_by_id:
+        return query_by_id[qid]
+    stripped = qid.lstrip("0")
+    if stripped and stripped in query_by_id:
+        return query_by_id[stripped]
+    if stripped == "" and "0" in query_by_id:
+        return query_by_id["0"]
+    return ""
+
+
 def parse_tool_names_arg(values: Optional[List[str]]) -> Set[str]:
     if not values:
         return set(DEFAULT_TOOL_NAMES)
@@ -385,11 +651,27 @@ def run_one(
     context_tool_max: int,
     dry_run: bool,
     use_original_messages: bool = False,
+    query_by_id: Optional[dict[str, str]] = None,
 ) -> dict:
     with path.open(encoding="utf-8") as f:
         traj = json.load(f)
 
-    candidates = find_candidate_tool_indices(traj, allowed_tool_names)
+    if use_original_messages and not traj.get("original_messages"):
+        return {
+            "query_id": str(traj.get("query_id", "")),
+            "source_file": path.name,
+            "error": "missing_original_messages",
+            "selected_indices": [],
+            "rationale": "",
+            "excerpt": "",
+            "k_requested": k,
+            "k_effective": 0,
+        }
+
+    if use_original_messages:
+        candidates = find_candidate_tool_indices_om(traj, allowed_tool_names)
+    else:
+        candidates = find_candidate_tool_indices(traj, allowed_tool_names)
     k_eff = min(k, len(candidates))
     if k_eff == 0:
         return {
@@ -409,12 +691,22 @@ def run_one(
             file=sys.stderr,
         )
 
-    catalog_lines = build_catalog_lines(traj, candidates, preview_chars)
-    question = traj.get("query") or traj.get("question") or ""
     if use_original_messages:
-        context_block = format_original_messages_for_prompt(
+        catalog_lines = build_catalog_lines_om(traj, candidates, preview_chars)
+    else:
+        catalog_lines = build_catalog_lines(traj, candidates, preview_chars)
+    qid_str = str(traj.get("query_id", "")).strip()
+    question = ""
+    if query_by_id:
+        question = question_from_bcp_map(query_by_id, qid_str)
+    if not question:
+        question = traj.get("query") or traj.get("question") or ""
+    if use_original_messages:
+        context_block = format_trajectory_for_prompt_orig(
             traj,
             max_chars=context_max_chars,
+            reasoning_max_chars=context_reasoning_max,
+            tool_output_max_chars=context_tool_max,
         )
     else:
         context_block = format_trajectory_for_prompt(
@@ -446,6 +738,9 @@ def run_one(
             "k_effective": k_eff,
         }
 
+    print('-'*100)
+    print(user_content)
+    print('-'*100)
     raw = model.generate(
         messages=[
             {"role": "system", "content": system},
@@ -474,6 +769,7 @@ def run_one(
             "error": "selected_indices_not_a_list",
             "raw_response": raw[:2000],
             "k_effective": k_eff,
+            "candidates": candidates,
         }
 
     try:
@@ -487,15 +783,21 @@ def run_one(
             "error": str(e),
             "raw_response": raw[:2000],
             "k_effective": k_eff,
+            "candidates": candidates,
         }
 
-    excerpt = build_full_excerpt(traj, ordered)
+    if use_original_messages:
+        excerpt = build_full_excerpt_om(traj, ordered)
+    else:
+        excerpt = build_full_excerpt(traj, ordered)
     return {
         "query_id": str(traj.get("query_id", "")),
         "source_file": path.name,
         "selected_indices": ordered,
         "rationale": rationale,
         "excerpt": excerpt,
+        "candidates": candidates,
+        "correct_num_selected": len(ordered) == k_eff,
         "k_requested": k,
         "k_effective": k_eff,
     }
@@ -550,7 +852,7 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-tokens", type=int, default=4096)
     ap.add_argument("--top-p", type=float, default=0.95)
-    ap.add_argument("--preview-chars", type=int, default=400, help="Per-tool output preview length in catalog")
+    ap.add_argument("--preview-chars", type=int, default=1200, help="Per-tool output preview length in catalog")
     ap.add_argument("--context-max-chars", type=int, default=120_000, help="Cap full trajectory context in prompt")
     ap.add_argument("--context-reasoning-max-chars", type=int, default=0, help="Per reasoning block cap (0=none)")
     ap.add_argument("--context-tool-max-chars", type=int, default=500, help="Per tool result cap in context block")
@@ -558,6 +860,17 @@ def main() -> None:
         "--use-original-messages",
         action="store_true",
         help="Use original_messages from trajectory instead of the reformatted trajectory context",
+    )
+    ap.add_argument(
+        "--queries-tsv",
+        type=Path,
+        default=DEFAULT_BCP_QUERIES_TSV,
+        help=f"BCP topics TSV (query_id\\tquestion). Default: {DEFAULT_BCP_QUERIES_TSV}",
+    )
+    ap.add_argument(
+        "--no-queries-tsv",
+        action="store_true",
+        help="Do not load --queries-tsv; use only query/question fields from each trajectory JSON",
     )
 
     args = ap.parse_args()
@@ -599,6 +912,17 @@ def main() -> None:
 
     allowed = parse_tool_names_arg(args.tool_names)
 
+    query_by_id: Optional[dict[str, str]] = None
+    if not args.no_queries_tsv:
+        qp = args.queries_tsv
+        if qp.is_file():
+            query_by_id = load_query_id_to_text(qp)
+        else:
+            print(
+                f"Warning: queries TSV not found ({qp}); using trajectory query/question fields only.",
+                file=sys.stderr,
+            )
+
     model: Any = None
     gen_params: Any = None
     if not args.dry_run:
@@ -638,6 +962,7 @@ def main() -> None:
             context_tool_max=args.context_tool_max_chars,
             dry_run=args.dry_run,
             use_original_messages=args.use_original_messages,
+            query_by_id=query_by_id,
         )
 
     if args.dry_run:

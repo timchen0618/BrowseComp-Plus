@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import format_query, format_query_with_trajectory, format_query_with_traj_summary, format_query_for_planning, PROMPT_TRAJECTORY_SUMMARIZER
+from prompts import format_query, format_query_with_trajectory, format_query_with_traj_summary, format_query_for_planning
 from rich import print as rprint
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -21,6 +21,14 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from utils import extract_retrieved_docids_from_result
 
 from searcher.searchers import SearcherType
+from trajectory_utils import (
+    _load_and_validate_trajectories,
+    _load_trajectory_summaries,
+    _format_trajectory_for_prompt,
+    _format_original_messages_for_prompt,
+    call_trajectory_summarizer,
+    _format_original_messages_for_prompt_truncated,
+)
 
 
 class SearchToolHandler:
@@ -571,141 +579,6 @@ def _load_and_validate_plans(
     return plan_dict
 
 
-def _load_and_validate_trajectories(
-    trajectory_dir: str, query_tuples: list[tuple[str, str]]
-) -> dict[str, dict]:
-    """Load external trajectories from a directory of JSON files and validate against query list."""
-    traj_path = Path(trajectory_dir)
-    if not traj_path.is_dir():
-        raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
-
-    traj_dict: dict[str, dict] = {}
-    for json_file in sorted(traj_path.glob("*.json")):
-        try:
-            with json_file.open("r", encoding="utf-8") as f:
-                obj = json.load(f)
-            qid = str(obj.get("query_id", ""))
-            if qid:
-                traj_dict[qid] = obj
-        except Exception:
-            continue
-
-    query_ids = {qid for qid, _ in query_tuples}
-
-    missing = query_ids - set(traj_dict.keys())
-    if missing:
-        raise ValueError(
-            f"query IDs missing from trajectory directory: {sorted(missing)}"
-        )
-
-    # Filter to only the query IDs we need (trajectory dir may have more entries)
-    return {qid: traj_dict[qid] for qid in query_ids}
-
-
-def _load_trajectory_summaries(
-    summary_file: str, query_tuples: list[tuple[str, str]]
-) -> dict[str, str]:
-    """Load pre-computed trajectory summaries from a JSONL file.
-
-    Supports two formats:
-    - ``summarize_trajectories.py`` output: field ``summary`` (may have ``<trajectory_summary>`` tags)
-    - ``selected_tool_calls.jsonl`` style: field ``excerpt`` (plain text, no tags)
-    """
-    summaries: dict[str, str] = {}
-    with open(summary_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            qid = str(obj.get("query_id", ""))
-            if not qid:
-                continue
-            # Try "summary" first, then "excerpt"
-            text = obj.get("summary") or obj.get("excerpt") or ""
-            # Strip <trajectory_summary> tags if present
-            if "<trajectory_summary>" in text and "</trajectory_summary>" in text:
-                text = text.split("<trajectory_summary>", 1)[1].split("</trajectory_summary>", 1)[0]
-            summaries[qid] = text.strip()
-
-    query_ids = {qid for qid, _ in query_tuples}
-    missing = query_ids - set(summaries.keys())
-    if missing:
-        print(f"Warning: {len(missing)} query IDs missing from summary file: {sorted(missing)[:10]}...")
-
-    return {qid: summaries[qid] for qid in query_ids if qid in summaries}
-
-
-def _format_trajectory_for_prompt(
-    trajectory: dict,
-    max_chars: int = 0,
-    reasoning_max_chars: int = 0,
-    tool_output_max_chars: int = 500,
-) -> str:
-    """Serialize a trajectory's result steps into readable text for prompt prepending.
-
-    Args:
-        trajectory: The trajectory dict with a "result" list.
-        max_chars: If >0, truncate the final joined text to this many characters.
-        reasoning_max_chars: If >0, truncate each reasoning block to this many characters.
-        tool_output_max_chars: Truncate each tool result to this many characters (default 500).
-    """
-    parts = []
-    for step in trajectory.get("result", []):
-        stype = step.get("type")
-        if stype == "reasoning":
-            output = step.get("output", [])
-            text = " ".join(str(o) for o in output) if isinstance(output, list) else str(output)
-            text = text.strip()
-            if text:
-                if reasoning_max_chars > 0 and len(text) > reasoning_max_chars:
-                    text = text[:reasoning_max_chars] + "..."
-                parts.append(f"[Reasoning]: {text}")
-        elif stype == "tool_call":
-            tool_name = step.get("tool_name", "?")
-            args = step.get("arguments", "{}")
-            try:
-                args_dict = json.loads(args) if isinstance(args, str) else args
-                q = args_dict.get("user_query") or args_dict.get("query") or str(args)[:100]
-            except (json.JSONDecodeError, AttributeError):
-                q = str(args)[:100]
-            parts.append(f"[Tool call] {tool_name}: {q}")
-            output = step.get("output")
-            if output is not None:
-                out_str = json.dumps(output) if not isinstance(output, str) else output
-                limit = tool_output_max_chars
-                parts.append(f"[Tool result]: {out_str[:limit]}{'...' if len(out_str) > limit else ''}")
-        elif stype == "output_text":
-            text = str(step.get("output", "")).strip()
-            if text:
-                parts.append(f"[Final answer]: {text}")
-
-    result = "\n\n".join(parts) if parts else "(no trajectory steps)"
-    if max_chars > 0 and len(result) > max_chars:
-        result = result[:max_chars] + "\n\n... (trajectory truncated)"
-    return result
-
-
-def _format_original_messages_for_prompt(
-    trajectory: dict,
-    max_chars: int = 0,
-) -> str:
-    """Serialize a trajectory's original_messages into a plain string.
-
-    Dumps the entire original_messages list as a JSON string, preserving the
-    original structure without any reformatting.
-
-    Args:
-        trajectory: The trajectory dict with an "original_messages" list.
-        max_chars: If >0, truncate the final text to this many characters.
-    """
-    msgs = trajectory.get("original_messages", [])
-    result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
-    if max_chars > 0 and len(result) > max_chars:
-        result = result[:max_chars] + "\n\n... (messages truncated)"
-    return result
-
-
 def _assistant_text_from_message(message) -> str:
     """Prefer message.content; fall back to reasoning_content (vLLM GPT-OSS channel split)."""
     content = getattr(message, "content", None)
@@ -717,71 +590,15 @@ def _assistant_text_from_message(message) -> str:
     return ""
 
 
-def call_trajectory_summarizer(
-    client: openai.OpenAI,
-    model: str,
-    model_url: str,
-    question: str,
-    trajectory_text: str,
-    *,
-    max_tries: int = 5,
-    verbose: bool = False,
-    max_tokens: int = 8192,
-) -> str:
-    """Call the LLM to summarize a trajectory into a concise description."""
-    base_sleep_time = 1
-    messages = [
-        {"role": "system", "content": PROMPT_TRAJECTORY_SUMMARIZER},
-        {"role": "user", "content": f"Question: {question}\n\nTrajectory:\n{trajectory_text}"},
-    ]
-
-    if str(getattr(client, "base_url", "") or "").rstrip("/") == model_url.rstrip("/"):
-        summarizer_client = client
-    else:
-        summarizer_client = openai.OpenAI(base_url=model_url, api_key="EMPTY")
-
-    last_text = ""
-    for attempt in range(max_tries):
-        try:
-            chat_response = summarizer_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-            )
-            text = _assistant_text_from_message(chat_response.choices[0].message)
-            if not text:
-                if verbose:
-                    print(f"Warning: Summarizer attempt {attempt + 1} received an empty response.")
-            elif "<trajectory_summary>" not in text or "</trajectory_summary>" not in text:
-                last_text = text
-                if verbose:
-                    print(
-                        f"Warning: Summarizer attempt {attempt + 1} missing "
-                        "<trajectory_summary> tags, retrying..."
-                    )
-            else:
-                if verbose:
-                    print("Trajectory summarization successful")
-                return text
-        except Exception as e:
-            if verbose:
-                print(f"Summarizer error (attempt {attempt + 1}/{max_tries}): {e}")
-
-        if attempt < max_tries - 1:
-            sleep_time = min(
-                base_sleep_time * (2**attempt) + random.uniform(0, 1), 30
-            )
-            if verbose:
-                print(f"Retrying in {sleep_time:.2f} seconds...")
-            time.sleep(sleep_time)
-        else:
-            if last_text:
-                print("Trajectory summarizer: all retries exhausted, wrapping last response with tags")
-                return f"<trajectory_summary>\n{last_text}\n</trajectory_summary>"
-            print("Trajectory summarizer: all retries exhausted, returning empty summary")
-            return ""
-
-    return ""
+def _oss_summarize_llm_call(client: "openai.OpenAI", model: str, messages: list, max_tokens: int = 8192) -> str:
+    """Adapter that exposes the oss OpenAI client as a simple messages→text callable
+    for :func:`trajectory_utils.call_trajectory_summarizer`."""
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    return _assistant_text_from_message(resp.choices[0].message)
 
 
 def _parse_plan_from_response(response: str) -> str:
@@ -1052,7 +869,7 @@ def _process_tsv_dataset(
         """Build request, send and persist response for one query."""
         if args.planning and args.planning_trigger == "traj_orig_ext":
             traj = trajectories_by_id.get(qid, {})
-            traj_text = _format_original_messages_for_prompt(traj)
+            traj_text = _format_original_messages_for_prompt_truncated(traj, max_chars=args.max_chars, reasoning_max_chars=args.reasoning_max_chars, tool_output_max_chars=args.tool_output_max_chars)
             input_messages = [
                 {
                     "role": "user",
@@ -1061,10 +878,17 @@ def _process_tsv_dataset(
             ]
             if args.verbose:
                 print(f"[{qid}] Prepended original messages to prompt", flush=True)
+                print('--------------------------------')
+                print(input_messages)
+                print('--------------------------------')
         elif args.planning and args.planning_trigger == "traj_ext":
             traj = trajectories_by_id.get(qid, {})
-            traj_text = _format_trajectory_for_prompt(traj)
-            # traj_text = _format_trajectory_for_prompt(traj, tool_output_max_chars=5000)
+            traj_text = _format_trajectory_for_prompt(
+                traj,
+                max_chars=args.max_chars,
+                reasoning_max_chars=args.reasoning_max_chars,
+                tool_output_max_chars=args.tool_output_max_chars,
+            )
             input_messages = [
                 {
                     "role": "user",
@@ -1082,20 +906,17 @@ def _process_tsv_dataset(
                 traj = trajectories_by_id.get(qid, {})
                 traj_text = _format_trajectory_for_prompt(
                     traj,
-                    max_chars=400000,
-                    reasoning_max_chars=3000,
-                    tool_output_max_chars=3000,
+                    max_chars=args.max_chars,
+                    reasoning_max_chars=args.reasoning_max_chars,
+                    tool_output_max_chars=args.tool_output_max_chars,
                 )
                 if args.verbose:
                     print(f"[{qid}] Summarizing trajectory...", flush=True)
                 traj_summary = call_trajectory_summarizer(
-                    client,
-                    args.model,
-                    args.model_url,
+                    lambda msgs: _oss_summarize_llm_call(client, args.model, msgs, max_tokens=8192),
                     question=qtext,
                     trajectory_text=traj_text,
                     verbose=args.verbose,
-                    max_tokens=8192,
                 )
                 # get the summary text from the enclosed <trajectory_summary> tags
                 traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
@@ -1114,20 +935,19 @@ def _process_tsv_dataset(
                     print(f"[{qid}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
             else:
                 traj = trajectories_by_id.get(qid, {})
-                traj_text = _format_original_messages_for_prompt(
+                traj_text = _format_original_messages_for_prompt_truncated(
                     traj,
-                    max_chars=400000,
+                    max_chars=args.max_chars,
+                    reasoning_max_chars=args.reasoning_max_chars,
+                    tool_output_max_chars=args.tool_output_max_chars,
                 )
                 if args.verbose:
                     print(f"[{qid}] Summarizing original messages...", flush=True)
                 traj_summary = call_trajectory_summarizer(
-                    client,
-                    args.model,
-                    args.model_url,
+                    lambda msgs: _oss_summarize_llm_call(client, args.model, msgs, max_tokens=8192),
                     question=qtext,
                     trajectory_text=traj_text,
                     verbose=args.verbose,
-                    max_tokens=8192,
                 )
                 # get the summary text from the enclosed <trajectory_summary> tags
                 traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
@@ -1139,6 +959,9 @@ def _process_tsv_dataset(
             ]
             if args.verbose:
                 print(f"[{qid}] Prepended original-message summary to prompt", flush=True)
+                print('--------------------------------')
+                print(input_messages)
+                print('--------------------------------')
         else:
             input_messages = [
                 {"role": "user", "content": format_query(qtext, args.query_template)}
@@ -1395,6 +1218,24 @@ def main():
         type=str,
         default=None,
         help="Directory of JSON trajectory files to prepend to the prompt (required when --planning-trigger=traj_ext, traj_summary_ext, traj_orig_ext, or traj_summary_orig_ext)",
+    )
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=500000,
+        help="Max total characters when formatting an external trajectory into the prompt",
+    )
+    parser.add_argument(
+        "--reasoning-max-chars",
+        type=int,
+        default=3000,
+        help="Max characters of reasoning to keep per assistant message when formatting an external trajectory",
+    )
+    parser.add_argument(
+        "--tool-output-max-chars",
+        type=int,
+        default=5000,
+        help="Max characters of tool output to keep per tool call when formatting an external trajectory",
     )
     parser.add_argument(
         "--trajectory-summary-file",

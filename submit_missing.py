@@ -25,8 +25,6 @@ MISSING = {
     # "gpt-oss-120b_planning_retrospective_reinject_every_5_seed0":                     list(range(10)),
     # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_seed0":                     list(range(10)),
     # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_reinject_every_5_seed0":    list(range(10)),
-    # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
-    # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             list(range(10)),
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":              list(range(10)),
     # "gpt-oss-120b_planning_v4_seed0":                                                list(range(10)),
     # "gpt-oss-120b_planning_v4_reinject_every_5_seed0":                               list(range(10)),
@@ -34,13 +32,13 @@ MISSING = {
     # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                       list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
-    # "gpt-oss-120b_seed4":      list(range(10)),
-    # "gpt-oss-120b_seed5":      list(range(10)),
-    # "gpt-oss-120b_seed6":      list(range(10)),
     # "gpt-oss-120b_seed7":      list(range(10)),
-    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
-    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      list(range(10)),
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),
+    # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
+    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
+    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [0,1,2,3,4,5,6,7,8,9],  # complete
+    # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             [3,5,7],
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
 }
 
 # Missing runs for first50 split (no shards — each entry is a full re-run).
@@ -58,15 +56,15 @@ MISSING_FIRST50 = {
     # "gpt-oss-120b_planning_v2_revise_every_5_seed0":    None,
     # "gpt-oss-120b_planning_v3_revise_every_5_seed0":    None,
     # "gpt-oss-120b_planning_v4_revise_every_5_seed0":    None,
-    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
-    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,  # complete
     # "gpt-oss-120b_seed4":      None,
     # "gpt-oss-120b_seed5":      None,
     # "gpt-oss-120b_seed6":      None,
     # "gpt-oss-120b_seed7":      None,
-    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,
-    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      None,
+    # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     None,
+    # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             None,
+    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      None,  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      None,
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      None,  # complete
 }
 
 # Missing runs for frames/first50 split — gpt-oss-120b model.
@@ -143,15 +141,16 @@ def parse_run_name(name):
 
 
 def patch_sbatch(template: str, run_name: str, model: str, mode: str, seed: int,
-                 shards: list = None, dataset: str = "bcp") -> str:
+                 shards: list = None, dataset: str = "bcp", split: str = "full") -> str:
     content = template
 
     # Patch SLURM directives
     if shards is not None:
         array_str = ",".join(str(s) for s in sorted(shards))
         content = re.sub(r"#SBATCH --array=.*", f"#SBATCH --array={array_str}", content)
-    content = re.sub(r"#SBATCH --job-name=.*",   f"#SBATCH --job-name={run_name}_missing", content)
-    content = re.sub(r"#SBATCH --output=.*",     f"#SBATCH --output=sbatch_outputs/{run_name}_missing.out", content)
+    split_tag = f"_{split}" if split == "first50" else ""
+    content = re.sub(r"#SBATCH --job-name=.*",   f"#SBATCH --job-name={run_name}{split_tag}_missing", content)
+    content = re.sub(r"#SBATCH --output=.*",     f"#SBATCH --output=sbatch_outputs/{run_name}{split_tag}_missing.out", content)
 
     # Patch shell variables
     content = re.sub(r'^MODEL_NAME=".*?"', f'MODEL_NAME="{model}"', content, flags=re.MULTILINE)
@@ -175,15 +174,15 @@ def main():
     os.makedirs("sbatch_outputs", exist_ok=True)
 
     jobs = (
-        [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
         [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
+        [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
         [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
         [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()]
     )
 
     for run_name, shards, template, split, dataset in jobs:
         model, mode, seed = parse_run_name(run_name)
-        content = patch_sbatch(template, run_name, model, mode, seed, shards, dataset=dataset)
+        content = patch_sbatch(template, run_name, model, mode, seed, shards, dataset=dataset, split=split)
 
         print(f"\n{'='*60}")
         print(f"Run:    {run_name}")

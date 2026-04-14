@@ -1,36 +1,34 @@
 #!/bin/bash
-# Monitor run completion and submit eval.SBATCH when all 14 runs are done.
+# Monitor run completion and submit eval.SBATCH when all runs are done.
 # Usage: nohup bash monitor_and_eval.sh &
-# Checks every 5 minutes. Exits after submitting or after 7 days.
+# Check progress: tail -40 monitor_eval.log
 
-BASE="/scratch/hc3337/projects/BrowseComp-Plus/runs/bcp/Qwen3-Embedding-8B"
-SBATCH_FILE="/scratch/hc3337/projects/BrowseComp-Plus/eval.SBATCH"
-LOG="/scratch/hc3337/projects/BrowseComp-Plus/monitor_eval.log"
+PROJECT_DIR="/scratch/hc3337/projects/BrowseComp-Plus"
+BASE="${PROJECT_DIR}/runs/bcp/Qwen3-Embedding-8B"
+SBATCH_FILE="${PROJECT_DIR}/eval.SBATCH"
+LOG="${PROJECT_DIR}/monitor_eval.log"
 INTERVAL=300  # 5 minutes
-MAX_CHECKS=2016  # 7 days worth
+MAX_CHECKS=2016  # 7 days
 
-FULL_RUNS=(
-  planning_retrospective_reinject_every_5_seed0
-  planning_retrospective_seed0
-  planning_v1_after_steps_5_seed3
-  planning_v1_start_and_after_steps_5_seed3
-  planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0
-  planning_v3_start_ext_gemini_2.5_pro_seed0
-  planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0
-  planning_v4_start_ext_gemini_2.5_pro_seed0
-  traj_ext_gpt-oss-120b_seed0
-  traj_summary_ext_gpt-oss-120b_seed0
-  traj_summary_ext_selected_tools_gpt-oss-120b_seed0
+RUNS=(
+  "full/gpt-oss-120b/traj_orig_ext_gpt-oss-120b_seed0"
+  "full/gpt-oss-120b/traj_summary_orig_ext_gpt-oss-120b_seed0"
+  "full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0"
+  "first50/gpt-oss-120b/traj_orig_ext_gpt-oss-120b_seed0"
+  "first50/gpt-oss-120b/traj_summary_orig_ext_gpt-oss-120b_seed0"
+  "first50/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0"
 )
-
-FIRST50_RUNS=(
-  planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0
-  planning_v4_start_ext_gemini_2.5_pro_seed0
-  traj_summary_ext_selected_tools_gpt-oss-120b_seed0
+EXPECTED=(830 830 830 50 50 50)
+SHARD_REFS=(
+  "topics-qrels/bcp/bcp_10_shards/q_*"
+  "topics-qrels/bcp/bcp_10_shards/q_*"
+  "topics-qrels/bcp/bcp_10_shards/q_*"
+  "topics-qrels/bcp/queries_first50.tsv"
+  "topics-qrels/bcp/queries_first50.tsv"
+  "topics-qrels/bcp/queries_first50.tsv"
 )
 
 check_count=0
-
 while [ $check_count -lt $MAX_CHECKS ]; do
   check_count=$((check_count + 1))
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -38,32 +36,32 @@ while [ $check_count -lt $MAX_CHECKS ]; do
 
   echo "[$timestamp] Check #$check_count" >> "$LOG"
 
-  for run in "${FULL_RUNS[@]}"; do
-    count=$(ls "$BASE/full/gpt-oss-120b/$run"/*.json 2>/dev/null | wc -l)
-    if [ "$count" -ne 830 ]; then
-      echo "  INCOMPLETE: $run ($count/830)" >> "$LOG"
-      all_complete=false
-    fi
-  done
-
-  for run in "${FIRST50_RUNS[@]}"; do
-    count=$(ls "$BASE/first50/gpt-oss-120b/$run"/*.json 2>/dev/null | wc -l)
-    if [ "$count" -ne 50 ]; then
-      echo "  INCOMPLETE: $run ($count/50) [first50]" >> "$LOG"
+  for i in "${!RUNS[@]}"; do
+    count=$(ls "$BASE/${RUNS[$i]}"/*.json 2>/dev/null | wc -l)
+    if [ "$count" -ne "${EXPECTED[$i]}" ]; then
+      echo "  INCOMPLETE: ${RUNS[$i]} ($count/${EXPECTED[$i]})" >> "$LOG"
+      shard_output=$(cd "$PROJECT_DIR" && python src_utils/find_missing_ids.py \
+        --input_dir "$BASE/${RUNS[$i]}" \
+        --reference_file "${SHARD_REFS[$i]}" 2>/dev/null \
+        | grep -E "^\*\*\*Missing")
+      if [ -n "$shard_output" ]; then
+        while IFS= read -r line; do
+          echo "    $line" >> "$LOG"
+        done <<< "$shard_output"
+      fi
       all_complete=false
     fi
   done
 
   if [ "$all_complete" = true ]; then
-    echo "[$timestamp] ALL RUNS COMPLETE. Submitting eval.SBATCH..." >> "$LOG"
-    sbatch_output=$(sbatch "$SBATCH_FILE" 2>&1)
-    echo "[$timestamp] sbatch output: $sbatch_output" >> "$LOG"
-    echo "[$timestamp] Monitor exiting." >> "$LOG"
+    echo "[$timestamp] ALL COMPLETE. Submitting eval.SBATCH..." >> "$LOG"
+    sbatch_output=$(cd "$PROJECT_DIR" && sbatch "$SBATCH_FILE" 2>&1)
+    echo "[$timestamp] sbatch: $sbatch_output" >> "$LOG"
     exit 0
   fi
 
   sleep $INTERVAL
 done
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Max checks reached (7 days). Exiting without submitting." >> "$LOG"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Timed out after 7 days." >> "$LOG"
 exit 1

@@ -33,8 +33,17 @@ from tongyi_utils.prompts import (
     SYSTEM_PROMPT_SEARCH_ONLY_REFINED,
     SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING,
     SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING,
+    TRAJECTORY_SYSTEM_NOTE,
+    TRAJ_SUMMARY_SYSTEM_NOTE,
+    format_query_with_trajectory,
+    format_query_with_traj_summary,
 )
 from tongyi_utils.tool_search import SearchToolHandler
+from trajectory_utils import (
+    _format_tongyi_trajectory_for_prompt,
+    _format_original_messages_for_prompt,
+    call_trajectory_summarizer,
+)
 
 OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
@@ -158,7 +167,10 @@ class MultiTurnReactAgent(FnCallAgent):
                  planning_trigger: Optional[str] = "start",
                  planning_steps: Optional[int] = 5,
                  plan_reinject_every: Optional[int] = 0,
+                 plan_revise_every: Optional[int] = 0,
                  plans_by_id: Optional[dict] = None,
+                 trajectories_by_id: Optional[dict] = None,
+                 summaries_by_id: Optional[dict] = None,
                  plan_prompt: Optional[str] = None,
                  plan_prompt_mid: Optional[str] = None,
                  **kwargs):
@@ -174,7 +186,10 @@ class MultiTurnReactAgent(FnCallAgent):
         self.planning_trigger = planning_trigger if planning else "start"
         self.planning_steps = planning_steps or 5
         self.plan_reinject_every = plan_reinject_every or 0
+        self.plan_revise_every = plan_revise_every or 0
         self.plans_by_id = plans_by_id or {}
+        self.trajectories_by_id = trajectories_by_id or {}
+        self.summaries_by_id = summaries_by_id or {}
         if self.planning:
             print(f"Planning mode enabled (trigger={self.planning_trigger}, steps={self.planning_steps})", flush=True)
             self.planner_prompt = plan_prompt if plan_prompt is not None else PROMPT_PLANNER
@@ -314,12 +329,106 @@ Based on the question and conversation history above, output the revised plan wi
         self.user_prompt = question
         system_prompt = self.system_prompt
         cur_date = today_date()
-        system_prompt = system_prompt + str(cur_date)
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
+
+        ## Trajectory modes: inject the matching system-prompt note *before*
+        ## the trailing "Current date: " footer so the note remains part of
+        ## the main prompt body.
+        query_id = data.get("query_id", "")
+        traj_note = ""
+        if self.planning and self.planning_trigger in (
+            "traj_ext",
+            "traj_orig_ext",
+            "traj_summary_ext",
+            "traj_summary_orig_ext",
+        ):
+            if self.planning_trigger in ("traj_ext", "traj_orig_ext"):
+                traj_note = TRAJECTORY_SYSTEM_NOTE
+            else:
+                traj_note = TRAJ_SUMMARY_SYSTEM_NOTE
+
+        if traj_note:
+            idx = system_prompt.rfind("Current date:")
+            if idx >= 0:
+                head = system_prompt[:idx].rstrip()
+                system_prompt = head + "\n\n" + traj_note + "\n\nCurrent date: " + str(cur_date)
+            else:
+                system_prompt = system_prompt + "\n\n" + traj_note + "\n\n" + str(cur_date)
+        else:
+            system_prompt = system_prompt + str(cur_date)
+
+        ## Build initial user message — default is the raw question, trajectory
+        ## modes wrap it in a template with the trajectory / summary content.
+        user_content = question
+        if self.planning and self.planning_trigger in (
+            "traj_ext",
+            "traj_orig_ext",
+            "traj_summary_ext",
+            "traj_summary_orig_ext",
+        ):
+            if self.planning_trigger == "traj_ext":
+                traj = self.trajectories_by_id.get(query_id, {})
+                traj_text = _format_tongyi_trajectory_for_prompt(traj)
+                user_content = format_query_with_trajectory(question, traj_text)
+                print(f"[{query_id}] Prepended external trajectory to prompt", flush=True)
+            elif self.planning_trigger == "traj_orig_ext":
+                traj = self.trajectories_by_id.get(query_id, {})
+                if "original_messages" not in traj or not traj.get("original_messages"):
+                    raise ValueError(
+                        f"traj_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
+                        f"rerun the source with --store-raw so original_messages gets persisted."
+                    )
+                traj_text = _format_original_messages_for_prompt(traj)
+                user_content = format_query_with_trajectory(question, traj_text)
+                print(f"[{query_id}] Prepended original messages to prompt", flush=True)
+            elif self.planning_trigger == "traj_summary_ext":
+                if query_id in self.summaries_by_id:
+                    traj_summary = self.summaries_by_id[query_id]
+                    print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+                else:
+                    traj = self.trajectories_by_id.get(query_id, {})
+                    traj_text = _format_tongyi_trajectory_for_prompt(
+                        traj,
+                        max_chars=400000,
+                        reasoning_max_chars=3000,
+                        tool_output_max_chars=3000,
+                    )
+                    print(f"[{query_id}] Summarizing trajectory...", flush=True)
+                    traj_summary = call_trajectory_summarizer(
+                        lambda msgs: self.call_server(msgs, main_agent_port, model_str="main_agent"),
+                        question=question,
+                        trajectory_text=traj_text,
+                    )
+                    traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+                user_content = format_query_with_traj_summary(question, traj_summary)
+                print(f"[{query_id}] Prepended trajectory summary to prompt", flush=True)
+            elif self.planning_trigger == "traj_summary_orig_ext":
+                if query_id in self.summaries_by_id:
+                    traj_summary = self.summaries_by_id[query_id]
+                    print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+                else:
+                    traj = self.trajectories_by_id.get(query_id, {})
+                    if "original_messages" not in traj or not traj.get("original_messages"):
+                        raise ValueError(
+                            f"traj_summary_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
+                            f"rerun the source with --store-raw so original_messages gets persisted."
+                        )
+                    traj_text = _format_original_messages_for_prompt(traj, max_chars=400000)
+                    print(f"[{query_id}] Summarizing original messages...", flush=True)
+                    traj_summary = call_trajectory_summarizer(
+                        lambda msgs: self.call_server(msgs, main_agent_port, model_str="main_agent"),
+                        question=question,
+                        trajectory_text=traj_text,
+                    )
+                    traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+                user_content = format_query_with_traj_summary(question, traj_summary)
+                print(f"[{query_id}] Prepended original-message summary to prompt", flush=True)
+
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
         mid_planning_done = False
         last_reinject_at = 0  # iteration count at last plan re-injection
+        last_revise_at = 0  # iteration count at last plan revision
         injected_plan_text = ""
 
         ## Start Planning (oss_client structure: start, after_steps, start_and_after_steps, start_ext).
@@ -332,7 +441,6 @@ Based on the question and conversation history above, output the revised plan wi
                 injected_plan_text = _parse_plan_from_response(planner_response)
                 print("Planning response: ", injected_plan_text, flush=True)
             elif self.planning_trigger == "start_ext":
-                query_id = data.get("query_id", "")
                 plan_output = self.plans_by_id.get(query_id, "")
                 plan_messages = _inject_plan_into_messages(plan_output)
                 messages.extend(plan_messages)
@@ -455,6 +563,23 @@ Based on the question and conversation history above, output the revised plan wi
                     })
                     last_reinject_at = round
                     print(f"Re-injected plan reminder at iteration {round}", flush=True)
+
+                ## Periodic plan revision: call the mid-planner to produce a revised plan.
+                revise_every = getattr(self, 'plan_revise_every', 0)
+                if (
+                    self.planning
+                    and revise_every > 0
+                    and round - last_revise_at >= revise_every
+                ):
+                    print(f"Plan revision triggered at iteration {round}...", flush=True)
+                    planner_response = self.call_planner_mid(question, messages, planning_port)
+                    plan_messages = _inject_plan_into_messages(planner_response)
+                    messages.extend(plan_messages)
+                    revised_text = _parse_plan_from_response(planner_response)
+                    if revised_text:
+                        injected_plan_text = revised_text
+                    last_revise_at = round
+                    print(f"Injected revised plan at iteration {round}", flush=True)
 
             total_tool_call_time += (time.time() - start_tool_call_time)
                 
