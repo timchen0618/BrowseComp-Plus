@@ -4,16 +4,18 @@ import argparse
 import csv
 import json
 import os
-import random
 import sys
-import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 import openai
-from prompts import format_query, format_query_with_trajectory, format_query_with_traj_summary, format_query_for_planning
-from rich import print as rprint
+from prompts import (
+    format_query,
+    format_query_with_trajectory,
+    format_query_with_traj_summary,
+)
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -25,10 +27,25 @@ from trajectory_utils import (
     _load_and_validate_trajectories,
     _load_trajectory_summaries,
     _format_trajectory_for_prompt,
-    _format_original_messages_for_prompt,
-    call_trajectory_summarizer,
     _format_original_messages_for_prompt_truncated,
+    call_trajectory_summarizer,
 )
+from planning_utils import (
+    parse_plan_from_response,
+    inject_plan_into_messages,
+    load_and_validate_plans,
+    append_plan_snapshot,
+    run_planner_with_retries,
+)
+
+
+TRAJ_TRIGGERS = (
+    "traj_ext",
+    "traj_orig_ext",
+    "traj_summary_ext",
+    "traj_summary_orig_ext",
+)
+TRAJ_SUMMARY_TRIGGERS = ("traj_summary_ext", "traj_summary_orig_ext")
 
 
 class SearchToolHandler:
@@ -141,278 +158,12 @@ class SearchToolHandler:
         return json.dumps(result, indent=2)
 
 
-def _sanitize_input_items(items: list) -> list:
-    """Remove channel/recipient keys with None values from input items.
-    vLLM gpt-oss Responses API rejects items with 'Unknown channel: None' / 'Unknown recipient: None'.
-    Output items from the API may include these fields; we strip them before sending back as input.
-    """
-    out = []
-    for item in items:
-        if not isinstance(item, dict):
-            out.append(item)
-            continue
-        cleaned = {k: v for k, v in item.items() if not (k in ("channel", "recipient") and v is None)}
-        if "content" in cleaned and isinstance(cleaned["content"], list):
-            cleaned["content"] = [
-                {k: v for k, v in c.items() if not (k in ("channel", "recipient") and v is None)}
-                if isinstance(c, dict) else c
-                for c in cleaned["content"]
-            ]
-        out.append(cleaned)
-    return out
-
-
-def run_conversation_with_tools(
-    client: openai.OpenAI,
-    initial_request: dict,
-    tool_handler: SearchToolHandler,
-    max_iterations: int = 100,
-    verbose: bool = False,
-    planning_config: dict | None = None,
-):
-    tool_usage = {}
-    messages = initial_request["input"]
-    iteration = 1
-    mid_planning_done = False
-    last_reinject_at = 0  # iteration count at last static plan reminder
-    last_revise_at = 0  # iteration count at last planner-based plan revision
-    initial_plan = planning_config.get("plan_text", "") if planning_config else None
-
-    while iteration <= max_iterations:
-        try:
-            request = initial_request.copy()
-            # request["input"] = _sanitize_input_items(messages)
-            request["input"] = messages
-            # #region agent log
-            _payload_bytes = len(json.dumps(request, default=str).encode("utf-8"))
-            _input_count = len(messages)
-            _input_types = [m.get("type") or m.get("role", "?") for m in messages[:10]]
-            open("/scratch/hc3337/projects/BrowseComp-Plus/.cursor/debug-f24dbd.log", "a").write(
-                json.dumps({"id":"pre_call","timestamp":int(time.time()*1000),"location":"oss_client.py:156","message":"Before responses.create","data":{"iteration":iteration,"model":request.get("model"),"input_count":_input_count,"input_types":_input_types,"payload_bytes":_payload_bytes,"has_reasoning":"reasoning" in request},"hypothesisId":"H1_H2_H5"}) + "\n"
-            )
-            # #endregion
-            response = client.responses.create(**request)
-        except Exception as e:
-            # #region agent log
-            _err_str = str(e)
-            _err_type = type(e).__name__
-            _body = getattr(e, "body", None) or getattr(e, "response", None)
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    _body = e.response.json() if hasattr(e.response, "json") else str(e.response)
-                except Exception:
-                    _body = str(getattr(e.response, "text", ""))
-            open("/scratch/hc3337/projects/BrowseComp-Plus/.cursor/debug-f24dbd.log", "a").write(
-                json.dumps({"id":"err_400","timestamp":int(time.time()*1000),"location":"oss_client.py:165","message":"400/API error caught","data":{"iteration":iteration,"model":request.get("model"),"err_type":_err_type,"err_str":_err_str[:500],"response_body":str(_body)[:800] if _body else None},"hypothesisId":"H5"}) + "\n"
-            )
-            # #endregion
-            if verbose:
-                print(f"Error: {e}")
-                rprint(f"Request: {request}")
-            iteration += 1
-            continue
-
-        response_dict = response.model_dump(mode="python")
-        messages.extend(response_dict["output"])
-
-        if (
-            len(response_dict["output"]) >= 1
-            and response_dict["output"][-1]["type"] == "reasoning"
-        ):
-            messages.pop()
-            continue
-
-        function_calls = [
-            item for item in response_dict["output"] if item["type"] == "function_call"
-        ]
-
-        if (not function_calls) or ("content" in response_dict["output"][-1] and (response_dict["output"][-1]["content"][0]["type"] == "output_text")):
-            return messages, tool_usage, "completed"
-
-        new_messages = messages.copy()
-
-        for tool_call in function_calls:
-            try:
-                arguments = json.loads(tool_call["arguments"])
-                result = tool_handler.execute_tool(tool_call["name"], arguments)
-                tool_usage[tool_call["name"]] = tool_usage.get(tool_call["name"], 0) + 1
-
-                new_messages.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": tool_call["call_id"],
-                        "output": result,
-                    }
-                )
-
-            except Exception as e:
-                error_msg = f"Error executing {tool_call['name']}: {str(e)}"
-                new_messages.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": tool_call["call_id"],
-                        "output": error_msg,
-                    }
-                )
-
-        total_tools = sum(tool_usage.values())
-        mid_planning_this_iter = False
-        if (
-            planning_config
-            and planning_config.get("trigger") == "after_steps"
-            and total_tools >= planning_config.get("steps", 5)
-            and not mid_planning_done
-        ):
-            if verbose:
-                print("Mid-conversation planning triggered...")
-            planner_response = call_planner_mid(
-                client,
-                planning_model=planning_config["planning_model"],
-                planning_url=planning_config["planning_url"],
-                raw_question=planning_config["raw_question"],
-                messages=new_messages,
-                plan_mid_system_prompt=planning_config["plan_mid_system_prompt"],
-                verbose=planning_config.get("verbose", False),
-            )
-            plan_messages = _inject_plan_into_messages(planner_response)
-            new_messages.extend(plan_messages)
-            mid_parsed = _parse_plan_from_response(planner_response)
-            _append_plan_snapshot(planning_config, "mid", mid_parsed, iteration)
-            mid_planning_done = True
-            mid_planning_this_iter = True
-            if verbose:
-                print("Injected revised plan into messages")
-
-        # --- Periodic planner revision (optional; same injection shape as mid-planning) ---
-        revise_every = (planning_config or {}).get("revise_every", 0)
-        plan_text = (planning_config or {}).get("plan_text", "")
-        pc = planning_config or {}
-        if (
-            revise_every > 0
-            and plan_text
-            and iteration - last_revise_at >= revise_every
-            and not mid_planning_this_iter
-        ):
-            can_revise = (
-                pc.get("plan_mid_system_prompt")
-                and pc.get("planning_model")
-                and pc.get("raw_question") is not None
-            )
-            if can_revise:
-                planner_response = call_planner_mid(
-                    client,
-                    planning_model=pc["planning_model"],
-                    planning_url=pc["planning_url"],
-                    raw_question=pc["raw_question"],
-                    messages=new_messages,
-                    plan_mid_system_prompt=pc["plan_mid_system_prompt"],
-                    verbose=pc.get("verbose", False),
-                    initial_plan=initial_plan,
-                )
-                if planner_response and planner_response.strip():
-                    plan_messages = _inject_plan_into_messages(planner_response)
-                    new_messages.extend(plan_messages)
-                    revised = _parse_plan_from_response(planner_response)
-                    if revised and planning_config is not None:
-                        _append_plan_snapshot(planning_config, "revise", revised, iteration)
-                    last_revise_at = iteration
-                    if verbose:
-                        print(f"Planner revised plan at iteration {iteration}")
-                elif verbose:
-                    print(
-                        f"Plan revise: planner returned empty at iteration {iteration}; skipping injection"
-                    )
-            elif verbose:
-                print(
-                    f"Plan revise skipped at iteration {iteration}: missing planner config"
-                )
-
-        # --- Static plan reminder (re-inject current plan text without calling the planner) ---
-        reinject_every = (planning_config or {}).get("reinject_every", 0)
-        plan_text = (planning_config or {}).get("plan_text", "")
-        if (
-            reinject_every > 0
-            and plan_text
-            and iteration - last_reinject_at >= reinject_every
-            and not mid_planning_this_iter
-        ):
-            new_messages.append({
-                "role": "user",
-                "content": (
-                    "Reminder — here is the plan you were given at the start. "
-                    "Use it to guide your next steps:\n"
-                    + plan_text
-                ),
-            })
-            last_reinject_at = iteration
-            if verbose:
-                print(f"Re-injected plan reminder at iteration {iteration}")
-
-        messages = new_messages
-        iteration += 1
-
-    return messages, tool_usage, "incomplete"
-
-
-def call_planner(
-    client: openai.OpenAI,
-    planning_model: str,
-    planning_url: str,
-    raw_question: str,
-    *,
-    plan_system_prompt: str,
-    max_tries: int = 10,
-    verbose: bool = False,
-) -> str:
-    """Call the planner model to produce a step sequence for the question."""
-    base_sleep_time = 1
-    messages = [
-        {"role": "system", "content": plan_system_prompt},
-        {"role": "user", "content": raw_question},
-    ]
-
-    if str(getattr(client, "base_url", "") or "").rstrip("/") == planning_url.rstrip(
-        "/"
-    ):
-        planner_client = client
-    else:
-        planner_client = openai.OpenAI(base_url=planning_url, api_key="EMPTY")
-
-    for attempt in range(max_tries):
-        try:
-            chat_response = planner_client.chat.completions.create(
-                model=planning_model,
-                messages=messages,
-                max_tokens=4096,
-            )
-            content = chat_response.choices[0].message.content
-            if content and content.strip():
-                if verbose:
-                    print("Planning call successful")
-                return content.strip()
-            if verbose:
-                print(f"Warning: Attempt {attempt + 1} received an empty response.")
-        except Exception as e:
-            if verbose:
-                print(f"Planning error (attempt {attempt + 1}/{max_tries}): {e}")
-
-        if attempt < max_tries - 1:
-            sleep_time = min(
-                base_sleep_time * (2**attempt) + random.uniform(0, 1), 30
-            )
-            if verbose:
-                print(f"Retrying in {sleep_time:.2f} seconds...")
-            time.sleep(sleep_time)
-        else:
-            print("Planning: all retries exhausted, returning empty plan")
-            return ""
-
-    return ""
-
+# --- Planner helpers ---------------------------------------------------------
 
 REASONING_TRUNCATE = 1000
 TOOL_OUTPUT_TRUNCATE = 1000
 CONTENT_TRUNCATE = 1000
+
 
 def _serialize_messages_for_planner(messages: list) -> str:
     """Build a readable string from Responses API messages for the planner."""
@@ -425,13 +176,17 @@ def _serialize_messages_for_planner(messages: list) -> str:
         if role == "user":
             content = item.get("content", "")
             if isinstance(content, str):
-                parts.append(f"[User]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
+                parts.append(
+                    f"[User]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}"
+                )
             else:
                 parts.append("[User]: (structured content)")
         elif role == "assistant":
             content = item.get("content", "")
             if isinstance(content, str):
-                parts.append(f"[Assistant]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
+                parts.append(
+                    f"[Assistant]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}"
+                )
             else:
                 parts.append("[Assistant]: (structured content)")
         elif itype == "reasoning":
@@ -444,7 +199,11 @@ def _serialize_messages_for_planner(messages: list) -> str:
             else:
                 text_parts = []
                 for part in item.get("content", []) or []:
-                    if isinstance(part, dict) and part.get("type") in {"reasoning_text", "output_text", "text"}:
+                    if isinstance(part, dict) and part.get("type") in {
+                        "reasoning_text",
+                        "output_text",
+                        "text",
+                    }:
                         text_parts.append(str(part.get("text", "")))
                 text = " ".join(text_parts)
             text = (text[:REASONING_TRUNCATE] + "...") if len(text) > REASONING_TRUNCATE else text
@@ -473,8 +232,42 @@ def _serialize_messages_for_planner(messages: list) -> str:
                     text_parts.append(str(part.get("text", "")))
             text = " ".join(text_parts).strip()
             if text:
-                parts.append(f"[Message]: {text[:CONTENT_TRUNCATE]}{'...' if len(text) > CONTENT_TRUNCATE else ''}")
+                parts.append(
+                    f"[Message]: {text[:CONTENT_TRUNCATE]}{'...' if len(text) > CONTENT_TRUNCATE else ''}"
+                )
     return "\n\n".join(parts) if parts else "(no history)"
+
+
+def _planner_client(client: openai.OpenAI, planning_url: str) -> openai.OpenAI:
+    """Reuse the main client if it already points at the planner URL, else make a new one."""
+    if str(getattr(client, "base_url", "") or "").rstrip("/") == planning_url.rstrip("/"):
+        return client
+    return openai.OpenAI(base_url=planning_url, api_key="EMPTY")
+
+
+def call_planner(
+    client: openai.OpenAI,
+    planning_model: str,
+    planning_url: str,
+    raw_question: str,
+    *,
+    plan_system_prompt: str,
+    max_tries: int = 10,
+    verbose: bool = False,
+) -> str:
+    """Call the planner model to produce a step sequence for the question."""
+    messages = [
+        {"role": "system", "content": plan_system_prompt},
+        {"role": "user", "content": raw_question},
+    ]
+    return run_planner_with_retries(
+        _planner_client(client, planning_url),
+        planning_model,
+        messages,
+        max_tries=max_tries,
+        log_label="Planning",
+        verbose=verbose,
+    )
 
 
 def call_planner_mid(
@@ -489,94 +282,221 @@ def call_planner_mid(
     verbose: bool = False,
     initial_plan: str | None = None,
 ) -> str:
-    """Call the planner with conversation history to produce a revised plan. If an initial plan is provided, use it as the starting point for the revision."""
+    """Call the planner with conversation history to produce a revised plan."""
     conv_str = _serialize_messages_for_planner(messages)
-    
-    print(f"Conversation history so far: ------------------------------------------\n\n{conv_str}")
-    
+
     if initial_plan:
-        user_content = f"""## Original question\n{raw_question}\n\n## Conversation history so far\n{conv_str}\n\n## Initial plan:\n{initial_plan}\n\nBased on the question and conversation history above, output the revised plan within <plan></plan> tags."""
+        user_content = (
+            f"## Original question\n{raw_question}\n\n"
+            f"## Conversation history so far\n{conv_str}\n\n"
+            f"## Initial plan:\n{initial_plan}\n\n"
+            "Based on the question and conversation history above, output the revised plan within <plan></plan> tags."
+        )
     else:
-        user_content = f"""## Original question\n{raw_question}\n\n## Conversation history so far\n{conv_str}\n\nBased on the question and conversation history above, output the revised plan within <plan></plan> tags."""
+        user_content = (
+            f"## Original question\n{raw_question}\n\n"
+            f"## Conversation history so far\n{conv_str}\n\n"
+            "Based on the question and conversation history above, output the revised plan within <plan></plan> tags."
+        )
     planner_messages = [
         {"role": "system", "content": plan_mid_system_prompt},
         {"role": "user", "content": user_content},
     ]
+    return run_planner_with_retries(
+        _planner_client(client, planning_url),
+        planning_model,
+        planner_messages,
+        max_tries=max_tries,
+        log_label="Mid-planning",
+        verbose=verbose,
+    )
 
-    if str(getattr(client, "base_url", "") or "").rstrip("/") == planning_url.rstrip("/"):
-        planner_client = client
-    else:
-        planner_client = openai.OpenAI(base_url=planning_url, api_key="EMPTY")
 
-    base_sleep_time = 1
-    for attempt in range(max_tries):
+def _call_mid_planner_and_inject(
+    client: openai.OpenAI,
+    planning_config: dict,
+    messages: list,
+    iteration: int,
+    *,
+    source: str,
+    initial_plan: str | None,
+    verbose: bool,
+) -> bool:
+    """Call mid-planner, inject plan messages into ``messages`` in place, and snapshot.
+
+    Returns True if a plan was injected.
+    """
+    planner_response = call_planner_mid(
+        client,
+        planning_model=planning_config["planning_model"],
+        planning_url=planning_config["planning_url"],
+        raw_question=planning_config["raw_question"],
+        messages=messages,
+        plan_mid_system_prompt=planning_config["plan_mid_system_prompt"],
+        verbose=planning_config.get("verbose", False),
+        initial_plan=initial_plan,
+    )
+    if not (planner_response and planner_response.strip()):
+        if verbose:
+            print(f"Mid-planner returned empty at iteration {iteration}; skipping injection")
+        return False
+    messages.extend(inject_plan_into_messages(planner_response))
+    parsed = parse_plan_from_response(planner_response)
+    append_plan_snapshot(planning_config, source, parsed, iteration)
+    if verbose:
+        print(f"Injected {source} plan at iteration {iteration}")
+    return True
+
+
+# --- Main agent loop ---------------------------------------------------------
+
+def run_conversation_with_tools(
+    client: openai.OpenAI,
+    initial_request: dict,
+    tool_handler: SearchToolHandler,
+    max_iterations: int = 100,
+    verbose: bool = False,
+    planning_config: dict | None = None,
+):
+    tool_usage: dict[str, int] = {}
+    messages = initial_request["input"]
+    iteration = 1
+    mid_planning_done = False
+    last_reinject_at = 0
+    last_revise_at = 0
+    pc = planning_config or {}
+    initial_plan = pc.get("plan_text", "") or None
+
+    while iteration <= max_iterations:
         try:
-            chat_response = planner_client.chat.completions.create(
-                model=planning_model,
-                messages=planner_messages,
-                max_tokens=4096,
-            )
-            content = chat_response.choices[0].message.content
-            if content and content.strip():
-                if verbose:
-                    print("Mid-conversation planning call successful")
-                return content.strip()
-            if verbose:
-                print(f"Warning: Attempt {attempt + 1} received an empty response.")
+            request = initial_request.copy()
+            request["input"] = messages
+            response = client.responses.create(**request)
         except Exception as e:
             if verbose:
-                print(f"Mid-planning error (attempt {attempt + 1}/{max_tries}): {e}")
+                print(f"Error: {e}")
+            iteration += 1
+            continue
 
-        if attempt < max_tries - 1:
-            sleep_time = min(base_sleep_time * (2**attempt) + random.uniform(0, 1), 30)
+        response_dict = response.model_dump(mode="python")
+        messages.extend(response_dict["output"])
+
+        if (
+            len(response_dict["output"]) >= 1
+            and response_dict["output"][-1]["type"] == "reasoning"
+        ):
+            messages.pop()
+            continue
+
+        function_calls = [
+            item for item in response_dict["output"] if item["type"] == "function_call"
+        ]
+
+        last_item = response_dict["output"][-1]
+        if (not function_calls) or (
+            "content" in last_item
+            and last_item["content"][0]["type"] == "output_text"
+        ):
+            return messages, tool_usage, "completed"
+
+        new_messages = messages.copy()
+
+        for tool_call in function_calls:
+            try:
+                arguments = json.loads(tool_call["arguments"])
+                result = tool_handler.execute_tool(tool_call["name"], arguments)
+                tool_usage[tool_call["name"]] = tool_usage.get(tool_call["name"], 0) + 1
+                new_messages.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call["call_id"],
+                        "output": result,
+                    }
+                )
+            except Exception as e:
+                new_messages.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call["call_id"],
+                        "output": f"Error executing {tool_call['name']}: {str(e)}",
+                    }
+                )
+
+        # Mid-conversation planning (one-shot at N tool calls).
+        total_tools = sum(tool_usage.values())
+        mid_planning_this_iter = False
+        if (
+            pc.get("trigger") == "after_steps"
+            and total_tools >= pc.get("steps", 5)
+            and not mid_planning_done
+        ):
+            if _call_mid_planner_and_inject(
+                client,
+                pc,
+                new_messages,
+                iteration,
+                source="mid",
+                initial_plan=None,
+                verbose=verbose,
+            ):
+                mid_planning_done = True
+                mid_planning_this_iter = True
+
+        # Periodic planner revision.
+        revise_every = pc.get("revise_every", 0)
+        plan_text = pc.get("plan_text", "")
+        if (
+            revise_every > 0
+            and plan_text
+            and iteration - last_revise_at >= revise_every
+            and not mid_planning_this_iter
+            and pc.get("plan_mid_system_prompt")
+            and pc.get("planning_model")
+            and pc.get("raw_question") is not None
+        ):
+            if _call_mid_planner_and_inject(
+                client,
+                pc,
+                new_messages,
+                iteration,
+                source="revise",
+                initial_plan=initial_plan,
+                verbose=verbose,
+            ):
+                last_revise_at = iteration
+
+        # Static plan reminder.
+        reinject_every = pc.get("reinject_every", 0)
+        plan_text = pc.get("plan_text", "")
+        if (
+            reinject_every > 0
+            and plan_text
+            and iteration - last_reinject_at >= reinject_every
+            and not mid_planning_this_iter
+        ):
+            new_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Reminder — here is the plan you were given at the start. "
+                        "Use it to guide your next steps:\n" + plan_text
+                    ),
+                }
+            )
+            last_reinject_at = iteration
             if verbose:
-                print(f"Retrying in {sleep_time:.2f} seconds...")
-            time.sleep(sleep_time)
-        else:
-            print("Mid-planning: all retries exhausted, returning empty plan")
-            return ""
+                print(f"Re-injected plan reminder at iteration {iteration}")
 
-    return ""
+        messages = new_messages
+        iteration += 1
+
+    return messages, tool_usage, "incomplete"
 
 
-def _load_and_validate_plans(
-    plan_file: str, query_tuples: list[tuple[str, str]]
-) -> dict[str, str]:
-    """Load pre-generated plans from JSONL and validate against query list."""
-    plan_path = Path(plan_file)
-    if not plan_path.is_file():
-        raise FileNotFoundError(f"Plan file not found: {plan_file}")
+# --- Trajectory input builders ----------------------------------------------
 
-    plan_dict: dict[str, str] = {}
-    with plan_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            qid = str(obj.get("query_id", ""))
-            output = obj.get("output", "")
-            if qid:
-                plan_dict[qid] = output if isinstance(output, str) else json.dumps(output)
-
-    query_ids = {qid for qid, _ in query_tuples}
-
-    if len(plan_dict) != len(query_tuples):
-        raise ValueError(
-            f"Plan file has {len(plan_dict)} entries but query file has {len(query_tuples)}; "
-            "lengths must match"
-        )
-    if set(plan_dict.keys()) != query_ids:
-        missing = query_ids - set(plan_dict.keys())
-        extra = set(plan_dict.keys()) - query_ids
-        parts = []
-        if missing:
-            parts.append(f"query IDs missing from plan file: {sorted(missing)}")
-        if extra:
-            parts.append(f"plan file has extra IDs not in queries: {sorted(extra)}")
-        raise ValueError("Query IDs do not match between plan file and query file: " + "; ".join(parts))
-
-    return plan_dict
+def _strip_traj_summary_tags(text: str) -> str:
+    return text.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
 
 
 def _assistant_text_from_message(message) -> str:
@@ -590,7 +510,9 @@ def _assistant_text_from_message(message) -> str:
     return ""
 
 
-def _oss_summarize_llm_call(client: "openai.OpenAI", model: str, messages: list, max_tokens: int = 8192) -> str:
+def _oss_summarize_llm_call(
+    client: openai.OpenAI, model: str, messages: list, max_tokens: int = 8192
+) -> str:
     """Adapter that exposes the oss OpenAI client as a simple messages→text callable
     for :func:`trajectory_utils.call_trajectory_summarizer`."""
     resp = client.chat.completions.create(
@@ -601,51 +523,67 @@ def _oss_summarize_llm_call(client: "openai.OpenAI", model: str, messages: list,
     return _assistant_text_from_message(resp.choices[0].message)
 
 
-def _parse_plan_from_response(response: str) -> str:
-    """Extract plan content from planner response. Fallback to full response or empty."""
-    if "<plan>" in response and "</plan>" in response:
-        try:
-            return response.split("<plan>")[1].split("</plan>")[0].strip()
-        except IndexError:
-            pass
-    return response.strip() if response else ""
+# Dispatch: (formatter, wants_summarization, orig_based)
+_TRAJ_FORMATTERS: dict[str, tuple] = {
+    "traj_ext": (_format_trajectory_for_prompt, False, False),
+    "traj_orig_ext": (_format_original_messages_for_prompt_truncated, False, True),
+    "traj_summary_ext": (_format_trajectory_for_prompt, True, False),
+    "traj_summary_orig_ext": (_format_original_messages_for_prompt_truncated, True, True),
+}
 
 
-def _append_plan_snapshot(
-    planning_config: dict | None,
-    source: str,
-    parsed_text: str,
-    iteration: int | None = None,
-) -> None:
-    """Append parsed plan to history and set canonical plan_text (last snapshot wins)."""
-    if not planning_config or not (parsed_text or "").strip():
-        return
-    text = parsed_text.strip()
-    entry: dict = {"source": source, "text": text}
-    if iteration is not None:
-        entry["iteration"] = iteration
-    pm = planning_config.get("planning_model")
-    if pm:
-        entry["planning_model"] = pm
-    planning_config.setdefault("plan_text_history", []).append(entry)
-    planning_config["plan_text"] = text
+def _build_trajectory_user_content(
+    qid: str,
+    qtext: str,
+    args,
+    client: openai.OpenAI,
+    trajectories_by_id: dict,
+    summaries_by_id: dict,
+) -> str:
+    """Return the user message content for a trajectory-based planning trigger."""
+    trigger = args.planning_trigger
+    formatter, wants_summary, _orig_based = _TRAJ_FORMATTERS[trigger]
+
+    if not wants_summary:
+        traj = trajectories_by_id.get(qid, {})
+        traj_text = formatter(
+            traj,
+            max_chars=args.max_chars,
+            reasoning_max_chars=args.reasoning_max_chars,
+            tool_output_max_chars=args.tool_output_max_chars,
+        )
+        if args.verbose:
+            print(f"[{qid}] Prepended trajectory to prompt", flush=True)
+        return format_query_with_trajectory(qtext, traj_text, args.query_template)
+
+    # Summarization path.
+    if qid in summaries_by_id:
+        traj_summary = summaries_by_id[qid]
+        if args.verbose:
+            print(f"[{qid}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+    else:
+        traj = trajectories_by_id.get(qid, {})
+        traj_text = formatter(
+            traj,
+            max_chars=args.max_chars,
+            reasoning_max_chars=args.reasoning_max_chars,
+            tool_output_max_chars=args.tool_output_max_chars,
+        )
+        if args.verbose:
+            print(f"[{qid}] Summarizing trajectory...", flush=True)
+        raw_summary = call_trajectory_summarizer(
+            lambda msgs: _oss_summarize_llm_call(client, args.model, msgs, max_tokens=8192),
+            question=qtext,
+            trajectory_text=traj_text,
+            verbose=args.verbose,
+        )
+        traj_summary = _strip_traj_summary_tags(raw_summary)
+    if args.verbose:
+        print(f"[{qid}] Prepended trajectory summary to prompt", flush=True)
+    return format_query_with_traj_summary(qtext, traj_summary, args.query_template)
 
 
-def _inject_plan_into_messages(planner_response: str) -> list[dict]:
-    """Return the two messages to inject: assistant intro and user with plan."""
-    plan_content = _parse_plan_from_response(planner_response)
-    return [
-        {
-            "role": "assistant",
-            "content": "I am calling a planner to plan a sequence of actions to answer the user's question.",
-        },
-        {
-            "role": "user",
-            "content": "Here is the planner's response; please follow the plan to answer the user's question: "
-            + plan_content,
-        },
-    ]
-
+# --- Persist run output ------------------------------------------------------
 
 def _persist_response(
     out_dir: str,
@@ -653,19 +591,9 @@ def _persist_response(
     messages: list,
     tool_usage: dict,
     status: str,
-    *,
-    query_id: str | None = None,
-    planning: bool = False,
-    planning_trigger: str | None = None,
-    planning_steps: int | None = None,
-    planning_file: str | None = None,
-    trajectory_dir: str | None = None,
-    trajectory_summary_file: str | None = None,
-    plan_reinject_every: int = 0,
-    plan_revise_every: int = 0,
-    plan_text: str | None = None,
-    plan_text_history: list | None = None,
-    save_raw_messages: bool = False,
+    args,
+    planning_config: dict | None,
+    query_id: str | None,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -675,7 +603,6 @@ def _persist_response(
             call_output_by_id[item.get("call_id")] = item.get("output")
 
     normalized_results: list[dict] = []
-
     for item in messages or []:
         if not isinstance(item, dict):
             continue
@@ -692,7 +619,6 @@ def _persist_response(
                     "output": call_output_by_id.get(call_id),
                 }
             )
-
         elif itype == "reasoning":
             summary = item.get("summary")
             if isinstance(summary, list) and len(summary) > 0:
@@ -716,11 +642,9 @@ def _persist_response(
                     "output": reasoning_output,
                 }
             )
-
         elif itype == "message":
-            parts = item.get("content", []) or []
             text_chunks: list[str] = []
-            for part in parts:
+            for part in item.get("content", []) or []:
                 if isinstance(part, dict) and part.get("type") == "output_text":
                     text_chunks.append(str(part.get("text", "")))
             text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
@@ -733,9 +657,7 @@ def _persist_response(
                         "output": text,
                     }
                 )
-
         elif itype is None and "role" in item and "content" in item:
-            # Role-based messages (e.g. planning intro, plan injection from user/assistant)
             content = item.get("content", "")
             if isinstance(content, str) and content.strip():
                 normalized_results.append(
@@ -758,34 +680,34 @@ def _persist_response(
             normalized_name, 0
         ) + int(count or 0)
 
-    metadata = {
+    trigger = args.planning_trigger
+    metadata: dict = {
         "model": initial_request.get("model"),
         "reasoning": initial_request.get("reasoning"),
         "output_dir": str(out_dir),
-        "planning": planning,
+        "planning": args.planning,
     }
-    if planning and planning_trigger:
-        metadata["planning_trigger"] = planning_trigger
-    if (
-        planning
-        and planning_trigger in ("after_steps", "start_and_after_steps")
-        and planning_steps is not None
-    ):
-        metadata["planning_steps"] = planning_steps
-    if planning and planning_trigger == "start_ext" and planning_file:
-        metadata["planning_file"] = planning_file
-    if planning and planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext") and trajectory_dir:
-        metadata["trajectory_dir"] = trajectory_dir
-    if planning and planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and trajectory_summary_file:
-        metadata["trajectory_summary_file"] = trajectory_summary_file
-    if plan_reinject_every > 0:
-        metadata["plan_reinject_every"] = plan_reinject_every
-    if plan_revise_every > 0:
-        metadata["plan_revise_every"] = plan_revise_every
-    if planning and plan_text is not None and str(plan_text).strip():
-        metadata["plan_text"] = plan_text.strip()
-    if planning and plan_text_history:
-        metadata["plan_text_history"] = plan_text_history
+    if args.planning:
+        metadata["planning_trigger"] = trigger
+        if trigger in ("after_steps", "start_and_after_steps"):
+            metadata["planning_steps"] = args.planning_steps
+        if trigger == "start_ext" and args.planning_file:
+            metadata["planning_file"] = args.planning_file
+        if trigger in TRAJ_TRIGGERS and args.trajectory_dir:
+            metadata["trajectory_dir"] = args.trajectory_dir
+        if trigger in TRAJ_SUMMARY_TRIGGERS and args.trajectory_summary_file:
+            metadata["trajectory_summary_file"] = args.trajectory_summary_file
+    if args.plan_reinject_every > 0:
+        metadata["plan_reinject_every"] = args.plan_reinject_every
+    if args.plan_revise_every > 0:
+        metadata["plan_revise_every"] = args.plan_revise_every
+    if args.planning and planning_config:
+        plan_text = planning_config.get("plan_text")
+        if plan_text and str(plan_text).strip():
+            metadata["plan_text"] = plan_text.strip()
+        plan_text_history = planning_config.get("plan_text_history")
+        if plan_text_history:
+            metadata["plan_text_history"] = plan_text_history
 
     normalized_record = {
         "metadata": metadata,
@@ -795,7 +717,7 @@ def _persist_response(
         "retrieved_docids": extract_retrieved_docids_from_result(normalized_results),
         "result": normalized_results,
     }
-    if save_raw_messages:
+    if args.save_raw_messages:
         normalized_record["original_messages"] = messages
 
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
@@ -806,18 +728,65 @@ def _persist_response(
     print("Saved response to", filename, "| tool call counts:", normalized_tool_counts)
 
 
+# --- Query processing --------------------------------------------------------
+
+def _build_planning_config(args, qtext: str, injected_plan_text: str) -> dict | None:
+    """Assemble the planning_config dict passed into the main loop."""
+    if not args.planning:
+        return None
+
+    config: dict = {}
+    if args.planning_trigger in ("after_steps", "start_and_after_steps"):
+        config.update(
+            {
+                "trigger": "after_steps",
+                "steps": args.planning_steps,
+                "raw_question": qtext,
+                "planning_model": args.planning_model,
+                "planning_url": args.planning_url,
+                "plan_mid_system_prompt": args.plan_mid_system_prompt,
+                "verbose": args.verbose,
+            }
+        )
+
+    if (args.plan_reinject_every > 0 or args.plan_revise_every > 0) and injected_plan_text:
+        config["plan_text"] = injected_plan_text
+        if args.plan_reinject_every > 0:
+            config["reinject_every"] = args.plan_reinject_every
+        if args.plan_revise_every > 0:
+            config.update(
+                {
+                    "revise_every": args.plan_revise_every,
+                    "raw_question": qtext,
+                    "planning_model": args.planning_model,
+                    "planning_url": args.planning_url,
+                    "plan_mid_system_prompt": args.plan_mid_system_prompt,
+                    "verbose": args.verbose,
+                }
+            )
+
+    if injected_plan_text and args.planning_trigger in (
+        "start",
+        "start_and_after_steps",
+        "start_ext",
+    ):
+        source = "start_ext" if args.planning_trigger == "start_ext" else "initial"
+        append_plan_snapshot(config, source, injected_plan_text)
+
+    return config or None
+
+
 def _process_tsv_dataset(
     tsv_path: str, client: openai.OpenAI, args, tool_handler: SearchToolHandler
 ):
-    """Process a TSV file of (id \t query) pairs sequentially and persist responses."""
-
+    """Process a TSV file of (id \t query) pairs and persist responses."""
     dataset_path = Path(tsv_path)
     if not dataset_path.is_file():
         raise FileNotFoundError(f"TSV file not found: {tsv_path}")
 
     out_dir = Path(args.output_dir).expanduser().resolve()
 
-    queries = []
+    queries: list[tuple[str, str]] = []
     with dataset_path.open(newline="", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
@@ -825,7 +794,7 @@ def _process_tsv_dataset(
                 continue
             queries.append((row[0].strip(), row[1].strip()))
 
-    processed_ids = set()
+    processed_ids: set[str] = set()
     if out_dir.exists():
         for json_path in out_dir.glob("run_*.json"):
             try:
@@ -845,130 +814,42 @@ def _process_tsv_dataset(
 
     plans_by_id: dict[str, str] = {}
     if args.planning and args.planning_trigger == "start_ext":
-        plans_by_id = _load_and_validate_plans(args.planning_file, queries)
+        plans_by_id = load_and_validate_plans(args.planning_file, queries)
         print(f"Loaded {len(plans_by_id)} plans from {args.planning_file}")
 
     summaries_by_id: dict[str, str] = {}
-    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and args.trajectory_summary_file:
+    if (
+        args.planning
+        and args.planning_trigger in TRAJ_SUMMARY_TRIGGERS
+        and args.trajectory_summary_file
+    ):
         summaries_by_id = _load_trajectory_summaries(args.trajectory_summary_file, queries)
-        print(f"Loaded {len(summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}")
+        print(
+            f"Loaded {len(summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}"
+        )
 
     trajectories_by_id: dict[str, dict] = {}
-    need_raw_trajectories = args.planning and args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext") and not summaries_by_id
+    need_raw_trajectories = (
+        args.planning and args.planning_trigger in TRAJ_TRIGGERS and not summaries_by_id
+    )
     if need_raw_trajectories:
         trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
         print(f"Loaded {len(trajectories_by_id)} trajectories from {args.trajectory_dir}")
-
-    import threading
 
     completed_lock = threading.Lock()
     completed_count = [0]
 
     def _handle_single_query(qid: str, qtext: str, pbar=None):
-        print('-------------Handling single query-------------------')
-        """Build request, send and persist response for one query."""
-        if args.planning and args.planning_trigger == "traj_orig_ext":
-            traj = trajectories_by_id.get(qid, {})
-            traj_text = _format_original_messages_for_prompt_truncated(traj, max_chars=args.max_chars, reasoning_max_chars=args.reasoning_max_chars, tool_output_max_chars=args.tool_output_max_chars)
-            input_messages = [
-                {
-                    "role": "user",
-                    "content": format_query_with_trajectory(qtext, traj_text, args.query_template)
-                }
-            ]
-            if args.verbose:
-                print(f"[{qid}] Prepended original messages to prompt", flush=True)
-                print('--------------------------------')
-                print(input_messages)
-                print('--------------------------------')
-        elif args.planning and args.planning_trigger == "traj_ext":
-            traj = trajectories_by_id.get(qid, {})
-            traj_text = _format_trajectory_for_prompt(
-                traj,
-                max_chars=args.max_chars,
-                reasoning_max_chars=args.reasoning_max_chars,
-                tool_output_max_chars=args.tool_output_max_chars,
+        """Build request, send, and persist response for one query."""
+        if args.planning and args.planning_trigger in TRAJ_TRIGGERS:
+            user_content = _build_trajectory_user_content(
+                qid, qtext, args, client, trajectories_by_id, summaries_by_id
             )
-            input_messages = [
-                {
-                    "role": "user",
-                    "content": format_query_with_trajectory(qtext, traj_text, args.query_template)
-                }
-            ]
-            if args.verbose:
-                print(f"[{qid}] Prepended external trajectory to prompt", flush=True)
-        elif args.planning and args.planning_trigger == "traj_summary_ext":
-            if qid in summaries_by_id:
-                traj_summary = summaries_by_id[qid]
-                if args.verbose:
-                    print(f"[{qid}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-            else:
-                traj = trajectories_by_id.get(qid, {})
-                traj_text = _format_trajectory_for_prompt(
-                    traj,
-                    max_chars=args.max_chars,
-                    reasoning_max_chars=args.reasoning_max_chars,
-                    tool_output_max_chars=args.tool_output_max_chars,
-                )
-                if args.verbose:
-                    print(f"[{qid}] Summarizing trajectory...", flush=True)
-                traj_summary = call_trajectory_summarizer(
-                    lambda msgs: _oss_summarize_llm_call(client, args.model, msgs, max_tokens=8192),
-                    question=qtext,
-                    trajectory_text=traj_text,
-                    verbose=args.verbose,
-                )
-                # get the summary text from the enclosed <trajectory_summary> tags
-                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-            input_messages = [
-                {
-                    "role": "user",
-                    "content": format_query_with_traj_summary(qtext, traj_summary, args.query_template)
-                }
-            ]
-            if args.verbose:
-                print(f"[{qid}] Prepended trajectory summary to prompt", flush=True)
-        elif args.planning and args.planning_trigger == "traj_summary_orig_ext":
-            if qid in summaries_by_id:
-                traj_summary = summaries_by_id[qid]
-                if args.verbose:
-                    print(f"[{qid}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-            else:
-                traj = trajectories_by_id.get(qid, {})
-                traj_text = _format_original_messages_for_prompt_truncated(
-                    traj,
-                    max_chars=args.max_chars,
-                    reasoning_max_chars=args.reasoning_max_chars,
-                    tool_output_max_chars=args.tool_output_max_chars,
-                )
-                if args.verbose:
-                    print(f"[{qid}] Summarizing original messages...", flush=True)
-                traj_summary = call_trajectory_summarizer(
-                    lambda msgs: _oss_summarize_llm_call(client, args.model, msgs, max_tokens=8192),
-                    question=qtext,
-                    trajectory_text=traj_text,
-                    verbose=args.verbose,
-                )
-                # get the summary text from the enclosed <trajectory_summary> tags
-                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-            input_messages = [
-                {
-                    "role": "user",
-                    "content": format_query_with_traj_summary(qtext, traj_summary, args.query_template)
-                }
-            ]
-            if args.verbose:
-                print(f"[{qid}] Prepended original-message summary to prompt", flush=True)
-                print('--------------------------------')
-                print(input_messages)
-                print('--------------------------------')
         else:
-            input_messages = [
-                {"role": "user", "content": format_query(qtext, args.query_template)}
-            ]
+            user_content = format_query(qtext, args.query_template)
+        input_messages = [{"role": "user", "content": user_content}]
 
-        planning_config = None
-        injected_plan_text = ""  # track the plan text for re-injection
+        injected_plan_text = ""
         if args.planning:
             if args.planning_trigger in ("start", "start_and_after_steps"):
                 if args.verbose:
@@ -981,61 +862,19 @@ def _process_tsv_dataset(
                     plan_system_prompt=args.plan_system_prompt,
                     verbose=args.verbose,
                 )
-                plan_messages = _inject_plan_into_messages(planner_response)
-                input_messages.extend(plan_messages)
-                injected_plan_text = _parse_plan_from_response(planner_response)
+                input_messages.extend(inject_plan_into_messages(planner_response))
+                injected_plan_text = parse_plan_from_response(planner_response)
                 if args.verbose:
                     print(f"[{qid}] Injected plan into messages", flush=True)
             elif args.planning_trigger == "start_ext":
                 plan_output = plans_by_id.get(qid, "")
-                plan_messages = _inject_plan_into_messages(plan_output)
-                input_messages.extend(plan_messages)
-                injected_plan_text = _parse_plan_from_response(plan_output)
+                input_messages.extend(inject_plan_into_messages(plan_output))
+                injected_plan_text = parse_plan_from_response(plan_output)
                 if args.verbose:
                     print(f"[{qid}] Injected external plan into messages", flush=True)
-            
-            if args.planning_trigger in ("after_steps", "start_and_after_steps"):
-                planning_config = {
-                    "trigger": "after_steps",
-                    "steps": args.planning_steps,
-                    "raw_question": qtext,
-                    "planning_model": args.planning_model,
-                    "planning_url": args.planning_url,
-                    "plan_mid_system_prompt": args.plan_mid_system_prompt,
-                    "verbose": args.verbose,
-                }
-            # Periodic static reminder and/or planner revision (independent options)
-            if (
-                (args.plan_reinject_every > 0 or args.plan_revise_every > 0)
-                and injected_plan_text
-            ):
-                if planning_config is None:
-                    planning_config = {}
-                planning_config["plan_text"] = injected_plan_text
-                if args.plan_reinject_every > 0:
-                    planning_config["reinject_every"] = args.plan_reinject_every
-                if args.plan_revise_every > 0:
-                    planning_config["revise_every"] = args.plan_revise_every
-                    planning_config["raw_question"] = qtext
-                    planning_config["planning_model"] = args.planning_model
-                    planning_config["planning_url"] = args.planning_url
-                    planning_config["plan_mid_system_prompt"] = args.plan_mid_system_prompt
-                    planning_config["verbose"] = args.verbose
 
-            if (
-                injected_plan_text
-                and args.planning_trigger in ("start", "start_and_after_steps", "start_ext")
-            ):
-                if planning_config is None:
-                    planning_config = {}
-                _append_plan_snapshot(
-                    planning_config,
-                    "start_ext" if args.planning_trigger == "start_ext" else "initial",
-                    injected_plan_text,
-                )
+        planning_config = _build_planning_config(args, qtext, injected_plan_text)
 
-        print('-------------Getting initial request-------------------')
-        print("input_messages", input_messages)
         initial_request = {
             "model": args.model,
             "max_output_tokens": args.max_tokens,
@@ -1047,7 +886,12 @@ def _process_tsv_dataset(
 
         try:
             messages, tool_usage, status = run_conversation_with_tools(
-                client, initial_request, tool_handler, args.max_iterations, args.verbose, planning_config=planning_config,
+                client,
+                initial_request,
+                tool_handler,
+                args.max_iterations,
+                args.verbose,
+                planning_config=planning_config,
             )
 
             if status == "completed":
@@ -1062,42 +906,9 @@ def _process_tsv_dataset(
                 messages,
                 tool_usage,
                 status,
+                args,
+                planning_config,
                 query_id=qid,
-                planning=args.planning,
-                planning_trigger=args.planning_trigger,
-                planning_steps=(
-                    args.planning_steps
-                    if args.planning_trigger in ("after_steps", "start_and_after_steps")
-                    else None
-                ),
-                planning_file=(
-                    args.planning_file
-                    if args.planning_trigger == "start_ext"
-                    else None
-                ),
-                trajectory_dir=(
-                    args.trajectory_dir
-                    if args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext")
-                    else None
-                ),
-                trajectory_summary_file=(
-                    args.trajectory_summary_file
-                    if args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext")
-                    else None
-                ),
-                plan_reinject_every=args.plan_reinject_every,
-                plan_revise_every=args.plan_revise_every,
-                plan_text=(
-                    planning_config.get("plan_text")
-                    if planning_config
-                    else None
-                ),
-                plan_text_history=(
-                    planning_config.get("plan_text_history")
-                    if planning_config
-                    else None
-                ),
-                save_raw_messages=args.save_raw_messages,
             )
 
         except Exception as exc:
@@ -1117,9 +928,74 @@ def _process_tsv_dataset(
                 executor.submit(_handle_single_query, qid, qtext, pbar)
                 for qid, qtext in remaining
             ]
-
             for _ in as_completed(futures):
                 pbar.update(1)
+
+
+# --- CLI ---------------------------------------------------------------------
+
+def _validate_planning_args(args) -> None:
+    """Fail fast on invalid --planning-trigger / flag combinations."""
+    if not args.planning:
+        return
+
+    trigger = args.planning_trigger
+
+    if trigger == "start_ext" and args.planning_file is None:
+        sys.exit("Error: start_ext requires --planning-file")
+
+    if trigger in ("traj_ext", "traj_orig_ext"):
+        if args.trajectory_dir is None:
+            sys.exit(f"Error: {trigger} requires --trajectory-dir")
+        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJECTORY"):
+            sys.exit(
+                f"Error: {trigger} requires --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY "
+                f"(got {args.query_template!r})"
+            )
+
+    if trigger in TRAJ_SUMMARY_TRIGGERS:
+        if args.trajectory_summary_file is None and args.trajectory_dir is None:
+            sys.exit(
+                f"Error: {trigger} requires --trajectory-summary-file or --trajectory-dir"
+            )
+        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"):
+            sys.exit(
+                f"Error: {trigger} requires --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY "
+                f"(got {args.query_template!r})"
+            )
+
+    use_after_steps_planning = trigger in ("after_steps", "start_and_after_steps")
+    if use_after_steps_planning and (args.plan_revise_every > 0 or args.plan_reinject_every > 0):
+        sys.exit(
+            "Error: --planning-trigger after_steps or start_and_after_steps cannot be combined "
+            "with --plan-revise-every or --plan-reinject-every (choose at most one)."
+        )
+    if args.plan_revise_every > 0 and args.plan_reinject_every > 0:
+        sys.exit(
+            "Error: --plan-revise-every and --plan-reinject-every cannot be used together."
+        )
+
+
+def _load_plan_prompts(args) -> None:
+    """Populate args.plan_system_prompt and args.plan_mid_system_prompt from files."""
+    repo_root = Path(__file__).resolve().parent.parent
+
+    args.plan_system_prompt = None
+    if args.planning and args.planning_trigger in ("start", "start_and_after_steps"):
+        plan_path = Path(args.plan_prompt_file)
+        if not plan_path.is_absolute():
+            plan_path = repo_root / plan_path
+        args.plan_system_prompt = plan_path.read_text(encoding="utf-8")
+
+    args.plan_mid_system_prompt = None
+    if args.planning and (
+        args.planning_trigger in ("after_steps", "start_and_after_steps")
+        or args.plan_revise_every > 0
+    ):
+        mid_path = Path(args.plan_prompt_mid_file)
+        if not mid_path.is_absolute():
+            mid_path = repo_root / mid_path
+        args.plan_mid_system_prompt = mid_path.read_text(encoding="utf-8")
 
 
 def main():
@@ -1128,23 +1004,10 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    parser.add_argument(
-        "--query",
-        default="topics-qrels/queries.tsv",
-        help="User query *or* TSV file path",
-    )
-    parser.add_argument(
-        "--model", default="openai/gpt-oss-20b", help="Model name served by vLLM"
-    )
-    parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=10000,
-        help="max_output_tokens for Responses API",
-    )
-    parser.add_argument(
-        "--output-dir", default="runs_vllm", help="Directory to store run JSON files"
-    )
+    parser.add_argument("--query", default="topics-qrels/queries.tsv", help="TSV file path")
+    parser.add_argument("--model", default="openai/gpt-oss-20b", help="Model name served by vLLM")
+    parser.add_argument("--max-tokens", type=int, default=10000, help="max_output_tokens for Responses API")
+    parser.add_argument("--output-dir", default="runs_vllm", help="Directory to store run JSON files")
     parser.add_argument(
         "--query-template",
         choices=[
@@ -1158,15 +1021,8 @@ def main():
         default="QUERY_TEMPLATE_NO_GET_DOCUMENT",
         help="Specify the query template to use (default: %(default)s)",
     )
-    parser.add_argument(
-        "--num-threads", type=int, default=1, help="Parallel threads for dataset mode"
-    )
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=100,
-        help="Max conversation rounds with function calls",
-    )
+    parser.add_argument("--num-threads", type=int, default=1, help="Parallel threads for dataset mode")
+    parser.add_argument("--max-iterations", type=int, default=100, help="Max conversation rounds with function calls")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
         "--reasoning-effort",
@@ -1174,38 +1030,35 @@ def main():
         choices=["low", "medium", "high"],
         help="Reasoning effort",
     )
-    parser.add_argument(
-        "--model-url", default="http://localhost:8000/v1", help="Model URL"
-    )
+    parser.add_argument("--model-url", default="http://localhost:8000/v1", help="Model URL")
     parser.add_argument(
         "--planning",
         action="store_true",
         help="Enable planning: call planner model first, inject plan into conversation",
     )
-    parser.add_argument(
-        "--planning-model",
-        type=str,
-        default=None,
-        help="Model for planner (default: same as --model)",
-    )
-    parser.add_argument(
-        "--planning-url",
-        type=str,
-        default=None,
-        help="Base URL for planner (default: same as --model-url)",
-    )
+    parser.add_argument("--planning-model", type=str, default=None, help="Model for planner (default: same as --model)")
+    parser.add_argument("--planning-url", type=str, default=None, help="Base URL for planner (default: same as --model-url)")
     parser.add_argument(
         "--planning-trigger",
-        choices=["start", "after_steps", "start_and_after_steps", "start_ext", "traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext"],
+        choices=[
+            "start",
+            "after_steps",
+            "start_and_after_steps",
+            "start_ext",
+            "traj_ext",
+            "traj_summary_ext",
+            "traj_orig_ext",
+            "traj_summary_orig_ext",
+        ],
         default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), start_and_after_steps (both), start_ext (load plan from file), traj_ext (prepend external trajectory to prompt), traj_summary_ext (summarize trajectory then prepend summary), traj_orig_ext (use original_messages from trajectory as conversation input), or traj_summary_orig_ext (summarize original_messages then prepend summary). "
+        help="When to run planning. See --help for full list. "
         "after_steps and start_and_after_steps cannot be combined with --plan-revise-every or --plan-reinject-every.",
     )
     parser.add_argument(
         "--planning-steps",
         type=int,
         default=5,
-        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps or start_and_after_steps)",
+        help="Number of tool calls before mid-conversation planning",
     )
     parser.add_argument(
         "--planning-file",
@@ -1217,48 +1070,31 @@ def main():
         "--trajectory-dir",
         type=str,
         default=None,
-        help="Directory of JSON trajectory files to prepend to the prompt (required when --planning-trigger=traj_ext, traj_summary_ext, traj_orig_ext, or traj_summary_orig_ext)",
+        help="Directory of JSON trajectory files to prepend to the prompt",
     )
-    parser.add_argument(
-        "--max-chars",
-        type=int,
-        default=500000,
-        help="Max total characters when formatting an external trajectory into the prompt",
-    )
-    parser.add_argument(
-        "--reasoning-max-chars",
-        type=int,
-        default=3000,
-        help="Max characters of reasoning to keep per assistant message when formatting an external trajectory",
-    )
-    parser.add_argument(
-        "--tool-output-max-chars",
-        type=int,
-        default=5000,
-        help="Max characters of tool output to keep per tool call when formatting an external trajectory",
-    )
+    parser.add_argument("--max-chars", type=int, default=500000, help="Max total trajectory chars")
+    parser.add_argument("--reasoning-max-chars", type=int, default=3000, help="Max reasoning chars per message")
+    parser.add_argument("--tool-output-max-chars", type=int, default=5000, help="Max tool output chars per call")
     parser.add_argument(
         "--trajectory-summary-file",
         type=str,
         default=None,
-        help="JSONL file with pre-computed trajectory summaries (fields: 'summary' or 'excerpt'). "
-        "When provided with --planning-trigger=traj_summary_ext or traj_summary_orig_ext, skips LLM summarization and uses these directly. "
+        help="JSONL file with pre-computed trajectory summaries. "
         "Takes precedence over --trajectory-dir for traj_summary_ext and traj_summary_orig_ext.",
     )
     parser.add_argument(
         "--plan-reinject-every",
         type=int,
         default=0,
-        help="Re-inject the current plan as a user reminder every N iterations (0 = disabled). "
-        "Mutually exclusive with --plan-revise-every and with --planning-trigger after_steps/start_and_after_steps.",
+        help="Re-inject the plan as a user reminder every N iterations (0 = disabled). "
+        "Mutually exclusive with --plan-revise-every and after_steps/start_and_after_steps.",
     )
     parser.add_argument(
         "--plan-revise-every",
         type=int,
         default=0,
-        help="Every N iterations, call the planner to revise the plan from the conversation "
-        "so far and inject it (same format as mid-conversation planning; 0 = disabled). "
-        "Mutually exclusive with --plan-reinject-every and with --planning-trigger after_steps/start_and_after_steps.",
+        help="Every N iterations, call the planner to revise the plan (0 = disabled). "
+        "Mutually exclusive with --plan-reinject-every and after_steps/start_and_after_steps.",
     )
     parser.add_argument(
         "--plan-prompt-file",
@@ -1278,36 +1114,17 @@ def main():
         help="Save raw messages to the output directory",
     )
 
-    # Searcher selection and shared tool options --------------------------
     parser.add_argument(
         "--searcher-type",
         choices=SearcherType.get_choices(),
         required=True,
         help=f"Type of searcher to use: {', '.join(SearcherType.get_choices())}",
     )
-    parser.add_argument(
-        "--hf-token",
-        type=str,
-        help="Hugging Face token for accessing private datasets/models",
-    )
-    parser.add_argument(
-        "--hf-home", type=str, help="Hugging Face home directory for caching"
-    )
-
-    parser.add_argument(
-        "--snippet-max-tokens",
-        type=int,
-        default=512,
-        help="Tokens per document snippet",
-    )
-    parser.add_argument(
-        "--k", type=int, default=5, help="Top-k search results to return for each query"
-    )
-    parser.add_argument(
-        "--get-document",
-        action="store_true",
-        help="Also register the get_document tool",
-    )
+    parser.add_argument("--hf-token", type=str, help="Hugging Face token")
+    parser.add_argument("--hf-home", type=str, help="Hugging Face home directory for caching")
+    parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Tokens per document snippet")
+    parser.add_argument("--k", type=int, default=5, help="Top-k search results")
+    parser.add_argument("--get-document", action="store_true", help="Register the get_document tool")
 
     temp_args, _ = parser.parse_known_args()
     searcher_class = SearcherType.get_searcher_class(temp_args.searcher_type)
@@ -1315,94 +1132,14 @@ def main():
 
     args = parser.parse_args()
 
-    if args.planning and args.planning_trigger == "start_ext":
-        if args.planning_file is None:
-            print("Error: start_ext requires --planning-file", file=sys.stderr)
-            sys.exit(1)
-
-    if args.planning and args.planning_trigger == "traj_ext":
-        if args.trajectory_dir is None:
-            print("Error: traj_ext requires --trajectory-dir", file=sys.stderr)
-            sys.exit(1)
-        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJECTORY"):
-            print(
-                f"Error: traj_ext requires --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY "
-                f"(got {args.query_template!r})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    if args.planning and args.planning_trigger == "traj_orig_ext":
-        if args.trajectory_dir is None:
-            print("Error: traj_orig_ext requires --trajectory-dir", file=sys.stderr)
-            sys.exit(1)
-        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJECTORY"):
-            print(
-                f"Error: traj_orig_ext requires --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY "
-                f"(got {args.query_template!r})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
-        if args.trajectory_summary_file is None and args.trajectory_dir is None:
-            print(f"Error: {args.planning_trigger} requires --trajectory-summary-file or --trajectory-dir", file=sys.stderr)
-            sys.exit(1)
-        if args.query_template not in (None, "QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"):
-            print(
-                f"Error: {args.planning_trigger} requires --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY "
-                f"(got {args.query_template!r})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    # Mid-conversation planning (after_steps / start_and_after_steps) vs periodic
-    # plan revision vs static reinject: at most one mechanism.
-    use_after_steps_planning = args.planning and args.planning_trigger in (
-        "after_steps",
-        "start_and_after_steps",
-    )
-    use_plan_revise_every = args.plan_revise_every > 0
-    use_plan_reinject_every = args.plan_reinject_every > 0
-    if use_after_steps_planning and (use_plan_revise_every or use_plan_reinject_every):
-        print(
-            "Error: --planning-trigger after_steps or start_and_after_steps cannot be combined "
-            "with --plan-revise-every or --plan-reinject-every (choose at most one).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if use_plan_revise_every and use_plan_reinject_every:
-        print(
-            "Error: --plan-revise-every and --plan-reinject-every cannot be used together.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _validate_planning_args(args)
 
     if args.planning_model is None:
         args.planning_model = args.model
     if args.planning_url is None:
         args.planning_url = args.model_url
 
-    repo_root = Path(__file__).resolve().parent.parent
-    args.plan_system_prompt = None
-    if args.planning and args.planning_trigger in (
-        "start",
-        "start_and_after_steps",
-    ):
-        plan_path = Path(args.plan_prompt_file)
-        if not plan_path.is_absolute():
-            plan_path = repo_root / plan_path
-        args.plan_system_prompt = plan_path.read_text(encoding="utf-8")
-
-    args.plan_mid_system_prompt = None
-    if args.planning and (
-        args.planning_trigger in ("after_steps", "start_and_after_steps")
-        or args.plan_revise_every > 0
-    ):
-        mid_path = Path(args.plan_prompt_mid_file)
-        if not mid_path.is_absolute():
-            mid_path = repo_root / mid_path
-        args.plan_mid_system_prompt = mid_path.read_text(encoding="utf-8")
+    _load_plan_prompts(args)
 
     if args.hf_token:
         os.environ["HF_TOKEN"] = args.hf_token
@@ -1410,13 +1147,9 @@ def main():
     if args.hf_home:
         os.environ["HF_HOME"] = args.hf_home
 
-    client = openai.OpenAI(
-        base_url=args.model_url,
-        api_key="EMPTY",
-    )
+    client = openai.OpenAI(base_url=args.model_url, api_key="EMPTY")
 
     searcher = searcher_class(args)
-
     tool_handler = SearchToolHandler(
         searcher=searcher,
         snippet_max_tokens=args.snippet_max_tokens,
@@ -1424,134 +1157,14 @@ def main():
         include_get_document=args.get_document,
     )
 
-    if isinstance(args.query, str):
-        qstr = args.query.strip()
-        print('query', qstr)
-        if qstr.lower().endswith(".tsv"):
-            potential_path = Path(qstr)
-            try:
-                if potential_path.is_file():
-                    print("Processing TSV dataset", potential_path)
-                    _process_tsv_dataset(
-                        str(potential_path), client, args, tool_handler
-                    )
-                    return
-            except OSError:
-                pass
-
-        if args.planning and args.planning_trigger in ("start_ext", "traj_ext", "traj_summary_ext", "traj_summary_orig_ext"):
-            print(
-                f"Error: {args.planning_trigger} requires a TSV query file; use --query path/to/queries.tsv",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    print('Do NOT allow single query mode for now')
-    sys.exit(1)
-
-    # print("Processing single query", args.query)
-
-    # raw_question = args.query
-    # args.query = format_query(args.query, args.query_template)
-
-    # messages = [{"role": "user", "content": args.query}]
-
-    # planning_config = None
-    # injected_plan_text = ""
-    # if args.planning:
-    #     if args.planning_trigger in ("start", "start_and_after_steps"):
-    #         print("Planning mode (start), calling planner...", flush=True)
-    #         planner_response = call_planner(
-    #             client,
-    #             args.planning_model,
-    #             args.planning_url,
-    #             raw_question=raw_question,
-    #             plan_system_prompt=args.plan_system_prompt,
-    #             verbose=args.verbose,
-    #         )
-    #         plan_messages = _inject_plan_into_messages(planner_response)
-    #         messages.extend(plan_messages)
-    #         injected_plan_text = _parse_plan_from_response(planner_response)
-    #     if args.planning_trigger in ("after_steps", "start_and_after_steps"):
-    #         planning_config = {
-    #             "trigger": "after_steps",
-    #             "steps": args.planning_steps,
-    #             "raw_question": raw_question,
-    #             "planning_model": args.planning_model,
-    #             "planning_url": args.planning_url,
-    #             "plan_mid_system_prompt": args.plan_mid_system_prompt,
-    #             "verbose": args.verbose,
-    #         }
-    #     if args.planning_trigger == "traj_ext":
-    #         messages= [{
-    #             "role": "user",
-    #             "content": format_query_for_planning(raw_question, injected_plan_text, args.query_template)
-    #         }]
-    #     if (
-    #         (args.plan_reinject_every > 0 or args.plan_revise_every > 0)
-    #         and injected_plan_text
-    #     ):
-    #         if planning_config is None:
-    #             planning_config = {}
-    #         planning_config["plan_text"] = injected_plan_text
-    #         if args.plan_reinject_every > 0:
-    #             planning_config["reinject_every"] = args.plan_reinject_every
-    #         if args.plan_revise_every > 0:
-    #             planning_config["revise_every"] = args.plan_revise_every
-    #             planning_config["raw_question"] = raw_question
-    #             planning_config["planning_model"] = args.planning_model
-    #             planning_config["planning_url"] = args.planning_url
-    #             planning_config["plan_mid_system_prompt"] = args.plan_mid_system_prompt
-    #             planning_config["verbose"] = args.verbose
-
-    #     if (
-    #         args.planning
-    #         and injected_plan_text
-    #         and args.planning_trigger in ("start", "start_and_after_steps", "start_ext")
-    #     ):
-    #         if planning_config is None:
-    #             planning_config = {}
-    #         _append_plan_snapshot(
-    #             planning_config,
-    #             "start_ext" if args.planning_trigger == "start_ext" else "initial",
-    #             injected_plan_text,
-    #         )
-
-    # initial_request = {
-    #     "model": args.model,
-    #     "max_output_tokens": args.max_tokens,
-    #     "input": messages,
-    #     "tools": tool_handler.get_tool_definitions(),
-    #     "truncation": "auto",
-    #     "reasoning": {"effort": args.reasoning_effort, "summary": "detailed"},
-    # }
-
-    # messages, tool_usage, status = run_conversation_with_tools(
-    #     client, initial_request, tool_handler, args.max_iterations, args.verbose, planning_config=planning_config
-    # )
-
-    # _persist_response(
-    #     args.output_dir, initial_request, messages, tool_usage, status, query_id=None, planning=args.planning,
-    #     planning_trigger=args.planning_trigger,
-    #     planning_steps=(
-    #         args.planning_steps
-    #         if args.planning_trigger in ("after_steps", "start_and_after_steps")
-    #         else None
-    #     ),
-    #     trajectory_dir=(
-    #         args.trajectory_dir
-    #         if args.planning_trigger in ("traj_ext", "traj_summary_ext")
-    #         else None
-    #     ),
-    #     plan_reinject_every=args.plan_reinject_every,
-    #     plan_revise_every=args.plan_revise_every,
-    #     plan_text=planning_config.get("plan_text") if planning_config else None,
-    #     plan_text_history=(
-    #         planning_config.get("plan_text_history") if planning_config else None
-    #     ),
-    # )
-
-    # rprint(messages)
+    qstr = args.query.strip()
+    if not qstr.lower().endswith(".tsv"):
+        sys.exit("Error: --query must point to a .tsv file (single-query mode is not supported).")
+    potential_path = Path(qstr)
+    if not potential_path.is_file():
+        sys.exit(f"Error: TSV file not found: {potential_path}")
+    print("Processing TSV dataset", potential_path)
+    _process_tsv_dataset(str(potential_path), client, args, tool_handler)
 
 
 if __name__ == "__main__":

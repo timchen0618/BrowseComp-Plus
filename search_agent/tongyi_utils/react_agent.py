@@ -44,6 +44,11 @@ from trajectory_utils import (
     _format_original_messages_for_prompt,
     call_trajectory_summarizer,
 )
+from planning_utils import (
+    parse_plan_from_response as _parse_plan_from_response,
+    inject_plan_into_messages as _inject_plan_into_messages,
+    load_and_validate_plans as _load_and_validate_plans,
+)
 
 OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
@@ -57,25 +62,6 @@ import datetime
 
 def today_date():
     return datetime.date.today().strftime("%Y-%m-%d")
-
-
-def _parse_plan_from_response(response: str) -> str:
-    """Extract plan content from planner response. Fallback to full response or empty."""
-    if "<plan>" in response and "</plan>" in response:
-        try:
-            return response.split("<plan>")[1].split("</plan>")[0].strip()
-        except IndexError:
-            pass
-    return response.strip() if response else ""
-
-
-def _inject_plan_into_messages(planner_response: str) -> list:
-    """Return the two messages to inject: assistant intro and user with plan."""
-    plan_content = _parse_plan_from_response(planner_response)
-    return [
-        {"role": "assistant", "content": "I am calling a planner to plan a sequence of actions to answer the user's question."},
-        {"role": "user", "content": "Here is the planner's response; please follow the plan to answer the user's question: " + plan_content},
-    ]
 
 
 REASONING_TRUNCATE = 1000
@@ -121,37 +107,6 @@ def _serialize_messages_for_planner(messages: list) -> str:
                 except Exception:
                     parts.append(f"[Tool call] search: {m.group(1)[:100]}...")
     return "\n\n".join(parts) if parts else "(no history)"
-
-
-def _load_and_validate_plans(plan_file: str, query_tuples: list) -> dict:
-    """Load pre-generated plans from JSONL and validate against query list."""
-    plan_path = Path(plan_file)
-    if not plan_path.is_file():
-        raise FileNotFoundError(f"Plan file not found: {plan_file}")
-    plan_dict = {}
-    with plan_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json5.loads(line)
-            qid = str(obj.get("query_id", ""))
-            output = obj.get("output", "")
-            if qid:
-                plan_dict[qid] = output if isinstance(output, str) else json5.dumps(output)
-    query_ids = {qid for qid, _ in query_tuples}
-    if len(plan_dict) != len(query_tuples):
-        raise ValueError(f"Plan file has {len(plan_dict)} entries but query file has {len(query_tuples)}; lengths must match")
-    if set(plan_dict.keys()) != query_ids:
-        missing = query_ids - set(plan_dict.keys())
-        extra = set(plan_dict.keys()) - query_ids
-        parts = []
-        if missing:
-            parts.append(f"query IDs missing from plan file: {sorted(missing)}")
-        if extra:
-            parts.append(f"plan file has extra IDs not in queries: {sorted(extra)}")
-        raise ValueError("Query IDs do not match between plan file and query file: " + "; ".join(parts))
-    return plan_dict
 
 
 class MultiTurnReactAgent(FnCallAgent):
