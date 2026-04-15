@@ -6,7 +6,6 @@ collection/
 indexes/
 tmp/
 retrieval/
-topics-qrels/
 runs/
 evals/
 data/
