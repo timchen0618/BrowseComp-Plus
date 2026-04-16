@@ -11,7 +11,7 @@ from qwen_agent.llm.schema import Message
 from qwen_agent.utils.utils import build_text_completion_prompt
 from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 import tiktoken
-from transformers import AutoTokenizer 
+from transformers import AutoTokenizer
 from datetime import datetime
 from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm import BaseChatModel
@@ -19,20 +19,10 @@ from qwen_agent.llm.schema import Message
 from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools import BaseTool
 import time
-import numpy as np
-from bert_score import BERTScorer
 
 from tongyi_utils.prompts import (
     SYSTEM_PROMPT_SEARCH_ONLY,
     SYSTEM_PROMPT_MULTI_ANSWER,
-    PRM_AS_SCORER,
-    PRM_AS_SUMMARIZER,
-    PROMPT_PLANNER,
-    PROMPT_PLANNER_MID,
-    PROMPT_QUERY_REWRITER,
-    SYSTEM_PROMPT_SEARCH_ONLY_REFINED,
-    SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING,
-    SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING,
     TRAJECTORY_SYSTEM_NOTE,
     TRAJ_SUMMARY_SYSTEM_NOTE,
     format_query_with_trajectory,
@@ -44,17 +34,11 @@ from trajectory_utils import (
     _format_original_messages_for_prompt,
     call_trajectory_summarizer,
 )
-from planning_utils import (
-    parse_plan_from_response as _parse_plan_from_response,
-    inject_plan_into_messages as _inject_plan_into_messages,
-    load_and_validate_plans as _load_and_validate_plans,
-)
 
 OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv('MAX_LLM_CALL_PER_RUN', 100))
-
 
 import random
 import datetime
@@ -64,106 +48,31 @@ def today_date():
     return datetime.date.today().strftime("%Y-%m-%d")
 
 
-REASONING_TRUNCATE = 1000
-TOOL_OUTPUT_TRUNCATE = 1000
-CONTENT_TRUNCATE = 1000
-
-
-def _serialize_messages_for_planner(messages: list) -> str:
-    """Build a readable string from react-style messages (role/content with <think>, <tool_call>, etc.) for the planner."""
-    parts = []
-    for item in messages or []:
-        if not isinstance(item, dict):
-            continue
-        role = item.get("role")
-        content = item.get("content", "")
-        if not isinstance(content, str):
-            continue
-        if role == "user":
-            if "Here is the planner's response" in content or "Here is the expert search query rewriter's" in content:
-                continue  # skip injected planning/rewriting messages
-            if "<tool_response>" in content:
-                out = content.split("<tool_response>")[1].split("</tool_response>")[0]
-                out = (out[:TOOL_OUTPUT_TRUNCATE] + "...") if len(out) > TOOL_OUTPUT_TRUNCATE else out
-                parts.append(f"[Tool result]: {out.strip()}")
-            else:
-                parts.append(f"[User]: {content[:CONTENT_TRUNCATE]}{'...' if len(content) > CONTENT_TRUNCATE else ''}")
-        elif role == "assistant":
-            if content in ("I am calling a planner to plan a sequence of actions to answer the user's question.", "I am calling an expert search query rewriter to help me improve the search queries I have made previously."):
-                continue
-            think_matches = []
-            for m in re.finditer(r'<think>(.*?)</think>', content, re.DOTALL):
-                think_matches.append(m.group(1).strip())
-            if think_matches:
-                text = " ".join(think_matches)
-                text = (text[:REASONING_TRUNCATE] + "...") if len(text) > REASONING_TRUNCATE else text
-                if text.strip():
-                    parts.append(f"[Reasoning]: {text.strip()}")
-            for m in re.finditer(r'<tool_call>(.*?)</tool_call>', content, re.DOTALL):
-                try:
-                    args = json5.loads(m.group(1))
-                    q = args.get("query") or args.get("user_query") or m.group(1)[:100]
-                    parts.append(f"[Tool call] search: {q}")
-                except Exception:
-                    parts.append(f"[Tool call] search: {m.group(1)[:100]}...")
-    return "\n\n".join(parts) if parts else "(no history)"
-
-
 class MultiTurnReactAgent(FnCallAgent):
     def __init__(self,
                  function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
                  llm: Optional[Union[Dict, BaseChatModel]] = None,
                  search_tool_handler: Optional[SearchToolHandler] = None,
                  multi_answer: Optional[bool] = False,
-                 planning: Optional[bool] = False,
-                 query_rewriting: Optional[bool] = False,
-                 planning_model: Optional[str] = None,
-                 query_rewriting_model: Optional[str] = None,
-                 planning_trigger: Optional[str] = "start",
-                 planning_steps: Optional[int] = 5,
-                 plan_reinject_every: Optional[int] = 0,
-                 plan_revise_every: Optional[int] = 0,
-                 plans_by_id: Optional[dict] = None,
+                 planning_trigger: Optional[str] = None,
                  trajectories_by_id: Optional[dict] = None,
                  summaries_by_id: Optional[dict] = None,
-                 plan_prompt: Optional[str] = None,
-                 plan_prompt_mid: Optional[str] = None,
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
         self.search_tool = search_tool_handler
         self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY if not multi_answer else SYSTEM_PROMPT_MULTI_ANSWER
-        self.planning = planning
-        self.query_rewriting = query_rewriting
-        self.planning_model = planning_model
-        self.query_rewriting_model = query_rewriting_model
-        self.planning_trigger = planning_trigger if planning else "start"
-        self.planning_steps = planning_steps or 5
-        self.plan_reinject_every = plan_reinject_every or 0
-        self.plan_revise_every = plan_revise_every or 0
-        self.plans_by_id = plans_by_id or {}
+        self.planning_trigger = planning_trigger
         self.trajectories_by_id = trajectories_by_id or {}
         self.summaries_by_id = summaries_by_id or {}
-        if self.planning:
-            print(f"Planning mode enabled (trigger={self.planning_trigger}, steps={self.planning_steps})", flush=True)
-            self.planner_prompt = plan_prompt if plan_prompt is not None else PROMPT_PLANNER
-            self.planner_mid_prompt = (
-                plan_prompt_mid if plan_prompt_mid is not None else PROMPT_PLANNER_MID
-            )
-            self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_PLANNING
-        if self.query_rewriting:
-            print("Query rewriting mode enabled", flush=True)
-            self.query_rewriter_prompt = PROMPT_QUERY_REWRITER
-            self.system_prompt = SYSTEM_PROMPT_SEARCH_ONLY_REFINED_QUERY_REWRITING
-        
+
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
-    
-    def call_server(self, msgs, planning_port, max_tries=10, model_str="main_agent"):
-        
+
+    def call_server(self, msgs, port, max_tries=10):
         openai_api_key = "EMPTY"
-        openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
+        openai_api_base = f"http://127.0.0.1:{port}/v1"
 
         client = OpenAI(
             api_key=openai_api_key,
@@ -171,23 +80,12 @@ class MultiTurnReactAgent(FnCallAgent):
             timeout=600.0,
         )
 
-        base_sleep_time = 1 
-        
-        # select model based on model_str
-        if model_str == "main_agent":
-            model = self.model
-        elif model_str == "planning":
-            model = self.planning_model
-        elif model_str == "query_rewriting":
-            model = self.query_rewriting_model
-        else:
-            raise ValueError(f"Invalid model string: {model_str}")
-        
+        base_sleep_time = 1
+
         for attempt in range(max_tries):
             try:
-                # print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
                 chat_response = client.chat.completions.create(
-                    model=model,
+                    model=self.model,
                     messages=msgs,
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
@@ -210,96 +108,52 @@ class MultiTurnReactAgent(FnCallAgent):
 
             if attempt < max_tries - 1:
                 sleep_time = base_sleep_time * (2 ** attempt) + random.uniform(0, 1)
-                sleep_time = min(sleep_time, 30) 
-                
+                sleep_time = min(sleep_time, 30)
                 print(f"Retrying in {sleep_time:.2f} seconds...")
                 time.sleep(sleep_time)
             else:
                 print("Error: All retry attempts have been exhausted. The call has failed.")
-        
+
         return f"vllm server error!!!"
 
     def count_tokens(self, messages, model="gpt-4o"):
-        try: 
-            tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path) 
-        except Exception as e: 
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path)
+        except Exception as e:
             tokenizer = tiktoken.encoding_for_model(model)
-        
+
         full_message = [Message(**x) for x in messages]
         full_prompt = build_text_completion_prompt(full_message, allow_special=True)
-        
+
         return len(tokenizer.encode(full_prompt))
 
-    def call_planner(self, raw_question: str, planning_port: int, max_tries: int = 10) -> str:
-        """Call the planner model to produce a step sequence for the question."""
-        msgs = [
-            {"role": "system", "content": self.planner_prompt},
-            {"role": "user", "content": raw_question},
-        ]
-        content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")
-        return content if content else ""
-
-    def call_planner_mid(
-        self, raw_question: str, messages: list, planning_port: int, max_tries: int = 10
-    ) -> str:
-        """Call the planner with conversation history to produce a revised plan."""
-        conv_str = _serialize_messages_for_planner(messages)
-        user_content = f"""## Original question
-{raw_question}
-
-## Conversation history so far
-{conv_str}
-
-Based on the question and conversation history above, output the revised plan within <plan></plan> tags."""
-        msgs = [
-            {"role": "system", "content": self.planner_mid_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        content = self.call_server(msgs, planning_port, max_tries=max_tries, model_str="planning")
-        return content if content else ""
-
     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
-        self.model=model
-        if self.planning_model is None:
-            self.planning_model = model
-        if self.query_rewriting_model is None:
-            self.query_rewriting_model = model
+        self.model = model
         try:
             question = data['item']['question']
         except:
             raw_msg = data['item']['messages'][1]["content"]
             question = raw_msg.split("User:")[1].strip() if "User:" in raw_msg else raw_msg
 
-        tool_call_counts = {}  # Only successful tool calls
-        tool_call_counts_all = {}  # All tool calls (successful and failed)
+        tool_call_counts = {}
+        tool_call_counts_all = {}
         retrieved_docids = []
         total_inference_time = 0.0
         total_tool_call_time = 0.0
 
         start_time = time.time()
         main_agent_port = data['main_agent_port']
-        planning_port = data['planning_port']
-        query_rewriting_port = data['query_rewriting_port']
         answer = data['item']['answer']
         self.user_prompt = question
         system_prompt = self.system_prompt
         cur_date = today_date()
 
-        ## Trajectory modes: inject the matching system-prompt note *before*
-        ## the trailing "Current date: " footer so the note remains part of
-        ## the main prompt body.
         query_id = data.get("query_id", "")
         traj_note = ""
-        if self.planning and self.planning_trigger in (
-            "traj_ext",
-            "traj_orig_ext",
-            "traj_summary_ext",
-            "traj_summary_orig_ext",
-        ):
-            if self.planning_trigger in ("traj_ext", "traj_orig_ext"):
-                traj_note = TRAJECTORY_SYSTEM_NOTE
-            else:
-                traj_note = TRAJ_SUMMARY_SYSTEM_NOTE
+        if self.planning_trigger in ("traj_ext", "traj_orig_ext"):
+            traj_note = TRAJECTORY_SYSTEM_NOTE
+        elif self.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
+            traj_note = TRAJ_SUMMARY_SYSTEM_NOTE
 
         if traj_note:
             idx = system_prompt.rfind("Current date:")
@@ -311,100 +165,72 @@ Based on the question and conversation history above, output the revised plan wi
         else:
             system_prompt = system_prompt + str(cur_date)
 
-        ## Build initial user message — default is the raw question, trajectory
-        ## modes wrap it in a template with the trajectory / summary content.
         user_content = question
-        if self.planning and self.planning_trigger in (
-            "traj_ext",
-            "traj_orig_ext",
-            "traj_summary_ext",
-            "traj_summary_orig_ext",
-        ):
-            if self.planning_trigger == "traj_ext":
+        if self.planning_trigger == "traj_ext":
+            traj = self.trajectories_by_id.get(query_id, {})
+            traj_text = _format_tongyi_trajectory_for_prompt(traj)
+            user_content = format_query_with_trajectory(question, traj_text)
+            print(f"[{query_id}] Prepended external trajectory to prompt", flush=True)
+        elif self.planning_trigger == "traj_orig_ext":
+            traj = self.trajectories_by_id.get(query_id, {})
+            if "original_messages" not in traj or not traj.get("original_messages"):
+                raise ValueError(
+                    f"traj_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
+                    f"rerun the source with --store-raw so original_messages gets persisted."
+                )
+            traj_text = _format_original_messages_for_prompt(traj)
+            user_content = format_query_with_trajectory(question, traj_text)
+            print(f"[{query_id}] Prepended original messages to prompt", flush=True)
+        elif self.planning_trigger == "traj_summary_ext":
+            if query_id in self.summaries_by_id:
+                traj_summary = self.summaries_by_id[query_id]
+                print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+            else:
                 traj = self.trajectories_by_id.get(query_id, {})
-                traj_text = _format_tongyi_trajectory_for_prompt(traj)
-                user_content = format_query_with_trajectory(question, traj_text)
-                print(f"[{query_id}] Prepended external trajectory to prompt", flush=True)
-            elif self.planning_trigger == "traj_orig_ext":
+                traj_text = _format_tongyi_trajectory_for_prompt(
+                    traj,
+                    max_chars=400000,
+                    reasoning_max_chars=3000,
+                    tool_output_max_chars=3000,
+                )
+                print(f"[{query_id}] Summarizing trajectory...", flush=True)
+                traj_summary = call_trajectory_summarizer(
+                    lambda msgs: self.call_server(msgs, main_agent_port),
+                    question=question,
+                    trajectory_text=traj_text,
+                )
+                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+            user_content = format_query_with_traj_summary(question, traj_summary)
+            print(f"[{query_id}] Prepended trajectory summary to prompt", flush=True)
+        elif self.planning_trigger == "traj_summary_orig_ext":
+            if query_id in self.summaries_by_id:
+                traj_summary = self.summaries_by_id[query_id]
+                print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+            else:
                 traj = self.trajectories_by_id.get(query_id, {})
                 if "original_messages" not in traj or not traj.get("original_messages"):
                     raise ValueError(
-                        f"traj_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
+                        f"traj_summary_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
                         f"rerun the source with --store-raw so original_messages gets persisted."
                     )
-                traj_text = _format_original_messages_for_prompt(traj)
-                user_content = format_query_with_trajectory(question, traj_text)
-                print(f"[{query_id}] Prepended original messages to prompt", flush=True)
-            elif self.planning_trigger == "traj_summary_ext":
-                if query_id in self.summaries_by_id:
-                    traj_summary = self.summaries_by_id[query_id]
-                    print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-                else:
-                    traj = self.trajectories_by_id.get(query_id, {})
-                    traj_text = _format_tongyi_trajectory_for_prompt(
-                        traj,
-                        max_chars=400000,
-                        reasoning_max_chars=3000,
-                        tool_output_max_chars=3000,
-                    )
-                    print(f"[{query_id}] Summarizing trajectory...", flush=True)
-                    traj_summary = call_trajectory_summarizer(
-                        lambda msgs: self.call_server(msgs, main_agent_port, model_str="main_agent"),
-                        question=question,
-                        trajectory_text=traj_text,
-                    )
-                    traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-                user_content = format_query_with_traj_summary(question, traj_summary)
-                print(f"[{query_id}] Prepended trajectory summary to prompt", flush=True)
-            elif self.planning_trigger == "traj_summary_orig_ext":
-                if query_id in self.summaries_by_id:
-                    traj_summary = self.summaries_by_id[query_id]
-                    print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-                else:
-                    traj = self.trajectories_by_id.get(query_id, {})
-                    if "original_messages" not in traj or not traj.get("original_messages"):
-                        raise ValueError(
-                            f"traj_summary_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
-                            f"rerun the source with --store-raw so original_messages gets persisted."
-                        )
-                    traj_text = _format_original_messages_for_prompt(traj, max_chars=400000)
-                    print(f"[{query_id}] Summarizing original messages...", flush=True)
-                    traj_summary = call_trajectory_summarizer(
-                        lambda msgs: self.call_server(msgs, main_agent_port, model_str="main_agent"),
-                        question=question,
-                        trajectory_text=traj_text,
-                    )
-                    traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-                user_content = format_query_with_traj_summary(question, traj_summary)
-                print(f"[{query_id}] Prepended original-message summary to prompt", flush=True)
+                traj_text = _format_original_messages_for_prompt(traj, max_chars=400000)
+                print(f"[{query_id}] Summarizing original messages...", flush=True)
+                traj_summary = call_trajectory_summarizer(
+                    lambda msgs: self.call_server(msgs, main_agent_port),
+                    question=question,
+                    trajectory_text=traj_text,
+                )
+                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+            user_content = format_query_with_traj_summary(question, traj_summary)
+            print(f"[{query_id}] Prepended original-message summary to prompt", flush=True)
 
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
-        mid_planning_done = False
-        last_reinject_at = 0  # iteration count at last plan re-injection
-        last_revise_at = 0  # iteration count at last plan revision
-        injected_plan_text = ""
-
-        ## Start Planning (oss_client structure: start, after_steps, start_and_after_steps, start_ext).
-        if self.planning:
-            if self.planning_trigger in ("start", "start_and_after_steps"):
-                print("Planning mode (start), calling planner...", flush=True)
-                planner_response = self.call_planner(question, planning_port)
-                plan_messages = _inject_plan_into_messages(planner_response)
-                messages.extend(plan_messages)
-                injected_plan_text = _parse_plan_from_response(planner_response)
-                print("Planning response: ", injected_plan_text, flush=True)
-            elif self.planning_trigger == "start_ext":
-                plan_output = self.plans_by_id.get(query_id, "")
-                plan_messages = _inject_plan_into_messages(plan_output)
-                messages.extend(plan_messages)
-                injected_plan_text = _parse_plan_from_response(plan_output)
-                print(f"Injected external plan for query_id={query_id}", flush=True)
 
         while num_llm_calls_available > 0:
             start_inference_time = time.time()
-            if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
+            if time.time() - start_time > 150 * 60:
                 prediction = 'No answer found after 2h30mins'
                 termination = 'No answer found after 2h30mins'
                 result = {
@@ -415,26 +241,21 @@ Based on the question and conversation history above, output the revised plan wi
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
                     "retrieved_docids": retrieved_docids
                 }
                 return result
-            
-            ## Call LLM Inference.
+
             round += 1
             num_llm_calls_available -= 1
-            content = self.call_server(messages, main_agent_port, model_str="main_agent")
+            content = self.call_server(messages, main_agent_port)
             print(f'Round {round}: {content}', flush=True)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]
             messages.append({"role": "assistant", "content": content.strip()})
             total_inference_time += (time.time() - start_inference_time)
-            
-            
-            ## Start Tool Calling.
+
             start_tool_call_time = time.time()
-            valid_tool_call = False
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
@@ -448,9 +269,6 @@ Based on the question and conversation history above, output the revised plan wi
 
                     if docids is not None:
                         tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-                        # retrieved_docids.extend(docids)
-                        # retrieved_docids.append(docids)
-                        # import json
                         if isinstance(tool_args, dict):
                             if len(tool_args) > 0:
                                 retrieved_docids.append({json5.dumps(tool_args): docids})
@@ -458,7 +276,6 @@ Based on the question and conversation history above, output the revised plan wi
                                 retrieved_docids.append({"": docids})
                         else:
                             retrieved_docids.append({"": docids})
-                        valid_tool_call = True
                     elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
                         if isinstance(tool_args, dict):
                             if len(tool_args) > 0:
@@ -469,75 +286,13 @@ Based on the question and conversation history above, output the revised plan wi
                             retrieved_docids.append({"": []})
 
                 except:
-                    # print(tool_args, type(tool_args))
                     tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field. The "arguments" field should only be a single string. It should NOT be a list.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
                 messages.append({"role": "user", "content": result})
-                
-                if valid_tool_call and self.query_rewriting:
-                    # Start Query Rewriting.
-                    print("Starting query rewriting...", flush=True)
-                    past_key_strings = [json5.dumps(list(x.keys())[0]) for x in retrieved_docids]
-                    past_key_strings = [k for k in past_key_strings if k != '' ]
-                    past_search_tool_calls = ';'.join(past_key_strings)
-                    user_prompt = f"User question: {question}\n Previous search tool calls: {past_search_tool_calls} \n\n Current search tool call: {json5.dumps(tool_args)} \n\n Current search tool response: {result}"
-                    print("User prompt for query rewriting: ", user_prompt, flush=True)
-                    content = self.call_server([{"role": "system", "content": self.query_rewriter_prompt}, {"role": "user", "content": user_prompt}], query_rewriting_port, model_str="query_rewriting")
-                    messages.append({"role": "assistant", "content": "I am calling an expert search query rewriter to help me improve the search queries I have made previously."})
-                    # messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip().split("<query>")[1].split("</query>")[0]})
-                    messages.append({"role": "user", "content": "Here is the expert search query rewriter's output; please reference these suggestions to help improve the search queries you have made previously. After looking at the suggested new search queries, you should come up with a new search query by yourself and call the search tool with the new search query to get new search results. " + content.strip()})
-                    print("Query rewriting response: ", content.strip(), flush=True)
-
-                ## Mid-conversation planning (oss_client: after_steps, start_and_after_steps).
-                total_tools = sum(tool_call_counts_all.values())
-                if (
-                    self.planning
-                    and self.planning_trigger in ("after_steps", "start_and_after_steps")
-                    and total_tools >= self.planning_steps
-                    and not mid_planning_done
-                ):
-                    print("Mid-conversation planning triggered...", flush=True)
-                    planner_response = self.call_planner_mid(question, messages, planning_port)
-                    plan_messages = _inject_plan_into_messages(planner_response)
-                    messages.extend(plan_messages)
-                    mid_planning_done = True
-                    print("Injected revised plan into messages", flush=True)
-
-                ## Plan re-injection: periodic lightweight reminder.
-                reinject_every = getattr(self, 'plan_reinject_every', 0)
-                if (
-                    reinject_every > 0
-                    and injected_plan_text
-                    and round - last_reinject_at >= reinject_every
-                ):
-                    messages.append({
-                        "role": "user",
-                        "content": f"Reminder — here is the plan you were given at the start. "
-                                   f"Use it to guide your next steps:\n{injected_plan_text}",
-                    })
-                    last_reinject_at = round
-                    print(f"Re-injected plan reminder at iteration {round}", flush=True)
-
-                ## Periodic plan revision: call the mid-planner to produce a revised plan.
-                revise_every = getattr(self, 'plan_revise_every', 0)
-                if (
-                    self.planning
-                    and revise_every > 0
-                    and round - last_revise_at >= revise_every
-                ):
-                    print(f"Plan revision triggered at iteration {round}...", flush=True)
-                    planner_response = self.call_planner_mid(question, messages, planning_port)
-                    plan_messages = _inject_plan_into_messages(planner_response)
-                    messages.extend(plan_messages)
-                    revised_text = _parse_plan_from_response(planner_response)
-                    if revised_text:
-                        injected_plan_text = revised_text
-                    last_revise_at = round
-                    print(f"Injected revised plan at iteration {round}", flush=True)
 
             total_tool_call_time += (time.time() - start_tool_call_time)
-                
+
             start_inference_time = time.time()
             if '<answer>' in content and '</answer>' in content:
                 termination = 'answer'
@@ -551,9 +306,8 @@ Based on the question and conversation history above, output the revised plan wi
 
             if token_count > max_tokens:
                 print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
-                
                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content = self.call_server(messages, main_agent_port, model_str="main_agent")
+                content = self.call_server(messages, main_agent_port)
                 messages.append({"role": "assistant", "content": content.strip()})
                 if '<answer>' in content and '</answer>' in content:
                     prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
@@ -569,7 +323,6 @@ Based on the question and conversation history above, output the revised plan wi
                     "termination": termination,
                     "tool_call_counts": tool_call_counts,
                     "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
                     "retrieved_docids": retrieved_docids
                 }
                 return result
@@ -592,7 +345,6 @@ Based on the question and conversation history above, output the revised plan wi
             "termination": termination,
             "tool_call_counts": tool_call_counts,
             "tool_call_counts_all": tool_call_counts_all,
-            # "retrieved_docids": list(set(retrieved_docids))
             "retrieved_docids": retrieved_docids,
             "total_inference_time": total_inference_time,
             "total_tool_call_time": total_tool_call_time
@@ -604,648 +356,3 @@ Based on the question and conversation history above, output the revised plan wi
             return self.search_tool.call(tool_args, **kwargs)
         else:
             return f"Error: Tool {tool_name} not found. You can only use the \"search\" tool. Do not use any other tool.", None
-
-
-# class SampleAgent(MultiTurnReactAgent):
-#     def __init__(self,
-#                  function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
-#                  llm: Optional[Union[Dict, BaseChatModel]] = None,
-#                  search_tool_handler: Optional[SearchToolHandler] = None,
-#                  multi_answer: Optional[bool] = False,
-#                  **kwargs):
-#         super().__init__(
-#             function_list=function_list,
-#             llm=llm,
-#             search_tool_handler=search_tool_handler,
-#             multi_answer=multi_answer,
-#             **kwargs
-#         )
-        
-#     def parse_content(self, content: str, tool_call_counts_all: dict):
-#         tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
-#         valid_tool_call = False
-#         try:
-#             tool_call = json5.loads(tool_call)
-#             tool_name = tool_call.get('name', '')
-#             tool_args = tool_call.get('arguments', {})
-#             valid_tool_call = True
-#             tool_call_counts_all[tool_name] = tool_call_counts_all.get(tool_name, 0) + 1
-#             return tool_name, tool_args, valid_tool_call
-#         except:
-#             tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
-#             return None, None, False
-
-#     def process_tool_call(self, tool_name: str, tool_args: dict, tool_call_counts: dict, retrieved_docids: list):
-#         result, docids = self.custom_call_tool(tool_name, tool_args)
-
-#         has_doc_ids = False
-#         if docids is not None:
-#             tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-#             # retrieved_docids.extend(docids)
-#             # retrieved_docids.append(docids)
-#             # import json5
-#             if isinstance(tool_args, dict):
-#                 if len(tool_args) > 0:
-#                     retrieved_docids.append({json5.dumps(tool_args): docids})
-#                 else:
-#                     retrieved_docids.append({"": docids})
-#             else:
-#                 retrieved_docids.append({"": docids})
-#             has_doc_ids = True
-#         elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
-#             if isinstance(tool_args, dict):
-#                 if len(tool_args) > 0:
-#                     retrieved_docids.append({json5.dumps(tool_args): []})
-#                 else:
-#                     retrieved_docids.append({"": []})
-#             else:
-#                 retrieved_docids.append({"": []})
-        
-#         return result, docids, retrieved_docids, has_doc_ids
-    
-#     def jaccard_similarity(self, list1: list, list2: list):
-#         return len(set(list1) & set(list2)) / len(set(list1) | set(list2))
-
-#     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
-#         self.model=model
-#         tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path)
-#         try:
-#             question = data['item']['question']
-#         except:
-#             raw_msg = data['item']['messages'][1]["content"]
-#             question = raw_msg.split("User:")[1].strip() if "User:" in raw_msg else raw_msg
-
-#         tool_call_counts = {}  # Only successful tool calls
-#         tool_call_counts_all = {}  # All tool calls (successful and failed)
-#         retrieved_docids = []
-
-#         start_time = time.time()
-#         planning_port = data['planning_port']
-#         answer = data['item']['answer']
-#         self.user_prompt = question
-#         system_prompt = self.system_prompt
-#         cur_date = today_date()
-#         system_prompt = system_prompt + str(cur_date)
-#         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
-#         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
-#         round = 0
-#         while num_llm_calls_available > 0:
-#             if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
-#                 prediction = 'No answer found after 2h30mins'
-#                 termination = 'No answer found after 2h30mins'
-#                 result = {
-#                     "question": question,
-#                     "answer": answer,
-#                     "messages": messages,
-#                     "prediction": prediction,
-#                     "termination": termination,
-#                     "tool_call_counts": tool_call_counts,
-#                     "tool_call_counts_all": tool_call_counts_all,
-#                     # "retrieved_docids": list(set(retrieved_docids))
-#                     "retrieved_docids": retrieved_docids
-#                 }
-#                 return result
-#             round += 1
-#             num_llm_calls_available -= 1
-#             content = self.call_server(messages, planning_port)
-#             print(f'Round {round}: {content}')
-#             if '<tool_response>' in content:
-#                 pos = content.find('<tool_response>')
-#                 content = content[:pos]
-#             messages.append({"role": "assistant", "content": content.strip()})
-#             if '<tool_call>' in content and '</tool_call>' in content:
-#                 tool_name, tool_args, valid_tool_call = self.parse_content(content, tool_call_counts_all)
-#                 # print('OUTER tool_name: ', tool_name, 'tool_args: ', tool_args, 'valid_tool_call: ', valid_tool_call)
-#                 if not valid_tool_call:
-#                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
-#                 else:
-#                     if tool_name == 'search':
-#                         result, _, retrieved_docids, has_doc_ids = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-#                         if has_doc_ids: 
-#                             # only when search tool call returns some doc ids, we sample 5 times
-#                             # later when we actually use the most dissimilar search tool args, we will process the search call again
-#                             # print("Sampling search tool args for 5 times...", content)
-#                             sampled_tool_args = [tool_args]
-#                             for _ in range(30):
-#                                 content_inner = self.call_server(messages[:-1], planning_port)
-#                                 # print('[sampled content_inner: ]', content_inner)
-#                                 if not ('<tool_call>' in content_inner and '</tool_call>' in content_inner):
-#                                     continue
-#                                 tool_name_inner, tool_args_inner, valid_tool_call_inner = self.parse_content(content_inner, {})
-#                                 # print('[sampled tool_name: ', tool_name_inner, 'valid_tool_call: ', valid_tool_call_inner)
-#                                 if valid_tool_call_inner and tool_name_inner == 'search':
-#                                     try:
-#                                         # print('$$$ Try loading tool_args_inner: ', tool_args_inner, type(tool_args_inner))
-#                                         if isinstance(tool_args_inner, dict):
-#                                             if 'query' in (tool_args_inner) and isinstance(tool_args_inner['query'], str):
-#                                                 # print('$$$ Query in tool_args_inner: ', tool_args_inner['query'])
-#                                                 sampled_tool_args.append(tool_args_inner)
-#                                                 if len(sampled_tool_args) >= 5:
-#                                                     break
-#                                         elif isinstance(tool_args_inner, str):
-#                                             tool_args_inner_dict = json5.loads(tool_args_inner)
-#                                             if 'query' in (tool_args_inner_dict) and isinstance(tool_args_inner_dict['query'], str):
-#                                                 sampled_tool_args.append(tool_args_inner)
-#                                                 if len(sampled_tool_args) >= 5:
-#                                                     break
-#                                     except:
-#                                         # print('$$$ Error loading tool_args_inner: ', tool_args_inner)
-#                                         continue
-#                             if len(sampled_tool_args) >= 5:     
-#                                 # handle the retrieved_docids list to remove the last element
-#                                 retrieved_docids.pop()
-#                                 # print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
-                                
-#                                 # print("<<>>Sampled search tool args: ", sampled_tool_args)
-#                                 past_keys = []
-#                                 for n_dict in retrieved_docids:
-#                                     key = next(iter(n_dict.keys()))
-#                                     val = json5.loads(key)
-#                                     if len(n_dict[key]) > 0:
-#                                         if isinstance(val['query'], list):
-#                                             past_keys.append(','.join(val['query']))
-#                                         else:
-#                                             past_keys.append(val['query'])
-                                        
-#                                 if len(past_keys) == 0:
-#                                     # print('$$$ No past keys, selecting a random tool args')
-#                                     tool_args = random.choice(sampled_tool_args)
-#                                     tool_name = 'search'
-#                                 else:
-#                                     # print('$$$ Past keys: ', past_keys)
-#                                     tokenized_past_keys = tokenizer.encode(' '.join(past_keys))
-#                                     sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
-#                                     print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
-                                    
-#                                     # compute similarity and get the most dissimilar response.
-#                                     tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
-#                                     similarities = np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
-#                                     min_sim_index = np.argmin(similarities)
-#                                     tool_args = sampled_tool_args[min_sim_index]
-#                                     tool_name = 'search'
-                                
-#                                 # only until here we have successfully sampled 5 tool calls and picked the best one.
-#                                 # print('***Selected tool_name, tool_args: ', tool_name, tool_args)
-#                                 tool_call_counts['search'] -= 1
-#                                 result, _, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-#                     else:                                    
-#                         result, docids, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-
-#                 result = "<tool_response>\n" + result + "\n</tool_response>"
-#                 messages.append({"role": "user", "content": result})
-#             if '<answer>' in content and '</answer>' in content:
-#                 termination = 'answer'
-#                 break
-#             if num_llm_calls_available <= 0 and '<answer>' not in content:
-#                 messages[-1]['content'] = 'Sorry, the number of llm calls exceeds the limit.'
-
-#             max_tokens = 108 * 1024
-#             token_count = self.count_tokens(messages)
-#             # print(f"round: {round}, token count: {token_count}")
-
-#             if token_count > max_tokens:
-#                 # print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
-                
-#                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-#                 content = self.call_server(messages, planning_port)
-#                 messages.append({"role": "assistant", "content": content.strip()})
-#                 if '<answer>' in content and '</answer>' in content:
-#                     prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
-#                     termination = 'generate an answer as token limit reached'
-#                 else:
-#                     prediction = messages[-1]['content']
-#                     termination = 'format error: generate an answer as token limit reached'
-#                 result = {
-#                     "question": question,
-#                     "answer": answer,
-#                     "messages": messages,
-#                     "prediction": prediction,
-#                     "termination": termination,
-#                     "tool_call_counts": tool_call_counts,
-#                     "tool_call_counts_all": tool_call_counts_all,
-#                     # "retrieved_docids": list(set(retrieved_docids))
-#                     "retrieved_docids": retrieved_docids
-#                 }
-#                 return result
-
-#         if '<answer>' in messages[-1]['content']:
-#             prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
-#             termination = 'answer'
-#         else:
-#             prediction = 'No answer found.'
-#             termination = 'answer not found'
-#             if num_llm_calls_available == 0:
-#                 termination = 'exceed available llm calls'
-#         result = {
-#             "question": question,
-#             "answer": answer,
-#             "messages": messages,
-#             "prediction": prediction,
-#             "termination": termination,
-#             "tool_call_counts": tool_call_counts,
-#             "tool_call_counts_all": tool_call_counts_all,
-#             # "retrieved_docids": list(set(retrieved_docids))
-#             "retrieved_docids": retrieved_docids
-#         }
-#         return result
-    
-    
-
-class SampleOutcomeAgent(MultiTurnReactAgent):
-    def __init__(self,
-                 function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
-                 llm: Optional[Union[Dict, BaseChatModel]] = None,
-                 search_tool_handler: Optional[SearchToolHandler] = None,
-                 multi_answer: Optional[bool] = False,
-                 sample_mode: Optional[str] = None,
-                 **kwargs):
-        super().__init__(
-            function_list=function_list,
-            llm=llm,
-            search_tool_handler=search_tool_handler,
-            multi_answer=multi_answer,
-            **kwargs
-        )
-        self.sample_mode = sample_mode
-        self.bert_scorer = BERTScorer(lang="en")
-        self.historical_summary = ""
-        
-    def parse_content(self, content: str, tool_call_counts_all: dict):
-        tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
-        valid_tool_call = False
-        try:
-            tool_call = json5.loads(tool_call)
-            tool_name = tool_call.get('name', '')
-            tool_args = tool_call.get('arguments', {})
-            valid_tool_call = True
-            tool_call_counts_all[tool_name] = tool_call_counts_all.get(tool_name, 0) + 1
-            return tool_name, tool_args, valid_tool_call
-        except:
-            tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
-            return None, None, False
-
-    def process_tool_call(self, tool_name: str, tool_args: dict, tool_call_counts: dict, retrieved_docids: list):
-        result, docids = self.custom_call_tool(tool_name, tool_args)
-
-        has_doc_ids = False
-        if docids is not None:
-            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-            # retrieved_docids.extend(docids)
-            # retrieved_docids.append(docids)
-            # import json5
-            if isinstance(tool_args, dict):
-                if len(tool_args) > 0:
-                    retrieved_docids.append({json5.dumps(tool_args): docids})
-                else:
-                    retrieved_docids.append({"": docids})
-            else:
-                retrieved_docids.append({"": docids})
-            has_doc_ids = True
-        elif tool_name == 'local_knowledge_base_retrieval' or tool_name == 'search':
-            if isinstance(tool_args, dict):
-                if len(tool_args) > 0:
-                    retrieved_docids.append({json5.dumps(tool_args): []})
-                else:
-                    retrieved_docids.append({"": []})
-            else:
-                retrieved_docids.append({"": []})
-        
-        return result, docids, retrieved_docids, has_doc_ids
-    
-    def jaccard_similarity(self, list1: list, list2: list):
-        return len(set(list1) & set(list2)) / len(set(list1) | set(list2))
-
-    def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
-        self.model=model
-        tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path)
-        try:
-            question = data['item']['question']
-        except:
-            raw_msg = data['item']['messages'][1]["content"]
-            question = raw_msg.split("User:")[1].strip() if "User:" in raw_msg else raw_msg
-
-        tool_call_counts = {}  # Only successful tool calls
-        tool_call_counts_all = {}  # All tool calls (successful and failed)
-        retrieved_docids = []
-        retrieved_docids_set = set()
-
-        start_time = time.time()
-        planning_port = data['planning_port']
-        answer = data['item']['answer']
-        self.user_prompt = question
-        system_prompt = self.system_prompt
-        cur_date = today_date()
-        system_prompt = system_prompt + str(cur_date)
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
-        num_llm_calls_available = MAX_LLM_CALL_PER_RUN
-        round = 0
-        while num_llm_calls_available > 0:
-            if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
-                prediction = 'No answer found after 2h30mins'
-                termination = 'No answer found after 2h30mins'
-                result = {
-                    "question": question,
-                    "answer": answer,
-                    "messages": messages,
-                    "prediction": prediction,
-                    "termination": termination,
-                    "tool_call_counts": tool_call_counts,
-                    "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
-                }
-                return result
-            round += 1
-            num_llm_calls_available -= 1
-            content = self.call_server(messages, planning_port)
-            print(f'Round {round}: {content}', flush=True)
-            if '<tool_response>' in content:
-                pos = content.find('<tool_response>')
-                content = content[:pos]
-            messages.append({"role": "assistant", "content": content.strip()})
-            if '<tool_call>' in content and '</tool_call>' in content:
-                tool_name, tool_args, valid_tool_call = self.parse_content(content, tool_call_counts_all)
-                print('OUTER tool_name: ', tool_name, 'tool_args: ', tool_args, 'valid_tool_call: ', valid_tool_call)
-                if not valid_tool_call:
-                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
-                else:
-                    if tool_name == 'search':
-                        result, _, retrieved_docids, has_doc_ids = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-                        if has_doc_ids: 
-                            # only when search tool call returns some doc ids, we sample 5 times
-                            # later when we actually use the most dissimilar search tool args, we will process the search call again
-                            # print("Sampling search tool args for 5 times...", content)
-                            sampled_tool_args = [tool_args]
-                            
-                            # if sampling using reward model 
-                            # keep track of sampled current actions
-                            sampled_current_reasonings = [content]
-                            for _ in range(30):
-                                content_inner = self.call_server(messages[:-1], planning_port)
-                                # print('[sampled content_inner: ]', content_inner)
-                                if not ('<tool_call>' in content_inner and '</tool_call>' in content_inner):
-                                    continue
-                                tool_name_inner, tool_args_inner, valid_tool_call_inner = self.parse_content(content_inner, {})
-                                # print('[sampled tool_name: ', tool_name_inner, 'valid_tool_call: ', valid_tool_call_inner)
-                                if valid_tool_call_inner and tool_name_inner == 'search':
-                                    try:
-                                        # print('$$$ Try loading tool_args_inner: ', tool_args_inner, type(tool_args_inner))
-                                        if isinstance(tool_args_inner, dict):
-                                            if 'query' in (tool_args_inner) and isinstance(tool_args_inner['query'], str):
-                                                # print('$$$ Query in tool_args_inner: ', tool_args_inner['query'])
-                                                sampled_tool_args.append(tool_args_inner)
-                                                sampled_current_reasonings.append(content_inner)
-                                                if len(sampled_tool_args) >= 5:
-                                                    break
-                                        elif isinstance(tool_args_inner, str):
-                                            tool_args_inner_dict = json5.loads(tool_args_inner)
-                                            if 'query' in (tool_args_inner_dict) and isinstance(tool_args_inner_dict['query'], str):
-                                                sampled_tool_args.append(tool_args_inner)
-                                                sampled_current_reasonings.append(content_inner)
-                                                if len(sampled_tool_args) >= 5:
-                                                    break
-                                    except:
-                                        # print('$$$ Error loading tool_args_inner: ', tool_args_inner)
-                                        continue
-                            if len(sampled_tool_args) >= 5:     
-                                # handle the retrieved_docids list to remove the last element
-                                retrieved_docids.pop()
-                                # print('$$$ Retrieved docids: ', [next(iter(n_dict.keys())) for n_dict in retrieved_docids])
-                                
-                                # print("<<>>Sampled search tool args: ", sampled_tool_args)
-                                past_keys = []
-                                for n_dict in retrieved_docids:
-                                    key = next(iter(n_dict.keys()))
-                                    val = json5.loads(key)
-                                    if len(n_dict[key]) > 0:
-                                        if isinstance(val['query'], list):
-                                            past_keys.append(','.join(val['query']))
-                                        else:
-                                            past_keys.append(val['query'])
-                                        
-                                if len(past_keys) == 0:
-                                    # print('$$$ No past keys, selecting a random tool args')
-                                    tool_args = random.choice(sampled_tool_args)
-                                    tool_name = 'search'
-                                else:
-                                    # print('$$$ Past keys: ', past_keys)
-                                    tokenized_past_keys = tokenizer.encode(' '.join(past_keys))
-                                    sampled_tool_args_text_only = [','.join(s['query']) if isinstance(s['query'], list) else s['query'] for s in sampled_tool_args]
-                                    summaries = []
-                                    # print('$$$ sampled_tool_args: ', sampled_tool_args_text_only)
-                                    
-                                    if self.sample_mode == 'jaccard_join':
-                                        # compute similarity and get the most dissimilar response.
-                                        # compare with all the past keys joined by whitespace. 
-                                        tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
-                                        similarities = np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
-                                        
-                                    elif self.sample_mode == 'jaccard_max':
-                                        # compute similarity using jaccard similarity, but compare with each previous key individually and take the max. 
-                                        similarities = []
-                                        tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
-                                        for tokenized_arg in tokenized_sampled_args:  # loop thru every tokenized sampled arguments 
-                                            # get the max sim across past search calls
-                                            max_sim_for_arg = max([self.jaccard_similarity(tokenizer.encode(past_k), tokenized_arg) for past_k in past_keys])
-                                            similarities.append(max_sim_for_arg)
-                                        similarities = np.array(similarities)
-                                    elif self.sample_mode == 'bertscore_join':
-                                        # compute similarity and get the most dissimilar response using bertscore.
-                                        # compare with all the past keys joined by whitespace. 
-                                        P, R, F1 = self.bert_scorer.score(sampled_tool_args_text_only, [' '.join(past_keys) for _ in range(len(sampled_tool_args_text_only))])
-                                        similarities = F1.numpy()
-                                    elif self.sample_mode == 'bertscore_max':
-                                        # compute similarity using bertscore, but compare with each previous key individually and take the max. 
-                                        similarities = []
-                                        for _sampled_arg in sampled_tool_args_text_only:
-                                            P, R, F1 = self.bert_scorer.score([_sampled_arg for _ in range(len(past_keys))], past_keys)
-                                            # take the max F1 score for each sampled argument
-                                            similarities.append(max(F1.numpy()))
-                                        similarities = np.array(similarities)
-                                    elif self.sample_mode == 'outcome':  
-                                        # compute similarity using outcome based reward. 
-                                        similarities = []
-                                        for tool_args_sampled in sampled_tool_args:
-                                            _, _, retrieved_docids_sampled, _ = self.process_tool_call(tool_name, tool_args_sampled, {}, [])
-                                            # print('sampled args', tool_args_sampled, 'comparing outcome between: ', list(retrieved_docids_set), 'and: ', next(iter(retrieved_docids_sampled[0].values())))
-                                            similarities.append(self.jaccard_similarity(list(retrieved_docids_set), next(iter(retrieved_docids_sampled[0].values()))))
-                                        similarities = np.array(similarities)
-                                                 
-                                    elif (self.sample_mode == 'reward' or self.sample_mode == 'reward+jaccard_join' or self.sample_mode == 'reward+bertscore_max') or (self.sample_mode == 'reward_single_lm' or self.sample_mode == 'reward_single_lm+jaccard_join'):
-                                        similarities = []
-                                        for current_reasoning in sampled_current_reasonings:
-                                            # score the trajectory based on the reward model.
-                                            summary_prompt = PRM_AS_SUMMARIZER.format(
-                                                problem=question, 
-                                                historical_summary=self.historical_summary, 
-                                                previous_tool_response=messages[-2]['content'], 
-                                                current_reasoning=current_reasoning)
-                                            reward_messages = [{"role": "user", "content": summary_prompt}]
-                                            print("^^^history summary: ", self.historical_summary)
-                                            if 'single_lm' in self.sample_mode:
-                                                summary = self.call_server(reward_messages, planning_port)
-                                            else:
-                                                summary = self.call_reward_model(reward_messages, planning_port+2)
-                                            print("summary: ", summary)
-                                            try:
-                                                summary = summary.split('\\boxed_summary{')[1].split('}')[0]
-                                            except:
-                                                summary = self.historical_summary
-                                            summaries.append(summary)
-                                            
-                                            score_prompt = PRM_AS_SCORER.format(
-                                                problem=question, 
-                                                historical_summary=self.historical_summary, 
-                                                previous_tool_response=messages[-2]['content'], 
-                                                current_reasoning=current_reasoning)
-                                            score_messages = [{"role": "user", "content": score_prompt}]
-                                            if 'single_lm' in self.sample_mode:
-                                                score = self.call_server(score_messages, planning_port)
-                                            else:
-                                                score = self.call_reward_model(score_messages, planning_port+2)
-                                            # print("score: ", score)
-                                            try:
-                                                score = score.split('\\boxed_score{')[1].split('}')[0]
-                                                score = float(score)
-                                            except:
-                                                score = -5.0
-                                            
-                                            similarities.append(-score)
-                                        similarities = np.array(similarities)
-                                        if self.sample_mode == 'reward+jaccard_join' or self.sample_mode == 'reward_single_lm+jaccard_join':
-                                            tokenized_sampled_args = [tokenizer.encode(s) for s in sampled_tool_args_text_only]
-                                            similarities += np.array([self.jaccard_similarity(tokenized_past_keys, tokenized_arg) for tokenized_arg in tokenized_sampled_args])
-                                        elif self.sample_mode == 'reward+bertscore_max':
-                                            bertscore_similarities = []
-                                            for _sampled_arg in sampled_tool_args_text_only:
-                                                P, R, F1 = self.bert_scorer.score([_sampled_arg for _ in range(len(past_keys))], past_keys)
-                                                # take the max F1 score for each sampled argument
-                                                bertscore_similarities.append(max(F1.numpy()))
-                                            similarities += np.array(bertscore_similarities)
-                                    
-                                    print('$$$ similarities: ', similarities)
-                                    min_sim_index = np.argmin(similarities)    
-                                    tool_args = sampled_tool_args[min_sim_index]
-                                    if len(summaries) > 0:
-                                        self.historical_summary = summaries[min_sim_index]
-                                    tool_name = 'search'
-                                
-                                # only until here we have successfully sampled 5 tool calls and picked the best one.
-                                print('***Selected tool_name, tool_args: ', tool_name, tool_args)
-                                tool_call_counts['search'] -= 1
-                                result, _, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-                                
-                            # maintain a set of retrieved doc ids. No need to recompute every time. 
-                            for _docid in next(iter(retrieved_docids[-1].values())):
-                                retrieved_docids_set.add(_docid)
-                    else:                                    
-                        result, docids, retrieved_docids, _ = self.process_tool_call(tool_name, tool_args, tool_call_counts, retrieved_docids)
-
-                result = "<tool_response>\n" + result + "\n</tool_response>"
-                messages.append({"role": "user", "content": result})
-            if '<answer>' in content and '</answer>' in content:
-                termination = 'answer'
-                break
-            if num_llm_calls_available <= 0 and '<answer>' not in content:
-                messages[-1]['content'] = 'Sorry, the number of llm calls exceeds the limit.'
-
-            max_tokens = 108 * 1024
-            token_count = self.count_tokens(messages)
-            # print(f"round: {round}, token count: {token_count}")
-
-            if token_count > max_tokens:
-                # print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
-                
-                messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content = self.call_server(messages, planning_port)
-                messages.append({"role": "assistant", "content": content.strip()})
-                if '<answer>' in content and '</answer>' in content:
-                    prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
-                    termination = 'generate an answer as token limit reached'
-                else:
-                    prediction = messages[-1]['content']
-                    termination = 'format error: generate an answer as token limit reached'
-                result = {
-                    "question": question,
-                    "answer": answer,
-                    "messages": messages,
-                    "prediction": prediction,
-                    "termination": termination,
-                    "tool_call_counts": tool_call_counts,
-                    "tool_call_counts_all": tool_call_counts_all,
-                    # "retrieved_docids": list(set(retrieved_docids))
-                    "retrieved_docids": retrieved_docids
-                }
-                return result
-
-        if '<answer>' in messages[-1]['content']:
-            prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
-            termination = 'answer'
-        else:
-            prediction = 'No answer found.'
-            termination = 'answer not found'
-            if num_llm_calls_available == 0:
-                termination = 'exceed available llm calls'
-        result = {
-            "question": question,
-            "answer": answer,
-            "messages": messages,
-            "prediction": prediction,
-            "termination": termination,
-            "tool_call_counts": tool_call_counts,
-            "tool_call_counts_all": tool_call_counts_all,
-            # "retrieved_docids": list(set(retrieved_docids))
-            "retrieved_docids": retrieved_docids
-        }
-        return result
-    
-    
-    def call_reward_model(self, msgs, planning_port, max_tries=10):
-        
-        openai_api_key = "EMPTY"
-        openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
-
-        client = OpenAI(
-            api_key=openai_api_key,
-            base_url=openai_api_base,
-            timeout=600.0,
-        )
-
-        base_sleep_time = 1 
-        
-        for attempt in range(max_tries):
-            try:
-                chat_response = client.chat.completions.create(
-                    model=self.reward_model,
-                    messages=msgs,
-                    max_tokens=2048,
-                )
-                content = chat_response.choices[0].message.content
-                if content and content.strip():
-                    return content.strip()
-                else:
-                    print(f"Warning: Attempt to call reward model failed. Attempt {attempt + 1} received an empty response.")
-
-            except (APIError, APIConnectionError, APITimeoutError) as e:
-                print(f"Calling Reward Model Error: Attempt {attempt + 1} failed with an API or network error: {e}")
-            except Exception as e:
-                print(f"Calling Reward Model Error: Attempt {attempt + 1} failed with an unexpected error: {e}")
-
-            if attempt < max_tries - 1:
-                sleep_time = base_sleep_time * (2 ** attempt) + random.uniform(0, 1)
-                sleep_time = min(sleep_time, 30) 
-                
-                print(f"Retrying in {sleep_time:.2f} seconds...")
-                time.sleep(sleep_time)
-            else:
-                print("Error: All retry attempts have been exhausted. The call has failed.")
-        
-        return f"vllm server error!!!"
-    
-    
-    
-    
-# vllm serve hkust-nlp/WebExplorer-8B --port 6008 --tensor-parallel-size 1  --gpu-memory-utilization 0.5 --trust-remote-code
-# CUDA_VISIBLE_DEVICES=1 vllm serve Jaew00Lee/Qwen3-4B-PRInTS --port 6010 --tensor-parallel-size 1  --gpu-memory-utilization 0.5 --trust-remote-code
-
-# python search_agent/tongyi_client.py --model hkust-nlp/WebExplorer-8B --output-dir runs/qwen3-8/test --searcher-type faiss --index-path "indexes/Qwen3-Embedding-8B/corpus.shard*.pkl" --model-name "Qwen/Qwen3-Embedding-8B"  --num-threads 1 --sample-mode reward

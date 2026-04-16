@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tongyi_utils.react_agent import MultiTurnReactAgent, SampleOutcomeAgent, _load_and_validate_plans
+from tongyi_utils.react_agent import MultiTurnReactAgent
 from tongyi_utils.tool_search import SearchToolHandler
 from trajectory_utils import (
     _load_and_validate_trajectories,
@@ -23,30 +23,23 @@ from searcher.searchers import SearcherType
 import re
 
 
+TRAJ_TRIGGERS = (
+    "traj_ext",
+    "traj_orig_ext",
+    "traj_summary_ext",
+    "traj_summary_orig_ext",
+)
+TRAJ_SUMMARY_TRIGGERS = ("traj_summary_ext", "traj_summary_orig_ext")
+
+
 def parse_messages_to_result_array(messages: list) -> list:
     result_array = []
 
     for i, msg in enumerate(messages):
-        if msg.get("role") != "assistant" and not (msg.get("role") == "user" and (msg.get("content").startswith("Here is the planner's response") or msg.get("content").startswith("Here is the query rewriter's response"))):
+        if msg.get("role") != "assistant":
             continue
 
         content = msg.get("content", "")
-        
-        ## for planning
-        if msg.get("content").startswith("Here is the planner's response") or msg.get("content").startswith("Here is the query rewriter's response"):
-            result_array.append({
-                "type": "user",
-                "tool_name": None,
-                "arguments": None,
-                "output": msg.get("content")
-                })
-        if msg.get("content") == "I am calling a planner to plan a sequence of actions to answer the user's question." or msg.get("content") == "I am calling a query rewriter to help me improve the queries I have made previously.":
-            result_array.append({
-                "type": "assistant",
-                "tool_name": None,
-                "arguments": None,
-                "output": msg.get("content")
-                })
 
         think_matches = re.findall(r'<think>(.*?)</think>', content, re.DOTALL)
         if think_matches:
@@ -65,7 +58,6 @@ def parse_messages_to_result_array(messages: list) -> list:
                 tool_name = tool_call_data.get("name", "")
                 arguments = json.dumps(tool_call_data.get("arguments", {}))
 
-                # Find the corresponding tool_response in the next user message
                 tool_output = ""
                 if i + 1 < len(messages) and messages[i + 1].get("role") == "user":
                     next_content = messages[i + 1].get("content", "")
@@ -134,46 +126,20 @@ def persist_response(output_dir: Path, query_id: str | None, query: str, result:
     print(f"Saved response to {filename}")
 
 
-def process_single_query(query: str, agent: MultiTurnReactAgent, args, output_dir: Path):
-    print(f"Processing single query: {query}")
-    
-    task_data = {
-        "item": {"question": query, "answer": ""},
-        "main_agent_port": args.port,
-        "planning_port": args.planning_port,
-        "query_rewriting_port": args.query_rewriting_port
-    }
-    
-    try:
-        import time
-        start_time = time.time()
-        result = agent._run(task_data, args.model)
-        time_taken = time.time() - start_time
-        persist_response(output_dir, None, query, result, args, time_taken)
-    except Exception as exc:
-        print(f"Error processing query: {exc}")
-        error_result = {
-            "question": query,
-            "error": str(exc),
-            "prediction": "[Failed]"
-        }
-        persist_response(output_dir, None, query, error_result, args, 0.0)
-
-
 def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_dir: Path):
-    """Process a TSV file of (id \\t query) pairs and save individual JSON files."""
+    """Process a TSV file of (id \t query) pairs and save individual JSON files."""
     dataset_path = Path(tsv_path)
     if not dataset_path.is_file():
         raise FileNotFoundError(f"TSV file not found: {tsv_path}")
-    
+
     queries = []
     with dataset_path.open(newline="", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
             if len(row) < 2:
-                continue  # skip malformed lines
+                continue
             queries.append((row[0].strip(), row[1].strip()))
-    
+
     processed_ids = set()
     if output_dir.exists():
         for json_path in output_dir.glob("run_*.json"):
@@ -184,57 +150,33 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
                     if qid_saved:
                         processed_ids.add(str(qid_saved))
             except Exception:
-                continue  # ignore corrupt files
-    
+                continue
+
     remaining = [(qid, qtext) for qid, qtext in queries if qid not in processed_ids]
 
-    # Load pre-generated plans when start_ext
-    if args.planning and args.planning_trigger == "start_ext":
-        agent.plans_by_id = _load_and_validate_plans(args.planning_file, queries)
-        print(f"Loaded {len(agent.plans_by_id)} plans from {args.planning_file}")
-
-    # Load pre-computed summaries if provided (takes precedence over trajectory_dir).
-    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext") and args.trajectory_summary_file:
+    if args.planning_trigger in TRAJ_SUMMARY_TRIGGERS and args.trajectory_summary_file:
         agent.summaries_by_id = _load_trajectory_summaries(args.trajectory_summary_file, queries)
         print(f"Loaded {len(agent.summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}")
 
-    # Load raw trajectories if needed (either as the prepended content or as
-    # input for on-the-fly summarization).
-    need_raw_trajectories = (
-        args.planning
-        and args.planning_trigger in ("traj_ext", "traj_summary_ext", "traj_orig_ext", "traj_summary_orig_ext")
-        and not agent.summaries_by_id
-    )
-    if need_raw_trajectories:
+    if args.planning_trigger in TRAJ_TRIGGERS and not agent.summaries_by_id:
         agent.trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
         print(f"Loaded {len(agent.trajectories_by_id)} trajectories from {args.trajectory_dir}")
 
     print(f"Processing {len(remaining)} remaining queries (skipping {len(processed_ids)}) from {dataset_path}")
-    
+
     def handle_single_query(qid: str, qtext: str):
         task_data = {
             "item": {"question": qtext, "answer": ""},
             "main_agent_port": args.port,
-            "planning_port": args.planning_port,
-            "query_rewriting_port": args.query_rewriting_port,
             "query_id": qid,
         }
-        
-        # try:
+
         import time
         start_time = time.time()
         result = agent._run(task_data, args.model)
         time_taken = time.time() - start_time
         persist_response(output_dir, qid, qtext, result, args, time_taken)
-        # except Exception as exc:
-        #     print(f"Error processing query {qid}: {exc}")
-        #     error_result = {
-        #         "question": qtext,
-        #         "error": str(exc),
-        #         "prediction": "[Failed]"
-        #     }
-        #     persist_response(output_dir, qid, qtext, error_result, args)
-    
+
     if args.num_threads <= 1:
         with tqdm(remaining, desc="Queries", unit="query") as pbar:
             for qid, qtext in pbar:
@@ -243,7 +185,6 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
         with ThreadPoolExecutor(max_workers=args.num_threads) as executor, \
              tqdm(total=len(remaining), desc="Queries", unit="query") as pbar:
             futures = [executor.submit(handle_single_query, qid, qtext) for qid, qtext in remaining]
-            
             for _ in as_completed(futures):
                 pbar.update(1)
 
@@ -260,91 +201,29 @@ def main():
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
     parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
-    parser.add_argument("--sample-mode", type=str, default=None, choices=['jaccard_join', 'jaccard_max', 'outcome', 'bertscore_join', 'bertscore_max', 'reward', 'reward+jaccard_join', 'reward+bertscore_max', 'reward_single_lm', 'reward_single_lm+jaccard_join'], help='whether to sample, and how to sample multiple search calls')
-    parser.add_argument("--reward-model", type=str, default="Jaew00Lee/Qwen3-4B-PRInTS", help="Reward model path")
-    parser.add_argument("--planning", action="store_true", help="Use planning mode")
-    parser.add_argument("--planning-port", type=int, default=None, help="Planning server port")
-    parser.add_argument("--planning-model", type=str, default=None, help="Planning model path")
     parser.add_argument(
         "--planning-trigger",
         choices=[
-            "start",
-            "after_steps",
-            "start_and_after_steps",
-            "start_ext",
             "traj_ext",
             "traj_summary_ext",
             "traj_orig_ext",
             "traj_summary_orig_ext",
         ],
-        default="start",
-        help="When to run planning: start (before loop), after_steps (mid-conversation), "
-        "start_and_after_steps (both), start_ext (load plan from file), "
-        "traj_ext (prepend external trajectory to prompt), "
-        "traj_summary_ext (summarize trajectory then prepend summary), "
-        "traj_orig_ext (use original_messages from trajectory as prepended text), "
-        "or traj_summary_orig_ext (summarize original_messages then prepend summary). "
-        "after_steps and start_and_after_steps cannot be combined with --plan-revise-every or --plan-reinject-every.",
-    )
-    parser.add_argument(
-        "--planning-steps",
-        type=int,
-        default=5,
-        help="Number of tool calls before mid-conversation planning (when --planning-trigger=after_steps or start_and_after_steps)",
-    )
-    parser.add_argument(
-        "--planning-file",
-        type=str,
         default=None,
-        help="JSONL file with pre-generated plans (required when --planning-trigger=start_ext)",
-    )
-    parser.add_argument(
-        "--plan-reinject-every",
-        type=int,
-        default=0,
-        help="Re-inject the current plan as a user reminder every N iterations (0 = disabled). "
-        "Mutually exclusive with --plan-revise-every and with --planning-trigger after_steps/start_and_after_steps.",
-    )
-    parser.add_argument(
-        "--plan-revise-every",
-        type=int,
-        default=0,
-        help="Every N iterations, call the planner to revise the plan from the conversation "
-        "so far and inject it (same format as mid-conversation planning; 0 = disabled). "
-        "Mutually exclusive with --plan-reinject-every and with --planning-trigger after_steps/start_and_after_steps.",
+        help="Trajectory-based input mode.",
     )
     parser.add_argument(
         "--trajectory-dir",
         type=str,
         default=None,
-        help="Directory of JSON trajectory files to prepend to the prompt (required when "
-        "--planning-trigger=traj_ext, traj_summary_ext, traj_orig_ext, or traj_summary_orig_ext)",
+        help="Directory of JSON trajectory files to prepend to the prompt",
     )
     parser.add_argument(
         "--trajectory-summary-file",
         type=str,
         default=None,
-        help="JSONL file with pre-computed trajectory summaries (fields: 'summary' or 'excerpt'). "
-        "When provided with --planning-trigger=traj_summary_ext or traj_summary_orig_ext, skips "
-        "LLM summarization and uses these directly. Takes precedence over --trajectory-dir for "
-        "traj_summary_ext and traj_summary_orig_ext.",
+        help="JSONL file with pre-computed trajectory summaries.",
     )
-    parser.add_argument(
-        "--plan-prompt-file",
-        type=str,
-        default="prompts/planning_prompt_v2.md",
-        help="Path to initial planner system prompt (relative to repo root if not absolute)",
-    )
-    parser.add_argument(
-        "--plan-prompt-mid-file",
-        type=str,
-        default="prompts/planning_prompt_v2_context.md",
-        help="Path to mid-conversation planner system prompt (relative to repo root if not absolute)",
-    )
-    parser.add_argument("--query-rewriting", action="store_true", help="Use query rewriting mode")
-    parser.add_argument("--query-rewriting-port", type=int, default=None, help="Query rewriting server port")
-    parser.add_argument("--query-rewriting-model", type=str, default=None, help="Query rewriting model path")
-    # Server configuration arguments
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
 
@@ -361,75 +240,22 @@ def main():
 
     args = parser.parse_args()
 
-    if args.planning and args.planning_trigger == "start_ext":
-        if args.planning_file is None:
-            print("Error: start_ext requires --planning-file", file=sys.stderr)
-            sys.exit(1)
-
-    if args.planning and args.planning_trigger in ("traj_ext", "traj_orig_ext"):
+    trigger = args.planning_trigger
+    if trigger in ("traj_ext", "traj_orig_ext"):
         if args.trajectory_dir is None:
-            print(f"Error: {args.planning_trigger} requires --trajectory-dir", file=sys.stderr)
+            print(f"Error: {trigger} requires --trajectory-dir", file=sys.stderr)
             sys.exit(1)
-
-    if args.planning and args.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
+    if trigger in TRAJ_SUMMARY_TRIGGERS:
         if args.trajectory_summary_file is None and args.trajectory_dir is None:
-            print(
-                f"Error: {args.planning_trigger} requires --trajectory-summary-file or --trajectory-dir",
-                file=sys.stderr,
-            )
+            print(f"Error: {trigger} requires --trajectory-summary-file or --trajectory-dir", file=sys.stderr)
             sys.exit(1)
-
-    # Mid-conversation planning (after_steps / start_and_after_steps) vs periodic
-    # plan revision vs static reinject: at most one mechanism.
-    use_after_steps_planning = args.planning and args.planning_trigger in (
-        "after_steps",
-        "start_and_after_steps",
-    )
-    use_plan_revise_every = args.plan_revise_every > 0
-    use_plan_reinject_every = args.plan_reinject_every > 0
-    if use_after_steps_planning and (use_plan_revise_every or use_plan_reinject_every):
-        print(
-            "Error: --planning-trigger after_steps or start_and_after_steps cannot be combined "
-            "with --plan-revise-every or --plan-reinject-every (choose at most one).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if use_plan_revise_every and use_plan_reinject_every:
-        print(
-            "Error: --plan-revise-every and --plan-reinject-every cannot be used together.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
     model = args.model
     output_dir = Path(args.output_dir).expanduser().resolve()
-    
-    # set default values for planning and query rewriting ports and models
-    if args.planning_port is None:
-        args.planning_port = args.port
-    if args.query_rewriting_port is None:
-        args.query_rewriting_port = args.port
-    if args.planning_model is None:
-        args.planning_model = args.model
-    if args.query_rewriting_model is None:
-        args.query_rewriting_model = args.model
 
-    repo_root = Path(__file__).resolve().parent.parent
-    plan_prompt_text = None
-    plan_prompt_mid_text = None
-    if args.planning:
-        plan_path = Path(args.plan_prompt_file)
-        if not plan_path.is_absolute():
-            plan_path = repo_root / plan_path
-        plan_prompt_text = plan_path.read_text(encoding="utf-8")
-        mid_path = Path(args.plan_prompt_mid_file)
-        if not mid_path.is_absolute():
-            mid_path = repo_root / mid_path
-        plan_prompt_mid_text = mid_path.read_text(encoding="utf-8")
-    
     print(f"Model: {model}")
     print(f"Output directory: {output_dir}")
-    
+
     os.makedirs(output_dir, exist_ok=True)
 
     searcher = searcher_class(args)
@@ -451,39 +277,19 @@ def main():
         'model_type': 'qwen_dashscope'
     }
 
-    if args.sample_mode is not None:
-        agent_class = SampleOutcomeAgent
-    else:
-        agent_class = MultiTurnReactAgent
-
-    print(f"Using {agent_class.__name__}...")
-    plans_by_id = {}
-    agent = agent_class(
+    agent = MultiTurnReactAgent(
         llm=llm_cfg,
         function_list=["search"],
         search_tool_handler=search_tool_handler,
         multi_answer=args.multi_answer,
-        sample_mode=args.sample_mode,
-        planning=args.planning,
-        query_rewriting=args.query_rewriting,
-        planning_model=args.planning_model,
-        query_rewriting_model=args.query_rewriting_model,
         planning_trigger=args.planning_trigger,
-        planning_steps=args.planning_steps,
-        plan_reinject_every=getattr(args, 'plan_reinject_every', 0),
-        plan_revise_every=getattr(args, 'plan_revise_every', 0),
-        plans_by_id=plans_by_id,
-        plan_prompt=plan_prompt_text,
-        plan_prompt_mid=plan_prompt_mid_text,
     )
-    
-    # make a dummy call
+
     agent.model = args.model
-    agent.reward_model = args.reward_model
     agent.call_server([{"role": "user", "content": "Hello, how are you?"}], args.port)
-    
+
     print("Dummy call successful")
-    
+
     query_str = args.query.strip()
     if query_str.lower().endswith(".tsv"):
         potential_path = Path(query_str)
@@ -493,8 +299,8 @@ def main():
                 return
         except OSError:
             pass
-    
-    process_single_query(query_str, agent, args, output_dir)
+    else:
+        raise ValueError(f"Unsupported query type: {query_str}")
 
 
 if __name__ == "__main__":
