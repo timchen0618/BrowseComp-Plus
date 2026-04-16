@@ -181,7 +181,8 @@ Shared trajectory loading, formatting, and summarization:
 - `_load_and_validate_trajectories()` — loads JSON trajectory files from a directory
 - `_load_trajectory_summaries()` — loads pre-computed summaries from a JSONL file
 - `_format_trajectory_for_prompt()` — formats a trajectory dict into a text block for the prompt
-- `_format_original_messages_for_prompt_truncated()` — formats raw messages (for `_orig_ext` variants)
+- `_format_original_messages_for_prompt_oss()` — formats raw messages for OSS client (for `_orig_ext` variants)
+- `_format_original_messages_for_prompt_tongyi()` — formats raw messages for Tongyi client (for `_orig_ext` variants)
 - `call_trajectory_summarizer()` — calls the LLM to summarize a trajectory on the fly
 
 ### `search_agent/utils.py`
