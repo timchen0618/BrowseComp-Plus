@@ -34,9 +34,9 @@ MISSING = {
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
     # "gpt-oss-120b_seed7":      list(range(10)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],
     "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
     "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [0,1,2,3,4,5,6,7,8,9],  # complete
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             [3,5,7],
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
 }
