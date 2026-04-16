@@ -20,20 +20,28 @@ BrowseComp-Plus/
 ├── search_agent/           # LLM client implementations (one per provider)
 ├── searcher/               # Retrieval backends and MCP server
 │   └── searchers/          # BaseSearcher + BM25/FAISS/Custom implementations
-├── src_utils/              # Data loading, filtering, and preprocessing utilities
+├── src_utils/              # Data loading, filtering, repair, and preprocessing utilities
+├── scripts/                # Helper scripts: validation, visualization, run monitoring
 ├── scripts_evaluation/     # Evaluation pipeline (grading, metrics, dedup)
 ├── scripts_build_index/    # Index construction scripts
+├── selected_tool_calls/    # JSONL files of LLM-selected tool calls from trajectories
 ├── data/                   # Ground truth and decrypted run files
 │   ├── browsecomp_plus_decrypted.jsonl            # BCP ground truth (answers + gold docs)
 │   └── decrypted_run_files/{retriever}/{model}/   # Agent trajectories
 ├── indexes/                # Prebuilt BM25 and FAISS indexes
 ├── runs/                   # All agent trajectories: runs/{dataset}/{retriever}/{split}/{run_name}/
 ├── evals/                  # All evaluation results: evals/{dataset}/{retriever}/{split}/{run_name}/
+├── sft/                    # SFT training data and pipelines
+│   └── axolotl/            # Axolotl-based SFT for Qwen3-30B-A3B
 ├── docs/                   # Integration guides per provider
 ├── parametric/             # Parametric experiment configs
 ├── qampari_experiments/    # QAMPARI benchmark scripts
 ├── topics-qrels/           # Relevance judgments
 ├── figures/                # Generated charts
+├── select_useful_tool_calls.py  # Select k useful tool calls from trajectories via Gemini
+├── summarize_trajectories.py    # Summarize agent trajectories via vLLM
+├── shard_monitor.py        # Shard completeness checker and resubmission generator
+├── monitor_and_eval.sh     # Monitor run completion and auto-submit eval SBATCH
 ├── compute_repeats.py      # Query repetition analysis (Jaccard similarity)
 ├── compute_repeats_vllm.py # Query repetition analysis (LLM-based)
 ├── query_grader.py         # Score search queries using vLLM
@@ -140,6 +148,8 @@ evals/
 | `search_r1_client.py` | Search-R1 | Custom streaming parser |
 | `prompts.py` | — | All prompt templates |
 | `utils.py` | — | docid extraction utilities |
+| `planning_utils.py` | — | Shared planning helpers: plan parsing/injection, pre-generated plan loading, retry wrapper |
+| `trajectory_utils.py` | — | Shared trajectory loading, formatting, truncation, and LLM summarization |
 
 ### searcher/ — Retrieval Backends
 
@@ -170,6 +180,46 @@ evals/
 | `add_search_counts.py` | Augment trajectories with search stats |
 | `shard.py` | Partition large datasets |
 | `combine_json_to_jsonl.py` | JSON → JSONL batch conversion |
+| `filter_empty_runs.py` | Detect and handle empty trajectory JSONs (list/copy/move/delete) |
+| `filter_empty_selected_tool_calls.py` | Remove records with no selected tool calls, with `raw_response` recovery |
+| `filter_selected_tool_calls_by_error.py` | Drop selected-tool-calls rows by error type |
+| `parse_eval_out.py` | Parse SLURM eval output into accuracy/recall/search CSV |
+| `repair_selected_tool_calls_jsonl.py` | Recover `selected_indices` from malformed LLM responses |
+
+### scripts/ — Helper Scripts
+
+See `scripts/README.md` for full documentation.
+
+| File | Purpose |
+|------|---------|
+| `augment_selected_tool_calls_with_candidates_seed0.py` | Add candidate indices and validation flags to selected_tool_calls |
+| `check_selected_against_candidates_seed0.py` | Validate selected indices against candidate sets |
+| `compute_selected_tool_calls_stats.py` | Summary stats (validity %, avg indices) for selected_tool_calls |
+| `plot_search_call_distribution.py` | Multi-panel histogram of search-call counts per trajectory folder |
+| `plot_selected_position_histogram.py` | Distribution of selected candidate positions |
+| `update_submit_missing.py` | Parse `find_missing_ids.py` output into MISSING dict for resubmission |
+| `filter_empty_runs_gpt_oss_120b_seeds4_7.sh` | Shell wrapper for filter_empty_runs on gpt-oss-120b seeds |
+| `filter_empty_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for filtering empty selected tool calls |
+| `repair_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for repairing gpt-oss-120b selected tool calls |
+
+### sft/axolotl/ — Axolotl SFT Pipeline
+
+See `sft/axolotl/README.md` for full documentation.
+
+| File | Purpose |
+|------|---------|
+| `prepare_dataset.py` | Convert trajectory JSONL to Axolotl messages format with train/val split |
+| `qwen3_30b_a3b_search_sft.yaml` | Axolotl config: LoRA, FSDP, assistant-only loss, Qwen3-30B-A3B |
+| `run_axolotl.sh` | End-to-end pipeline: data prep → preprocess → multi-GPU train |
+
+### Root-Level Scripts (added this week)
+
+| File | Purpose |
+|------|---------|
+| `select_useful_tool_calls.py` | Select k useful tool calls from trajectories via Gemini; produces verbatim excerpts |
+| `summarize_trajectories.py` | Summarize agent trajectories using vLLM; outputs JSONL with resumable progress |
+| `shard_monitor.py` | Autonomous shard completeness checker with SLURM resubmission generation |
+| `monitor_and_eval.sh` | Polling loop that monitors run completion and auto-submits eval SBATCH |
 
 ---
 

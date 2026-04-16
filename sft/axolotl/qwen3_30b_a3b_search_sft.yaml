@@ -1,0 +1,99 @@
+# Axolotl SFT config: train Qwen3-30B-A3B on budget-constrained
+# search tool-call excerpts.
+#
+# Usage:
+#   python sft/axolotl/prepare_dataset.py \
+#       --input selected_tool_calls/<file>.jsonl \
+#       --trajectory-folder runs/bcp/.../<seed> \
+#       --output-dir sft/axolotl/data
+#   axolotl preprocess sft/axolotl/qwen3_30b_a3b_search_sft.yaml
+#   accelerate launch -m axolotl.cli.train sft/axolotl/qwen3_30b_a3b_search_sft.yaml
+
+base_model: Qwen/Qwen3-30B-A3B
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+trust_remote_code: true
+
+# Qwen3's chat template already knows <tool_call> / <tool_response> tokens,
+# so we let Axolotl pull it straight from the tokenizer.
+chat_template: qwen3
+
+datasets:
+  - path: sft/axolotl/data/train.jsonl
+    type: chat_template
+    field_messages: messages
+    message_property_mappings:
+      role: role
+      content: content
+    # Assistant-only loss: user/tool/system turns get label=-100.
+    roles_to_train: ["assistant"]
+    # Train on the <|im_end|> of each assistant turn so the model learns
+    # to stop after emitting a tool_call or <answer>, respecting the budget.
+    train_on_eos: turn
+
+test_datasets:
+  - path: sft/axolotl/data/val.jsonl
+    type: chat_template
+    field_messages: messages
+    message_property_mappings:
+      role: role
+      content: content
+    roles_to_train: ["assistant"]
+    train_on_eos: turn
+    split: train
+
+dataset_prepared_path: sft/axolotl/prepared
+output_dir: sft/checkpoints/axolotl-qwen3-30b-a3b
+
+sequence_len: 8192
+# Packing concatenates unrelated trajectories into one sequence; that
+# leaks supervision across tool-call boundaries. Keep it off.
+sample_packing: false
+pad_to_sequence_len: false
+
+# ----- LoRA -----
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+# true = automatically pick all nn.Linear targets, which handles the
+# Qwen3-MoE router + expert projections without enumeration.
+lora_target_linear: true
+
+# ----- Optimizer / schedule -----
+num_epochs: 3
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 2.0e-5
+lr_scheduler: cosine
+warmup_ratio: 0.03
+weight_decay: 0.01
+optimizer: adamw_torch_fused
+
+bf16: true
+tf32: true
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+flash_attention: true
+
+logging_steps: 10
+save_steps: 100
+eval_steps: 100
+save_total_limit: 3
+
+# ----- Multi-GPU FSDP -----
+fsdp:
+  - full_shard
+  - auto_wrap
+fsdp_config:
+  fsdp_transformer_layer_cls_to_wrap: Qwen3MoeDecoderLayer
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_offload_params: false
+  # LoRA + FSDP requires use_orig_params=false.
+  fsdp_use_orig_params: false
+
+wandb_project: sft-trajectory
+wandb_name: axolotl-qwen3-30b-a3b
+
+seed: 42

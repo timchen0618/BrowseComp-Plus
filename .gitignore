@@ -32,3 +32,4 @@ eval_plan_quality/*.jsonl
 judge_results
 retrospective_plans
 deletable_runs
+sft/axolotl/data/
