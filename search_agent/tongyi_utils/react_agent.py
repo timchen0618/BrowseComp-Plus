@@ -31,12 +31,20 @@ from tongyi_utils.prompts import (
 from tongyi_utils.tool_search import SearchToolHandler
 from trajectory_utils import (
     _format_tongyi_trajectory_for_prompt,
-    _format_original_messages_for_prompt,
+    _format_original_messages_for_prompt_tongyi,
     call_trajectory_summarizer,
 )
 
 OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
+
+# Dispatch: (formatter, wants_summary, requires_orig)
+_TRAJ_FORMATTERS = {
+    "traj_ext":              (_format_tongyi_trajectory_for_prompt,        False, False),
+    "traj_orig_ext":         (_format_original_messages_for_prompt_tongyi, False, True),
+    "traj_summary_ext":      (_format_tongyi_trajectory_for_prompt,        True,  False),
+    "traj_summary_orig_ext": (_format_original_messages_for_prompt_tongyi, True,  True),
+}
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv('MAX_LLM_CALL_PER_RUN', 100))
 
@@ -66,6 +74,50 @@ class MultiTurnReactAgent(FnCallAgent):
         self.planning_trigger = planning_trigger
         self.trajectories_by_id = trajectories_by_id or {}
         self.summaries_by_id = summaries_by_id or {}
+        self.max_chars = kwargs.pop("max_chars", 500000)
+        self.reasoning_max_chars = kwargs.pop("reasoning_max_chars", 3000)
+        self.tool_output_max_chars = kwargs.pop("tool_output_max_chars", 5000)
+
+    def _build_user_content(self, query_id: str, question: str, main_agent_port: int) -> str:
+        trigger = self.planning_trigger
+        if trigger not in _TRAJ_FORMATTERS:
+            return question
+
+        formatter, wants_summary, requires_orig = _TRAJ_FORMATTERS[trigger]
+        traj = self.trajectories_by_id.get(query_id, {})
+
+        if requires_orig and not traj.get("original_messages"):
+            raise ValueError(
+                f"{trigger} requires 'original_messages' in trajectory for query_id={query_id}; "
+                f"rerun the source with --store-raw so original_messages gets persisted."
+            )
+
+        fmt_kwargs = {
+            "max_chars": self.max_chars,
+            "reasoning_max_chars": self.reasoning_max_chars,
+            "tool_output_max_chars": self.tool_output_max_chars,
+        }
+
+        if not wants_summary:
+            traj_text = formatter(traj, **fmt_kwargs)
+            print(f"[{query_id}] Prepended trajectory to prompt", flush=True)
+            return format_query_with_trajectory(question, traj_text)
+
+        # Summarization path.
+        if query_id in self.summaries_by_id:
+            traj_summary = self.summaries_by_id[query_id]
+            print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
+        else:
+            traj_text = formatter(traj, **fmt_kwargs)
+            print(f"[{query_id}] Summarizing trajectory...", flush=True)
+            raw_summary = call_trajectory_summarizer(
+                lambda msgs: self.call_server(msgs, main_agent_port),
+                question=question,
+                trajectory_text=traj_text,
+            )
+            traj_summary = raw_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
+        print(f"[{query_id}] Prepended trajectory summary to prompt", flush=True)
+        return format_query_with_traj_summary(question, traj_summary)
 
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
@@ -135,8 +187,8 @@ class MultiTurnReactAgent(FnCallAgent):
             raw_msg = data['item']['messages'][1]["content"]
             question = raw_msg.split("User:")[1].strip() if "User:" in raw_msg else raw_msg
 
-        tool_call_counts = {}
-        tool_call_counts_all = {}
+        tool_call_counts = {}  # Only successful tool calls
+        tool_call_counts_all = {}  # All tool calls (successful and failed)
         retrieved_docids = []
         total_inference_time = 0.0
         total_tool_call_time = 0.0
@@ -148,6 +200,9 @@ class MultiTurnReactAgent(FnCallAgent):
         system_prompt = self.system_prompt
         cur_date = today_date()
 
+        ## Trajectory modes: inject the matching system-prompt note *before*
+        ## the trailing "Current date: " footer so the note remains part of
+        ## the main prompt body.
         query_id = data.get("query_id", "")
         traj_note = ""
         if self.planning_trigger in ("traj_ext", "traj_orig_ext"):
@@ -165,64 +220,9 @@ class MultiTurnReactAgent(FnCallAgent):
         else:
             system_prompt = system_prompt + str(cur_date)
 
-        user_content = question
-        if self.planning_trigger == "traj_ext":
-            traj = self.trajectories_by_id.get(query_id, {})
-            traj_text = _format_tongyi_trajectory_for_prompt(traj)
-            user_content = format_query_with_trajectory(question, traj_text)
-            print(f"[{query_id}] Prepended external trajectory to prompt", flush=True)
-        elif self.planning_trigger == "traj_orig_ext":
-            traj = self.trajectories_by_id.get(query_id, {})
-            if "original_messages" not in traj or not traj.get("original_messages"):
-                raise ValueError(
-                    f"traj_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
-                    f"rerun the source with --store-raw so original_messages gets persisted."
-                )
-            traj_text = _format_original_messages_for_prompt(traj)
-            user_content = format_query_with_trajectory(question, traj_text)
-            print(f"[{query_id}] Prepended original messages to prompt", flush=True)
-        elif self.planning_trigger == "traj_summary_ext":
-            if query_id in self.summaries_by_id:
-                traj_summary = self.summaries_by_id[query_id]
-                print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-            else:
-                traj = self.trajectories_by_id.get(query_id, {})
-                traj_text = _format_tongyi_trajectory_for_prompt(
-                    traj,
-                    max_chars=400000,
-                    reasoning_max_chars=3000,
-                    tool_output_max_chars=3000,
-                )
-                print(f"[{query_id}] Summarizing trajectory...", flush=True)
-                traj_summary = call_trajectory_summarizer(
-                    lambda msgs: self.call_server(msgs, main_agent_port),
-                    question=question,
-                    trajectory_text=traj_text,
-                )
-                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-            user_content = format_query_with_traj_summary(question, traj_summary)
-            print(f"[{query_id}] Prepended trajectory summary to prompt", flush=True)
-        elif self.planning_trigger == "traj_summary_orig_ext":
-            if query_id in self.summaries_by_id:
-                traj_summary = self.summaries_by_id[query_id]
-                print(f"[{query_id}] Using pre-loaded summary ({len(traj_summary)} chars)", flush=True)
-            else:
-                traj = self.trajectories_by_id.get(query_id, {})
-                if "original_messages" not in traj or not traj.get("original_messages"):
-                    raise ValueError(
-                        f"traj_summary_orig_ext requires 'original_messages' in trajectory for query_id={query_id}; "
-                        f"rerun the source with --store-raw so original_messages gets persisted."
-                    )
-                traj_text = _format_original_messages_for_prompt(traj, max_chars=400000)
-                print(f"[{query_id}] Summarizing original messages...", flush=True)
-                traj_summary = call_trajectory_summarizer(
-                    lambda msgs: self.call_server(msgs, main_agent_port),
-                    question=question,
-                    trajectory_text=traj_text,
-                )
-                traj_summary = traj_summary.strip().split("<trajectory_summary>")[1].split("</trajectory_summary>")[0].strip()
-            user_content = format_query_with_traj_summary(question, traj_summary)
-            print(f"[{query_id}] Prepended original-message summary to prompt", flush=True)
+        ## Build initial user message — default is the raw question, trajectory
+        ## modes wrap it in a template with the trajectory / summary content.
+        user_content = self._build_user_content(query_id, question, main_agent_port)
 
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
@@ -245,6 +245,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 }
                 return result
 
+            ## Call LLM Inference.
             round += 1
             num_llm_calls_available -= 1
             content = self.call_server(messages, main_agent_port)
@@ -255,6 +256,7 @@ class MultiTurnReactAgent(FnCallAgent):
             messages.append({"role": "assistant", "content": content.strip()})
             total_inference_time += (time.time() - start_inference_time)
 
+            ## Start Tool Calling.
             start_tool_call_time = time.time()
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]

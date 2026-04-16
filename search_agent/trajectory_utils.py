@@ -194,23 +194,7 @@ def _format_tongyi_trajectory_for_prompt(
     return result
 
 
-def _format_original_messages_for_prompt(
-    trajectory: dict,
-    max_chars: int = 0,
-) -> str:
-    """Serialize a trajectory's original_messages into a plain string.
-
-    Dumps the entire original_messages list as a JSON string, preserving the
-    original structure without any reformatting.
-    """
-    msgs = trajectory.get("original_messages", [])
-    result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
-    if max_chars > 0 and len(result) > max_chars:
-        result = result[:max_chars] + "\n\n... (messages truncated)"
-    return result
-
-
-def _format_original_messages_for_prompt_truncated(
+def _format_original_messages_for_prompt_oss(
     trajectory: dict,
     max_chars: int = 0,
     reasoning_max_chars: int = 3000,
@@ -218,7 +202,7 @@ def _format_original_messages_for_prompt_truncated(
 ) -> str:
     """Serialize ``original_messages`` into a JSON string, with light truncation.
 
-    This keeps the same I/O shape as ``_format_original_messages_for_prompt``:
+    This keeps the same I/O shape as ``_format_original_messages_for_prompt_tongyi``:
     input trajectory dict → output string (JSON-serialized list).
 
     Compared to the raw dump, it attempts to truncate very long reasoning/tool
@@ -258,6 +242,15 @@ def _format_original_messages_for_prompt_truncated(
     if max_chars > 0 and len(result) > max_chars:
         result = result[:max_chars] + "\n\n... (messages truncated)"
     return result
+
+
+def _format_original_messages_for_prompt_tongyi(
+    trajectory: dict,
+    max_chars: int = 0,
+    reasoning_max_chars: int = 3000,
+    tool_output_max_chars: int = 5000,
+) -> str:
+    pass
 
 
 def call_trajectory_summarizer(

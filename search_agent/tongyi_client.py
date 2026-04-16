@@ -117,7 +117,7 @@ def persist_response(output_dir: Path, query_id: str | None, query: str, result:
         "result": result_array
     }
 
-    if getattr(args, 'store_raw', False):
+    if getattr(args, 'save_raw_messages', False):
         output_data["original_messages"] = result.get("messages", [])
 
     with open(filename, "w", encoding="utf-8") as f:
@@ -137,7 +137,7 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
             if len(row) < 2:
-                continue
+                continue  # skip malformed lines
             queries.append((row[0].strip(), row[1].strip()))
 
     processed_ids = set()
@@ -150,14 +150,17 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
                     if qid_saved:
                         processed_ids.add(str(qid_saved))
             except Exception:
-                continue
+                continue  # ignore corrupt files
 
     remaining = [(qid, qtext) for qid, qtext in queries if qid not in processed_ids]
 
+    # Load pre-computed summaries if provided (takes precedence over trajectory_dir).
     if args.planning_trigger in TRAJ_SUMMARY_TRIGGERS and args.trajectory_summary_file:
         agent.summaries_by_id = _load_trajectory_summaries(args.trajectory_summary_file, queries)
         print(f"Loaded {len(agent.summaries_by_id)} pre-computed summaries from {args.trajectory_summary_file}")
 
+    # Load raw trajectories if needed (either as the prepended content or as
+    # input for on-the-fly summarization).
     if args.planning_trigger in TRAJ_TRIGGERS and not agent.summaries_by_id:
         agent.trajectories_by_id = _load_and_validate_trajectories(args.trajectory_dir, queries)
         print(f"Loaded {len(agent.trajectories_by_id)} trajectories from {args.trajectory_dir}")
@@ -199,7 +202,7 @@ def main():
     parser.add_argument("--presence_penalty", type=float, default=1.1)
     parser.add_argument("--num-threads", type=int, default=10, help="Number of parallel threads for processing queries")
     parser.add_argument("--port", type=int, default=6008, help="LLM server port")
-    parser.add_argument("--store-raw", action="store_true", help="Store raw messages in the output JSON")
+    parser.add_argument("--save-raw-messages", action="store_true", help="Store raw messages in the output JSON")
     parser.add_argument("--multi-answer", action="store_true", help="Use multi-answer mode")
     parser.add_argument(
         "--planning-trigger",
@@ -224,6 +227,9 @@ def main():
         default=None,
         help="JSONL file with pre-computed trajectory summaries.",
     )
+    parser.add_argument("--max-chars", type=int, default=500000, help="Max total trajectory chars")
+    parser.add_argument("--reasoning-max-chars", type=int, default=3000, help="Max reasoning chars per message")
+    parser.add_argument("--tool-output-max-chars", type=int, default=5000, help="Max tool output chars per call")
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
 
@@ -283,6 +289,9 @@ def main():
         search_tool_handler=search_tool_handler,
         multi_answer=args.multi_answer,
         planning_trigger=args.planning_trigger,
+        max_chars=args.max_chars,
+        reasoning_max_chars=args.reasoning_max_chars,
+        tool_output_max_chars=args.tool_output_max_chars,
     )
 
     agent.model = args.model

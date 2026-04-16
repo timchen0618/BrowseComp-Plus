@@ -27,7 +27,7 @@ from trajectory_utils import (
     _load_and_validate_trajectories,
     _load_trajectory_summaries,
     _format_trajectory_for_prompt,
-    _format_original_messages_for_prompt_truncated,
+    _format_original_messages_for_prompt_oss,
     call_trajectory_summarizer,
 )
 
@@ -258,9 +258,9 @@ def _oss_summarize_llm_call(
 # Dispatch: (formatter, wants_summarization, orig_based)
 _TRAJ_FORMATTERS: dict[str, tuple] = {
     "traj_ext": (_format_trajectory_for_prompt, False, False),
-    "traj_orig_ext": (_format_original_messages_for_prompt_truncated, False, True),
+    "traj_orig_ext": (_format_original_messages_for_prompt_oss, False, True),
     "traj_summary_ext": (_format_trajectory_for_prompt, True, False),
-    "traj_summary_orig_ext": (_format_original_messages_for_prompt_truncated, True, True),
+    "traj_summary_orig_ext": (_format_original_messages_for_prompt_oss, True, True),
 }
 
 
