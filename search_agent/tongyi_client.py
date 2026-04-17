@@ -232,6 +232,12 @@ def main():
     parser.add_argument("--tool-output-max-chars", type=int, default=5000, help="Max tool output chars per call")
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Max tokens for search snippet truncation")
     parser.add_argument("--k", type=int, default=5, help="Number of search results to return")
+    parser.add_argument(
+        "--search-budget",
+        type=int,
+        default=None,
+        help="Max search turns; injects budget note into system prompt and caps LLM calls",
+    )
 
     parser.add_argument(
         "--searcher-type",
@@ -292,6 +298,7 @@ def main():
         max_chars=args.max_chars,
         reasoning_max_chars=args.reasoning_max_chars,
         tool_output_max_chars=args.tool_output_max_chars,
+        search_budget=args.search_budget,
     )
 
     agent.model = args.model

@@ -77,6 +77,7 @@ class MultiTurnReactAgent(FnCallAgent):
         self.max_chars = kwargs.pop("max_chars", 500000)
         self.reasoning_max_chars = kwargs.pop("reasoning_max_chars", 3000)
         self.tool_output_max_chars = kwargs.pop("tool_output_max_chars", 5000)
+        self.search_budget = kwargs.pop("search_budget", None)
 
     def _build_user_content(self, query_id: str, question: str, main_agent_port: int) -> str:
         trigger = self.planning_trigger
@@ -210,13 +211,19 @@ class MultiTurnReactAgent(FnCallAgent):
         elif self.planning_trigger in ("traj_summary_ext", "traj_summary_orig_ext"):
             traj_note = TRAJ_SUMMARY_SYSTEM_NOTE
 
-        if traj_note:
+        budget_note = ""
+        if self.search_budget is not None:
+            budget_note = f"You have a budget of {self.search_budget} search turns — use them efficiently."
+
+        combined_note = "\n\n".join(n for n in [traj_note, budget_note] if n)
+
+        if combined_note:
             idx = system_prompt.rfind("Current date:")
             if idx >= 0:
                 head = system_prompt[:idx].rstrip()
-                system_prompt = head + "\n\n" + traj_note + "\n\nCurrent date: " + str(cur_date)
+                system_prompt = head + "\n\n" + combined_note + "\n\nCurrent date: " + str(cur_date)
             else:
-                system_prompt = system_prompt + "\n\n" + traj_note + "\n\n" + str(cur_date)
+                system_prompt = system_prompt + "\n\n" + combined_note + "\n\n" + str(cur_date)
         else:
             system_prompt = system_prompt + str(cur_date)
 
@@ -225,7 +232,7 @@ class MultiTurnReactAgent(FnCallAgent):
         user_content = self._build_user_content(query_id, question, main_agent_port)
 
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
-        num_llm_calls_available = MAX_LLM_CALL_PER_RUN
+        num_llm_calls_available = self.search_budget if self.search_budget is not None else MAX_LLM_CALL_PER_RUN
         round = 0
 
         while num_llm_calls_available > 0:

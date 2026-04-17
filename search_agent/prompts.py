@@ -20,6 +20,17 @@ Exact Answer: {{your succinct, final answer}}
 Confidence: {{your confidence score between 0% and 100% for your answer}}
 """.strip()
 
+QUERY_TEMPLATE_NO_GET_DOCUMENT_BUDGET = """
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times. You have a budget of {SearchBudget} search turns — use them efficiently.
+
+Question: {Question}
+
+Your response should be in the following format:
+Explanation: {{your explanation for your final answer. For this explanation section only, you should cite your evidence documents inline by enclosing their docids in square brackets [] at the end of sentences. For example, [20].}}
+Exact Answer: {{your succinct, final answer}}
+Confidence: {{your confidence score between 0% and 100% for your answer}}
+""".strip()
+
 QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION = """
 You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times.
 
@@ -249,8 +260,8 @@ def format_query(query: str, query_template: str | None = None) -> str:
         return QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION.format(Question=query)
     else:
         raise ValueError(f"Unknown query template: {query_template}")
-      
-      
+
+
 def format_query_with_trajectory(query: str, trajectory: str, query_template: str | None = None) -> str:
     """Format the query with the specified template if provided."""
     if query_template is None:
@@ -269,6 +280,10 @@ def format_query_with_traj_summary(query: str, trajectory_summary: str, query_te
         return QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY.format(Question=query, trajectory_summary=trajectory_summary)
     else:
         raise ValueError(f"Unknown query template: {query_template}")
+
+
+def format_query_with_budget(query: str, budget: int) -> str:
+    return QUERY_TEMPLATE_NO_GET_DOCUMENT_BUDGET.format(Question=query, SearchBudget=budget)
 
 
 def format_query_for_planning(query: str, plan: str, query_template: str | None = None) -> str:
