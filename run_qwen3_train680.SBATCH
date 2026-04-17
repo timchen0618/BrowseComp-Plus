@@ -159,7 +159,7 @@ case "$inner_mode" in
         ;;
     budget)
         output_dir="${OUT_BASE}/budget${SEARCH_BUDGET}_seed${seed}"
-        extra_args="--search-budget ${SEARCH_BUDGET}"
+        extra_args="--search-budget ${SEARCH_BUDGET} --save-raw-messages"
         ;;
     *)
         echo "Invalid mode name"
