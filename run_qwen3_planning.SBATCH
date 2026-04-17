@@ -15,7 +15,10 @@
 
 SINGULARITY_IMAGE=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY_FILE=/scratch/hc3337/envs/bcp.ext3
+<<<<<<< HEAD
 VLLM_OVERLAY_FILE=${OVERLAY_FILE}
+=======
+>>>>>>> f40838e (feat: add budget mode to run_qwen3_planning and run_qwen3_first50 SBATCH scripts)
 GPU_UTIL="0.85"
 MODEL_NAME="gpt-oss-120b"
 TENSOR_PARALLEL_SIZE=1
