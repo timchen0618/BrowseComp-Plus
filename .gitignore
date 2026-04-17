@@ -33,3 +33,4 @@ judge_results
 retrospective_plans
 deletable_runs
 sft/axolotl/data/
+.worktrees/

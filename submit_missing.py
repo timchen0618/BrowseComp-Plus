@@ -21,6 +21,7 @@ TEMPLATE_PATH_FIRST50 = "run_qwen3_first50.SBATCH"
 
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
+    # "tongyi_seed3":                                                                  list(range(10)),
     # "gpt-oss-120b_planning_retrospective_seed0":                                     list(range(10)),
     # "gpt-oss-120b_planning_retrospective_reinject_every_5_seed0":                     list(range(10)),
     # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_seed0":                     list(range(10)),
@@ -34,9 +35,9 @@ MISSING = {
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
     # "gpt-oss-120b_seed7":      list(range(10)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],
-    "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
-    "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],
+    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
+    # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             [3,5,7],
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
 }
@@ -45,6 +46,7 @@ MISSING = {
 # Value is None to auto-parse model/mode/seed from the run name,
 # or an explicit (model, mode, seed) tuple for names that can't be parsed.
 MISSING_FIRST50 = {
+    "tongyi_seed3":                                                                  None,
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                   None,
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":  None,
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":          None,

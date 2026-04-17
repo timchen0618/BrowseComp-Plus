@@ -105,8 +105,37 @@ def _parse_excerpt_items(excerpt: str) -> List[Dict[str, Any]]:
     return items
 
 
-def _reasoning_text(item: Dict[str, Any]) -> str:
-    """Extract text from a Responses-API reasoning item."""
+# Template presets govern how reasoning text is emitted and how tool-call
+# name/arguments are rewritten. `gpt-oss` keeps the source trajectory format
+# (produced by gpt-oss-120b: name=local_knowledge_base_retrieval, arg=user_query,
+# reasoning as plain text). `qwen` rewrites to the Tongyi/Qwen format consumed
+# by `search_agent/tongyi_utils/react_agent.py`: name=search, arg=query, with
+# reasoning wrapped in <think>...</think> so the assistant turn looks like
+# "<think>...</think>\n<tool_call>{...}</tool_call>".
+TEMPLATE_GPT_OSS = "gpt-oss"
+TEMPLATE_QWEN = "qwen"
+TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN)
+
+# Map (source_name, source_arg_key) -> (target_name, target_arg_key) for the
+# qwen template. Source trajectories from gpt-oss-120b use
+# local_knowledge_base_retrieval/user_query; Tongyi/Qwen expects search/query.
+_QWEN_TOOL_NAME_MAP = {
+    "local_knowledge_base_retrieval": "search",
+    "search": "search",
+}
+_QWEN_ARG_KEY_MAP = {
+    "user_query": "query",
+    "query": "query",
+}
+
+
+def _reasoning_text(item: Dict[str, Any], template: str) -> str:
+    """Extract text from a Responses-API reasoning item.
+
+    For the `qwen` template the extracted text is wrapped in
+    <think>...</think> so the downstream assistant turn matches the Tongyi
+    format ("<think>...</think>\\n<tool_call>...</tool_call>").
+    """
     content = item.get("content")
     if not isinstance(content, list):
         return ""
@@ -116,10 +145,26 @@ def _reasoning_text(item: Dict[str, Any]) -> str:
             t = c.get("text")
             if isinstance(t, str) and t.strip():
                 parts.append(t)
-    return "\n".join(parts).strip()
+    text = "\n".join(parts).strip()
+    if not text:
+        return ""
+    if template == TEMPLATE_QWEN:
+        return f"<think>\n{text}\n</think>"
+    return text
 
 
-def _fmt_tool_call(item: Dict[str, Any]) -> str:
+def _rewrite_qwen_tool_call(name: str, parsed_args: Any) -> Tuple[str, Any]:
+    """Rewrite a tool-call name/arguments dict into the Qwen/Tongyi schema."""
+    new_name = _QWEN_TOOL_NAME_MAP.get(name, name)
+    if isinstance(parsed_args, dict):
+        new_args: Dict[str, Any] = {}
+        for k, v in parsed_args.items():
+            new_args[_QWEN_ARG_KEY_MAP.get(k, k)] = v
+        return new_name, new_args
+    return new_name, parsed_args
+
+
+def _fmt_tool_call(item: Dict[str, Any], template: str) -> str:
     """Render a function_call item as an inline <tool_call>...</tool_call>."""
     name = item.get("name", "")
     raw_args = item.get("arguments", "")
@@ -130,6 +175,10 @@ def _fmt_tool_call(item: Dict[str, Any]) -> str:
             parsed_args = raw_args
     else:
         parsed_args = raw_args
+
+    if template == TEMPLATE_QWEN:
+        name, parsed_args = _rewrite_qwen_tool_call(name, parsed_args)
+
     payload = {"name": name, "arguments": parsed_args}
     return "<tool_call>\n" + json.dumps(payload, ensure_ascii=False) + "\n</tool_call>"
 
@@ -142,12 +191,14 @@ def _fmt_tool_response(item: Dict[str, Any]) -> str:
     return "<tool_response>\n" + out + "\n</tool_response>"
 
 
-def _excerpt_to_messages(excerpt: str) -> List[Dict[str, str]]:
+def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
     """
-    Walk the Responses-API items into Qwen-style inline chat messages.
+    Walk the Responses-API items into inline chat messages.
 
     Rules:
-      - `reasoning`           -> append text to the current assistant buffer
+      - `reasoning`           -> append text (optionally wrapped in
+                                 <think>...</think> for the qwen template)
+                                 to the current assistant buffer
       - `function_call`       -> append <tool_call>...</tool_call>, flush
                                  buffer as one assistant message
       - `function_call_output`-> flush any pending assistant buffer, then
@@ -159,11 +210,15 @@ def _excerpt_to_messages(excerpt: str) -> List[Dict[str, str]]:
 
     messages: List[Dict[str, str]] = []
     buf: List[str] = []
+    # Qwen/Tongyi expects "<think>...</think>\n<tool_call>...</tool_call>"
+    # on the same assistant turn, so use a single newline separator. The
+    # gpt-oss template keeps the original blank-line separator for readability.
+    sep = "\n" if template == TEMPLATE_QWEN else "\n\n"
 
     def flush_assistant() -> None:
         if not buf:
             return
-        text = "\n\n".join(s for s in buf if s).strip()
+        text = sep.join(s for s in buf if s).strip()
         buf.clear()
         if text:
             messages.append({"role": "assistant", "content": text})
@@ -171,11 +226,11 @@ def _excerpt_to_messages(excerpt: str) -> List[Dict[str, str]]:
     for it in items:
         kind = it.get("type")
         if kind == "reasoning":
-            text = _reasoning_text(it)
+            text = _reasoning_text(it, template)
             if text:
                 buf.append(text)
         elif kind == "function_call":
-            buf.append(_fmt_tool_call(it))
+            buf.append(_fmt_tool_call(it, template))
             flush_assistant()
         elif kind == "function_call_output":
             flush_assistant()
@@ -189,6 +244,7 @@ def _excerpt_to_messages(excerpt: str) -> List[Dict[str, str]]:
 def _coerce_excerpt(
     example: Dict[str, Any],
     source_cache: _SourceTrajectoryCache,
+    template: str,
 ) -> Tuple[Optional[List[Dict[str, str]]], str]:
     """
     Build messages for a (source_file, excerpt) record.
@@ -207,7 +263,7 @@ def _coerce_excerpt(
     if prompt is None:
         return None, "missing_source"
 
-    excerpt_msgs = _excerpt_to_messages(str(example["excerpt"]))
+    excerpt_msgs = _excerpt_to_messages(str(example["excerpt"]), template)
     if not excerpt_msgs:
         return None, "bad_excerpt"
 
@@ -279,6 +335,18 @@ def main() -> None:
         default=42,
         help="Shuffle seed for the train/val split.",
     )
+    parser.add_argument(
+        "--template",
+        choices=TEMPLATE_CHOICES,
+        default=TEMPLATE_GPT_OSS,
+        help=(
+            "Output template. 'gpt-oss' preserves the source trajectory format "
+            "(name=local_knowledge_base_retrieval, arg=user_query, reasoning as "
+            "plain text). 'qwen' rewrites tool calls to name=search, arg=query "
+            "and wraps reasoning in <think>...</think> to match the Tongyi/Qwen "
+            "ReAct format expected by search_agent/tongyi_client.py."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.input.is_file():
@@ -298,7 +366,7 @@ def main() -> None:
 
     for record in _iter_jsonl(args.input):
         raw_total += 1
-        messages, reason = _coerce_excerpt(record, source_cache)
+        messages, reason = _coerce_excerpt(record, source_cache, args.template)
         if messages is None:
             if reason == "schema":
                 dropped_schema += 1
