@@ -260,8 +260,8 @@ def format_query(query: str, query_template: str | None = None) -> str:
         return QUERY_TEMPLATE_NO_GET_DOCUMENT_NO_CITATION.format(Question=query)
     else:
         raise ValueError(f"Unknown query template: {query_template}")
-      
-      
+
+
 def format_query_with_trajectory(query: str, trajectory: str, query_template: str | None = None) -> str:
     """Format the query with the specified template if provided."""
     if query_template is None:
