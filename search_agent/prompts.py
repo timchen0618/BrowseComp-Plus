@@ -21,7 +21,7 @@ Confidence: {{your confidence score between 0% and 100% for your answer}}
 """.strip()
 
 QUERY_TEMPLATE_NO_GET_DOCUMENT_BUDGET = """
-You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You have a budget of {SearchBudget} search turns — use them efficiently.
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search tool provided. Please perform reasoning and use the tool step by step, in an interleaved manner. You may use the search tool multiple times. You have a budget of {SearchBudget} search turns — use them efficiently.
 
 Question: {Question}
 
