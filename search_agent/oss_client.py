@@ -15,6 +15,7 @@ from prompts import (
     format_query,
     format_query_with_trajectory,
     format_query_with_traj_summary,
+    format_query_with_budget,
 )
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -502,6 +503,8 @@ def _process_tsv_dataset(
             user_content = _build_trajectory_user_content(
                 qid, qtext, args, client, trajectories_by_id, summaries_by_id
             )
+        elif args.search_budget is not None:
+            user_content = format_query_with_budget(qtext, args.search_budget)
         else:
             user_content = format_query(qtext, args.query_template)
         input_messages = [{"role": "user", "content": user_content}]
@@ -516,11 +519,12 @@ def _process_tsv_dataset(
         }
 
         try:
+            effective_max_iter = args.search_budget if args.search_budget is not None else args.max_iterations
             messages, tool_usage, status = run_conversation_with_tools(
                 client,
                 initial_request,
                 tool_handler,
-                args.max_iterations,
+                effective_max_iter,
                 args.verbose,
             )
 
@@ -664,6 +668,12 @@ def main():
     parser.add_argument("--hf-home", type=str, help="Hugging Face home directory for caching")
     parser.add_argument("--snippet-max-tokens", type=int, default=512, help="Tokens per document snippet")
     parser.add_argument("--k", type=int, default=5, help="Top-k search results")
+    parser.add_argument(
+        "--search-budget",
+        type=int,
+        default=None,
+        help="Max search turns; uses budget-aware prompt and overrides max_iterations",
+    )
     parser.add_argument("--get-document", action="store_true", help="Register the get_document tool")
 
     temp_args, _ = parser.parse_known_args()
