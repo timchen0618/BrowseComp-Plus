@@ -457,7 +457,7 @@ def main():
     all_results = []
 
     # Initialize vLLM engine and sampling params
-    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=2048, gpu_memory_utilization=0.95)
+    llm = LLM(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=4096, gpu_memory_utilization=0.95)
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
@@ -543,7 +543,7 @@ def main():
         ):
             response = run_data["result"][-1]["output"]
 
-        if response == "" or not is_completed:
+        if response == "":  # Judge any trajectory with a valid output_text, even token-limit ones
             result = {
                 "json_path": str(json_path),
                 "query_id": query_id,

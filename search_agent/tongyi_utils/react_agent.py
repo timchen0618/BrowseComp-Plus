@@ -92,6 +92,9 @@ class MultiTurnReactAgent(FnCallAgent):
         for attempt in range(max_tries):
             try:
                 # print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
+                _extra_body = {}
+                if self.llm_generate_cfg.get('enable_thinking', False):
+                    _extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
                 chat_response = client.chat.completions.create(
                     model=model,
                     messages=msgs,
@@ -99,8 +102,9 @@ class MultiTurnReactAgent(FnCallAgent):
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
                     logprobs=False,
-                    max_tokens=10000,
-                    presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1)
+                    max_tokens=self.llm_generate_cfg.get('max_tokens', 10000),
+                    presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1),
+                    extra_body=_extra_body if _extra_body else None,
                 )
                 content = chat_response.choices[0].message.content
                 if content and content.strip():

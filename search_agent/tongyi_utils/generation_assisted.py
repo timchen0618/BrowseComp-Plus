@@ -22,6 +22,39 @@ GENERATION_SYSTEM_PROMPT = (
     "Do not guess. Do not fabricate."
 )
 
+GENERATION_SYSTEM_PROMPT_DOC_APPEND = (
+    "## Role\n"
+    "You are a query-focused knowledge generator (no browsing, no documents). "
+    "Using only your parametric knowledge, produce a concise, verification-ready "
+    "draft that contains the essential, decision-relevant facts likely needed to "
+    "answer the given search query for the provided complex question.\n\n"
+    "## Objective\n"
+    "1. Provide the best factual content you already know that directly addresses "
+    "the search query or unlocks the next reasoning step.\n"
+    "2. Be precise about names, dates, numbers, units, locations, titles, relations.\n"
+    "3. Acknowledge uncertainty explicitly; do not fabricate details you do not know.\n"
+    "4. Make the output easy to verify by proposing targeted follow-up queries and "
+    "likely authoritative sources (as hints, not links).\n\n"
+    "## What to exclude\n"
+    "1. No browsing, no external retrieval, no citations/URLs.\n"
+    "2. No hidden chain-of-thought; provide the document only.\n"
+    "3. No speculative flourishes; if uncertain, mark it and move on.\n\n"
+    "## Style & normalization\n"
+    "1. Concise, factual, neutral.\n"
+    "2. Dates in ISO when exact: YYYY-MM-DD; otherwise YYYY-MM or YYYY.\n"
+    "3. Preserve proper names verbatim; keep numbers with units and context.\n"
+    "4. Prefer lists and triples over prose when possible.\n\n"
+    "## Output format (return ONLY the document)\n"
+    "Generate the document and nothing else."
+)
+
+
+def build_generation_user_prompt_doc_append(original_question: str, subquery: str) -> str:
+    return (
+        f"complex_question: {original_question.strip()}\n\n"
+        f"search_query: {subquery.strip()}"
+    )
+
 
 def build_generation_user_prompt(original_question: str, subquery: str) -> str:
     return (
@@ -116,6 +149,7 @@ class GenerationAssistedConfig:
     max_retries: int = 3
     allow_thinking: bool = False
     strip_thinking: bool = True
+    prompt_style: str = "default"  # "default" or "doc_append"
 
 
 class GenerationAssistedRetriever:
@@ -140,14 +174,20 @@ class GenerationAssistedRetriever:
         if not original_question or not subquery:
             return None
 
+        if self.cfg.prompt_style == "doc_append":
+            system_prompt = GENERATION_SYSTEM_PROMPT_DOC_APPEND
+            user_prompt = build_generation_user_prompt_doc_append(
+                original_question, subquery
+            )
+        else:
+            system_prompt = GENERATION_SYSTEM_PROMPT
+            user_prompt = build_generation_user_prompt_with_context(
+                original_question, subquery, context=context
+            )
+
         messages = [
-            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": build_generation_user_prompt_with_context(
-                    original_question, subquery, context=context
-                ),
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ]
 
         for attempt in range(self.cfg.max_retries):
@@ -165,6 +205,54 @@ class GenerationAssistedRetriever:
                     temperature=self.cfg.temperature,
                     top_p=self.cfg.top_p,
                     max_tokens=self.cfg.max_tokens,
+                    logprobs=False,
+                    **request_kwargs,
+                )
+                content = (resp.choices[0].message.content or "").strip()
+                if content:
+                    if self.cfg.strip_thinking:
+                        content = strip_thinking_blocks(content)
+                    content = maybe_extract_answer_block(content)
+                    return content
+            except (APIConnectionError, APIError, APITimeoutError):
+                pass
+            except Exception:
+                pass
+
+            if attempt < self.cfg.max_retries - 1:
+                sleep_time = min(2**attempt + random.uniform(0.0, 0.5), 5.0)
+                time.sleep(sleep_time)
+
+        return None
+
+    def generate_raw(
+        self,
+        messages: list,
+        max_tokens: int = 64,
+    ) -> Optional[str]:
+        """Call generation server with pre-built messages. Returns raw text.
+
+        Used by query_rewrite mode in GARSearcher where prompts are built
+        externally (from the PROMPTS registry) rather than by this class.
+        """
+        if not self.cfg.enabled or not self.cfg.model:
+            return None
+
+        for attempt in range(self.cfg.max_retries):
+            try:
+                request_kwargs = {
+                    "extra_body": {
+                        "chat_template_kwargs": {
+                            "enable_thinking": self.cfg.allow_thinking
+                        }
+                    }
+                }
+                resp = self._client.chat.completions.create(
+                    model=self.cfg.model,
+                    messages=messages,
+                    temperature=self.cfg.temperature,
+                    top_p=self.cfg.top_p,
+                    max_tokens=max_tokens,
                     logprobs=False,
                     **request_kwargs,
                 )

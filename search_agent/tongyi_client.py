@@ -63,6 +63,10 @@ def parse_messages_to_result_array(messages: list) -> list:
         for tool_call_content in tool_call_matches:
             try:
                 tool_call_data = json.loads(tool_call_content)
+                if isinstance(tool_call_data, list):
+                    tool_call_data = tool_call_data[0] if tool_call_data else {}
+                if not isinstance(tool_call_data, dict):
+                    continue
                 tool_name = tool_call_data.get("name", "")
                 arguments = json.dumps(tool_call_data.get("arguments", {}))
 
@@ -161,6 +165,7 @@ def process_single_query(query: str, agent: MultiTurnReactAgent, args, output_di
     if gar_searcher is not None:
         gar_searcher.reset_logs()
         gar_searcher.set_original_question(query)
+        gar_searcher.set_query_id("single_query")
 
     task_data = {
         "item": {"question": query, "answer": ""},
@@ -221,6 +226,7 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
         if gar_searcher is not None:
             gar_searcher.reset_logs()
             gar_searcher.set_original_question(qtext)
+            gar_searcher.set_query_id(qid)
 
         task_data = {
             "item": {"question": qtext, "answer": ""},
@@ -236,9 +242,9 @@ def process_tsv_dataset(tsv_path: str, agent: MultiTurnReactAgent, args, output_
         gar_meta = gar_searcher.get_gar_metadata() if gar_searcher else None
         persist_response(output_dir, qid, qtext, result, args, time_taken, gar_metadata=gar_meta)
 
+    # GAR is now thread-safe (thread-local per-question state + file write lock)
     if gar_searcher is not None and args.num_threads > 1:
-        print("WARNING: GAR logging is not thread-safe. Forcing --num-threads 1.")
-        args.num_threads = 1
+        print(f"GAR mode={args.gar_mode} with {args.num_threads} threads (thread-safe)")
 
     if args.num_threads <= 1:
         with tqdm(remaining, desc="Queries", unit="query") as pbar:
@@ -348,8 +354,8 @@ def main():
         "--gar-mode",
         type=str,
         default="off",
-        choices=["off", "query_expansion", "query_expansion_gated"],
-        help="GAR mode: off, query_expansion (no gate), query_expansion_gated.",
+        choices=["off", "query_expansion", "query_expansion_gated", "gen_only", "doc_injection", "doc_append", "placebo", "query_rewrite"],
+        help="GAR mode: off, query_expansion, query_expansion_gated, gen_only, doc_injection, doc_append, placebo, query_rewrite.",
     )
     parser.add_argument(
         "--gar-alpha",
@@ -368,6 +374,29 @@ def main():
         type=str,
         default=None,
         help="Model name for GAR generation (defaults to --generation-model).",
+    )
+    parser.add_argument(
+        "--gar-placebo-file",
+        type=str,
+        default=None,
+        help="Path to placebo pool JSON for placebo mode.",
+    )
+    parser.add_argument(
+        "--gar-prompt-style",
+        type=str,
+        default="default",
+        choices=[
+            "default", "doc_append",
+            "query_rewrite_structural", "query_rewrite_structural_trajectory",
+            "query_rewrite_knowledge", "query_rewrite_knowledge_trajectory",
+        ],
+        help="Generation prompt style for GAR / query_rewrite mode.",
+    )
+    parser.add_argument(
+        "--gar-trajectory-window",
+        type=int,
+        default=0,
+        help="Number of recent subqueries to pass to query_rewrite prompt (0 = disabled).",
     )
 
     # Server configuration arguments
@@ -420,27 +449,62 @@ def main():
     # Wrap searcher with GAR if enabled
     gar_searcher = None
     if args.gar_mode != "off":
-        gar_gen_cfg = GenerationAssistedConfig(
-            enabled=True,
-            port=args.gar_generation_port,
-            model=args.gar_generation_model,
-            max_tokens=args.generation_max_tokens,
-            temperature=args.generation_temperature,
-            top_p=args.generation_top_p,
-            allow_thinking=args.generation_allow_thinking,
-            strip_thinking=not args.generation_no_strip_thinking,
-        )
-        gar_gen_retriever = GenerationAssistedRetriever(gar_gen_cfg)
+        # Placebo mode doesn't need a generation model — uses pre-built pool
+        if args.gar_mode == "placebo":
+            gar_gen_retriever = None
+        else:
+            gar_gen_cfg = GenerationAssistedConfig(
+                enabled=True,
+                port=args.gar_generation_port,
+                model=args.gar_generation_model,
+                max_tokens=args.generation_max_tokens,
+                temperature=args.generation_temperature,
+                top_p=args.generation_top_p,
+                allow_thinking=args.generation_allow_thinking,
+                strip_thinking=not args.generation_no_strip_thinking,
+                prompt_style=getattr(args, "gar_prompt_style", "default"),
+            )
+            gar_gen_retriever = GenerationAssistedRetriever(gar_gen_cfg)
+        # Map CLI gar-mode to GARConfig mode
+        config_mode = args.gar_mode
+        if config_mode == "query_expansion_gated":
+            config_mode = "query_expansion"
+        if config_mode == "placebo":
+            config_mode = "query_expansion"  # Use same fusion as GAR, just with placebo text
         gar_config = GARConfig(
+            mode=config_mode,
             alpha=args.gar_alpha,
             enable_gate=(args.gar_mode == "query_expansion_gated"),
+            placebo_file=args.gar_placebo_file,
         )
-        gar_generations_path = str(output_dir / "gar_generations.jsonl")
+        # Import prompt_fn for query_rewrite mode
+        prompt_fn = None
+        trajectory_window = 0
+        if args.gar_mode == "query_rewrite":
+            _scripts_dir = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts")
+            )
+            sys.path.insert(0, _scripts_dir)
+            from prompts import PROMPTS
+            prompt_fn = PROMPTS.get(args.gar_prompt_style)
+            if prompt_fn is None:
+                print(f"ERROR: Unknown prompt style '{args.gar_prompt_style}'. "
+                      f"Available: {list(PROMPTS.keys())}")
+                sys.exit(1)
+            trajectory_window = getattr(args, "gar_trajectory_window", 0)
+            print(f"Query rewrite: prompt_style={args.gar_prompt_style}, trajectory_window={trajectory_window}")
+
+        # Use SLURM_JOB_ID suffix to avoid cross-process file corruption on shared filesystems
+        _job_suffix = os.environ.get("SLURM_JOB_ID", "")
+        _gen_filename = f"gar_generations_{_job_suffix}.jsonl" if _job_suffix else "gar_generations.jsonl"
+        gar_generations_path = str(output_dir / _gen_filename)
         gar_searcher = GARSearcher(
             inner_searcher=searcher,
             generation_retriever=gar_gen_retriever,
             config=gar_config,
             gar_generations_path=gar_generations_path,
+            prompt_fn=prompt_fn,
+            trajectory_window=trajectory_window,
         )
         # Use GAR-wrapped searcher for the search tool
         effective_searcher = gar_searcher
