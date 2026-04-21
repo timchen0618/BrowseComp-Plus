@@ -7,6 +7,7 @@ the same plumbing.
 
 import json
 import random
+import re
 import time
 from pathlib import Path
 from typing import Callable
@@ -202,12 +203,12 @@ def _format_original_messages_for_prompt_oss(
 ) -> str:
     """Serialize ``original_messages`` into a JSON string, with light truncation.
 
-    This keeps the same I/O shape as ``_format_original_messages_for_prompt_tongyi``:
-    input trajectory dict → output string (JSON-serialized list).
-
-    Compared to the raw dump, it attempts to truncate very long reasoning/tool
-    outputs inside the messages, similar in spirit to
-    ``select_useful_tool_calls.format_trajectory_for_prompt_orig``.
+    Auto-detects two schemas and truncates accordingly:
+    - gpt-oss Responses API: messages have ``type`` key (``reasoning``,
+      ``function_call_output``, ...).
+    - Chat-completions (GLM, Qwen3.5, etc.): messages have ``role`` key
+      (``assistant`` with optional ``<think>...</think>`` in ``content``
+      and ``tool_calls``; ``tool`` with plain-text ``content``).
     """
     msgs = trajectory.get("original_messages", [])
     if not msgs:
@@ -222,11 +223,21 @@ def _format_original_messages_for_prompt_oss(
             result = result[:max_chars] + "\n\n... (messages truncated)"
         return result
 
+    think_re = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+    def _cap_think(match: "re.Match[str]") -> str:
+        inner = match.group(1)
+        if reasoning_max_chars > 0 and len(inner) > reasoning_max_chars:
+            inner = inner[:reasoning_max_chars] + "..."
+        return f"<think>{inner}</think>"
+
     for m in msgs_clone if isinstance(msgs_clone, list) else []:
         if not isinstance(m, dict):
             continue
         stype = m.get("type", "")
+        role = m.get("role")
 
+        # gpt-oss Responses API shape.
         if stype == "reasoning":
             content = m.get("content")
             if isinstance(content, list) and reasoning_max_chars > 0:
@@ -237,6 +248,16 @@ def _format_original_messages_for_prompt_oss(
             out = m.get("output")
             if isinstance(out, str) and tool_output_max_chars > 0 and len(out) > tool_output_max_chars:
                 m["output"] = out[:tool_output_max_chars] + "..."
+
+        # Chat-completions shape (GLM, Qwen3.5, ...).
+        if role == "tool":
+            c = m.get("content")
+            if isinstance(c, str) and tool_output_max_chars > 0 and len(c) > tool_output_max_chars:
+                m["content"] = c[:tool_output_max_chars] + "..."
+        elif role == "assistant":
+            c = m.get("content")
+            if isinstance(c, str) and reasoning_max_chars > 0 and "<think>" in c:
+                m["content"] = think_re.sub(_cap_think, c)
 
     result = json.dumps(msgs_clone, ensure_ascii=False)
     if max_chars > 0 and len(result) > max_chars:

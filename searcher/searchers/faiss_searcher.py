@@ -72,9 +72,11 @@ class FaissSearcher(BaseSearcher):
         )
         parser.add_argument(
             "--attn_implementation",
-            default="flash_attention_2",
+            default="sdpa",
             choices=["sdpa", "flash_attention_2"],
-            help="Attention implementation for FAISS search (default: flash_attention_2)",
+            help="Attention implementation for FAISS search (default: sdpa). "
+                 "SDPA auto-dispatches to flash kernels on Hopper; flash_attention_2 "
+                 "requires the flash-attn package.",
         )
 
     def __init__(self, args):
