@@ -115,6 +115,25 @@ def collect_targets() -> list[Target]:
     return targets
 
 
+def _find_split_shard_dir(dataset: str, split: str) -> str | None:
+    """Pick the shard directory matching this dataset+split (prefer split-specific)."""
+    base = os.path.join("topics-qrels", dataset)
+    if not os.path.isdir(base):
+        return None
+    entries = sorted(os.listdir(base))
+    # Split-specific: e.g. bcp_test150_3_shards, bcp_train680_8_shards
+    split_prefix = f"{dataset}_{split}_"
+    for e in entries:
+        if e.startswith(split_prefix) and e.endswith("_shards"):
+            return os.path.join(base, e)
+    # Default (full split): a *_shards dir without any split tag in the name
+    known_split_tokens = ("first50", "first100", "test150", "train680")
+    for e in entries:
+        if e.endswith("_shards") and not any(tok in e for tok in known_split_tokens):
+            return os.path.join(base, e)
+    return None
+
+
 def compute_actual_missing(
     target: Target,
     retriever: str = "Qwen3-Embedding-8B",
@@ -124,7 +143,9 @@ def compute_actual_missing(
     import shard_monitor as sm
 
     agent_model = agent_model or target.model
-    shard_dir = sm.find_shard_dir(target.dataset)
+    shard_dir = _find_split_shard_dir(target.dataset, target.split)
+    if shard_dir is None:
+        shard_dir = sm.find_shard_dir(target.dataset)
     if shard_dir is None:
         return ([], [])
     shards = sm.load_shard_query_ids(shard_dir)
