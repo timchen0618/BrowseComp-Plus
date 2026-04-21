@@ -78,6 +78,37 @@ def _setup_logging(log_path: Path = LOG_PATH) -> None:
     )
 
 
+def collect_targets() -> list[Target]:
+    """Flatten submit_missing.MISSING* dicts into a list of Target objects."""
+    import submit_missing as sm
+
+    groups = [
+        (sm.MISSING,                  sm.TEMPLATE_PATH,           "full",     "bcp"),
+        (sm.MISSING_FIRST50,          sm.TEMPLATE_PATH_FIRST50,   "first50",  "bcp"),
+        (sm.MISSING_FRAMES_FIRST50,   sm.TEMPLATE_PATH_FIRST50,   "first50",  "frames"),
+        (sm.MISSING_MUSIQUE_FIRST50,  sm.TEMPLATE_PATH_FIRST50,   "first50",  "musique"),
+        (sm.MISSING_TEST150,          sm.TEMPLATE_PATH_TEST150,   "test150",  "bcp"),
+        (sm.MISSING_TRAIN680,         sm.TEMPLATE_PATH_TRAIN680,  "train680", "bcp"),
+    ]
+    targets: list[Target] = []
+    for missing_dict, template, split, dataset in groups:
+        for run_name, shards in missing_dict.items():
+            model, mode, seed, traj_model = sm.parse_run_name(run_name)
+            declared = shards if isinstance(shards, list) else None
+            targets.append(Target(
+                run_name=run_name,
+                dataset=dataset,
+                split=split,
+                template_path=template,
+                declared_shards=declared,
+                model=model,
+                mode=mode,
+                seed=seed,
+                traj_model=traj_model,
+            ))
+    return targets
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submit", action="store_true", help="Actually submit (default: dry-run)")
