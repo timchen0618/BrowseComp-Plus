@@ -36,3 +36,6 @@ sft/axolotl/data/
 .worktrees/
 sft/axolotl/data_*/
 sft/axolotl/prepared*/
+selected_tool_calls/
+figures/
+sft/axolotl/debug_*
