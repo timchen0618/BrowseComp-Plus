@@ -351,6 +351,80 @@ def write_eval_failed(
     return path
 
 
+_EVAL_STATS_RE = re.compile(
+    r"""
+    Processed\s+(?P<num_evaluations>\d+)\s+evaluations.*?
+    Accuracy:\s+(?P<accuracy>\d+(?:\.\d+)?)%.*?
+    Recall:\s+(?P<recall>\d+(?:\.\d+)?)%.*?
+    Average\s+Tool\s+Calls:.*?'search':\s*(?P<num_searches>\d+(?:\.\d+)?).*?
+    Summary\s+saved\s+to\s+(?P<summary_path>\S+evaluation_summary\.json)
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+
+
+def _extract_eval_stats(text: str) -> list[dict[str, Any]]:
+    """Parse evaluation stats from eval SLURM output. Mirrors src_utils/parse_eval_out."""
+    rows: list[dict[str, Any]] = []
+    for m in _EVAL_STATS_RE.finditer(text):
+        summary_path = m.group("summary_path")
+        parts = Path(summary_path).parts
+        run_name = "/".join(parts[-4:-1]) if len(parts) >= 4 else summary_path
+        rows.append({
+            "run_name": run_name,
+            "num_evaluations": int(m.group("num_evaluations")),
+            "accuracy": float(m.group("accuracy")),
+            "recall": float(m.group("recall")),
+            "num_searches": float(m.group("num_searches")),
+        })
+    return rows
+
+
+def write_summary(
+    state: PipelineState,
+    eval_out_path: Path | None = None,
+    path: Path | None = None,
+) -> Path:
+    """Generate pipeline_summary.md from PipelineState + parsed eval output."""
+    path = path or (PROJECT_ROOT / "pipeline_summary.md")
+    eval_out_path = eval_out_path or (PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out")
+
+    rows: list[dict[str, Any]] = []
+    if eval_out_path.is_file():
+        rows = _extract_eval_stats(eval_out_path.read_text())
+
+    lines = [
+        "# Pipeline Summary",
+        "",
+        f"- Started: {state.started_at}",
+        f"- Ended: {state.last_check_at}",
+        f"- Cycles: {state.cycle_count}",
+        f"- Targets: {len(state.targets)}",
+        "",
+        "## Eval Results",
+        "",
+        "| Run | # | Accuracy | Recall | Avg Searches |",
+        "|-----|---|----------|--------|--------------|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['run_name']} | {r['num_evaluations']} | "
+            f"{r['accuracy']:.1f}% | {r['recall']:.1f}% | "
+            f"{r['num_searches']:.2f} |"
+        )
+    if not rows:
+        lines.append("| _(no rows parsed from eval output)_ | | | | |")
+
+    lines.extend(["", "## Target Status", ""])
+    for s in state.targets:
+        lines.append(
+            f"- `{s.target.run_name}` — status: {s.status}, "
+            f"resubmits: {len(s.submitted_job_ids)}"
+        )
+    path.write_text("\n".join(lines))
+    return path
+
+
 def save_state(state: PipelineState, path: Path | None = None) -> None:
     """Serialize PipelineState to JSON."""
     p = path or STATE_PATH

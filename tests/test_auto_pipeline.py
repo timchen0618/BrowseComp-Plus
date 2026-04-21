@@ -237,3 +237,30 @@ def test_build_eval_sbatch_generates_one_exec_per_target(tmp_project):
     assert "test150/gpt-oss-120b/x_seed0" in content
     assert "full/tongyi/y_seed0" in content
     assert "singularity exec" in content
+
+
+def test_write_summary_from_eval_out(tmp_project):
+    eval_out = tmp_project / "sbatch_outputs" / "eval_auto.out"
+    eval_out.write_text(
+        "Processed 150 evaluations\n"
+        "Accuracy: 65.3%\n"
+        "Recall: 72.1%\n"
+        "Average Tool Calls: {'search': 8.4}\n"
+        "Summary saved to evals/bcp/Qwen3-Embedding-8B/test150/gpt-oss-120b/x_seed0/evaluation_summary.json\n"
+    )
+    t = auto_pipeline.Target(
+        run_name="x_seed0", dataset="bcp", split="test150",
+        template_path="x.SBATCH", declared_shards=[0],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    state = auto_pipeline.PipelineState(
+        pid=1, started_at="2026-04-20T10:00:00", last_check_at="2026-04-20T12:00:00",
+        cycle_count=1, phase="done", interval_seconds=7200, stuck_threshold=3,
+        targets=[auto_pipeline.TargetState(target=t, status="complete")],
+    )
+    out = tmp_project / "pipeline_summary.md"
+    auto_pipeline.write_summary(state, eval_out_path=eval_out, path=out)
+    text = out.read_text()
+    assert "65.3" in text
+    assert "x_seed0" in text
+    assert "cycle_count" in text.lower() or "cycles" in text.lower()
