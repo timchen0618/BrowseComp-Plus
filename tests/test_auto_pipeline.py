@@ -164,3 +164,16 @@ def test_detect_stuck_targets_flags_unchanged():
     stuck = auto_pipeline.detect_stuck_targets(states, threshold=3)
     assert [s.target.run_name for s in stuck] == ["A"]
     assert states[1].stuck_cycles == 0
+
+
+def test_diagnose_slurm_out_finds_oom(tmp_project, sample_slurm_out):
+    t = auto_pipeline.Target(
+        run_name="x_seed0", dataset="bcp", split="test150",
+        template_path="x.SBATCH", declared_shards=[0],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    text = auto_pipeline.diagnose_slurm_out(
+        t, slurm_glob="slurm-*.out", sbatch_glob="sbatch_outputs/*.out"
+    )
+    assert "CUDA out of memory" in text
+    assert "slurm-9999.out" in text

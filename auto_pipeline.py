@@ -281,6 +281,83 @@ def detect_stuck_targets(
     return stuck
 
 
+ERROR_PATTERNS = [
+    re.compile(r"CUDA out of memory", re.I),
+    re.compile(r"torch\.cuda\.OutOfMemoryError", re.I),
+    re.compile(r"FileNotFoundError", re.I),
+    re.compile(r"(Address|port) already in use", re.I),
+    re.compile(r"Authentication failed", re.I),
+    re.compile(r"TimeoutError", re.I),
+    re.compile(r"Killed by signal|DUE TO TIME LIMIT|OUT_OF_MEMORY", re.I),
+    re.compile(r"Traceback \(most recent call last\)"),
+]
+
+
+def diagnose_slurm_out(
+    target: Target,
+    slurm_glob: str = "slurm-*.out",
+    sbatch_glob: str = "sbatch_outputs/*.out",
+    max_files: int = 5,
+    context_lines: int = 5,
+) -> str:
+    """Scan recent SLURM/sbatch out files for common error patterns; return Markdown."""
+    import glob as gb
+
+    candidates = sorted(gb.glob(slurm_glob), key=os.path.getmtime, reverse=True)[:max_files]
+    candidates += sorted(gb.glob(sbatch_glob), key=os.path.getmtime, reverse=True)[:max_files]
+    out: list[str] = []
+    for path in candidates:
+        try:
+            text = Path(path).read_text(errors="replace")
+        except OSError:
+            continue
+        if target.run_name not in text and not any(p.search(text) for p in ERROR_PATTERNS):
+            continue
+        lines = text.splitlines()
+        matches: list[str] = []
+        for i, line in enumerate(lines):
+            if any(p.search(line) for p in ERROR_PATTERNS):
+                start = max(0, i - context_lines)
+                end = min(len(lines), i + context_lines + 1)
+                snippet = "\n".join(lines[start:end])
+                matches.append(f"```\n{snippet}\n```")
+        if matches:
+            out.append(f"### `{path}`\n\n" + "\n\n".join(matches[:3]))
+    return "\n\n".join(out) if out else "_No matching error patterns found._"
+
+
+def write_pipeline_stopped(
+    stuck_states: list[TargetState],
+    all_states: list[TargetState],
+    path: Path | None = None,
+) -> Path:
+    path = path or (PROJECT_ROOT / "pipeline_stopped.md")
+    lines = ["# Pipeline Stopped — Stuck Target(s) Detected", ""]
+    for s in stuck_states:
+        missing_preview = ", ".join(s.missing_qids[:30])
+        if len(s.missing_qids) > 30:
+            missing_preview += "..."
+        lines.extend([
+            f"## Stuck: {s.target.run_name}",
+            f"- Dataset: {s.target.dataset} | Split: {s.target.split} | Model: {s.target.model}",
+            f"- Stuck cycles: {s.stuck_cycles}",
+            f"- Missing query IDs ({len(s.missing_qids)}): {missing_preview}",
+            "",
+            "### Diagnostic log excerpts",
+            diagnose_slurm_out(s.target),
+            "",
+        ])
+    lines.extend(["## All targets summary", ""])
+    for s in all_states:
+        flag = " (stuck)" if s in stuck_states else ""
+        lines.append(
+            f"- `{s.target.run_name}`: status={s.status}, "
+            f"missing={len(s.missing_qids)}{flag}"
+        )
+    path.write_text("\n".join(lines))
+    return path
+
+
 def write_preflight_failed(errors: list[PreflightError], path: Path | None = None) -> Path:
     """Write a human-readable report of preflight failures and return the path."""
     path = path or (PROJECT_ROOT / "preflight_failed.md")
