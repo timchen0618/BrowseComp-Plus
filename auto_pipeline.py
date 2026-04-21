@@ -115,6 +115,58 @@ def collect_targets() -> list[Target]:
     return targets
 
 
+def _resolve_run_subdir(target: Target) -> str:
+    """Reproduce the SBATCH template's ``output_dir`` subdir (relative to OUT_BASE).
+
+    Needed because ``run_name`` in ``submit_missing.py`` is a logical identifier
+    that does not always match the on-disk directory name. For example,
+    ``qwen3.5-4b-sft_budget_seed0`` lives on disk as ``budget5_seed0``
+    (the SBATCH injects ``SEARCH_BUDGET=5`` into the dir name).
+    """
+    mode = target.mode
+    seed = target.seed
+    traj = target.traj_model
+
+    # Read SEARCH_BUDGET / PLAN_MODEL defaults from the template when present.
+    search_budget = "5"
+    plan_model = "gemini_2.5_pro"
+    try:
+        with open(target.template_path) as f:
+            tpl = f.read()
+        m = re.search(r"^SEARCH_BUDGET=(\S+)", tpl, re.MULTILINE)
+        if m:
+            search_budget = m.group(1).strip('"')
+        m = re.search(r"^PLAN_MODEL=(\S+)", tpl, re.MULTILINE)
+        if m:
+            plan_model = m.group(1).strip('"')
+    except OSError:
+        pass
+
+    # Mirror the ``case "$inner_mode"`` block in the SBATCH templates.
+    if mode == "org":
+        return f"seed{seed}"
+    if mode == "budget":
+        return f"budget{search_budget}_seed{seed}"
+    if mode in {
+        "traj_ext",
+        "traj_orig_ext",
+        "traj_budget_orig_ext",
+        "traj_summary_ext",
+        "traj_summary_orig_ext",
+        "traj_summary_ext_selected_tools",
+        "traj_summary_orig_ext_selected_tools",
+    }:
+        return f"{mode}_{traj}_seed{seed}"
+    # planning_v*_start_ext[_reinject_every_5] — plan_model gets injected
+    m = re.match(r"^(planning_v[^_]+)_start_ext(_reinject_every_\d+)?$", mode)
+    if m:
+        inner = m.group(1)
+        reinject = m.group(2) or ""
+        return f"{inner}_start_ext_{plan_model}{reinject}_seed{seed}"
+    # default
+    return f"{mode}_seed{seed}"
+
+
 def _find_split_shard_dir(dataset: str, split: str) -> str | None:
     """Pick the shard directory matching this dataset+split (prefer split-specific)."""
     base = os.path.join("topics-qrels", dataset)
@@ -153,8 +205,9 @@ def compute_actual_missing(
     if split_ids is not None:
         shards = sm.filter_shards_by_split(shards, split_ids)
 
+    run_subdir = _resolve_run_subdir(target)
     run_dir = os.path.join(
-        "runs", target.dataset, retriever, target.split, agent_model, target.run_name,
+        "runs", target.dataset, retriever, target.split, agent_model, run_subdir,
     )
     completed = sm.scan_completed_ids(run_dir)
     gaps = sm.compute_shard_gaps(shards, completed)
@@ -568,15 +621,11 @@ def _delete_empty_runs_for(target: Target, retriever: str = "Qwen3-Embedding-8B"
         from filter_empty_runs import scan_empty_runs, _delete_paths  # type: ignore
     except ImportError:
         return
+    run_subdir = _resolve_run_subdir(target)
     run_dir = (
-        PROJECT_ROOT / "runs" / target.dataset / "Qwen3-Embedding-8B"
-        / target.split / target.model / target.run_name
+        PROJECT_ROOT / "runs" / target.dataset / retriever
+        / target.split / target.model / run_subdir
     )
-    if retriever != "Qwen3-Embedding-8B":
-        run_dir = (
-            PROJECT_ROOT / "runs" / target.dataset / retriever
-            / target.split / target.model / target.run_name
-        )
     if not run_dir.is_dir():
         return
     scan = scan_empty_runs(run_dir)
