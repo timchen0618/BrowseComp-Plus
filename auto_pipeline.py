@@ -538,6 +538,171 @@ def write_preflight_failed(errors: list[PreflightError], path: Path | None = Non
     return path
 
 
+def _delete_empty_runs_for(target: Target, retriever: str = "Qwen3-Embedding-8B") -> None:
+    """Delete empty trajectory JSONs in a target's run dir (reuses filter_empty_runs)."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(PROJECT_ROOT / "src_utils"))
+    try:
+        from filter_empty_runs import scan_empty_runs, _delete_paths  # type: ignore
+    except ImportError:
+        return
+    run_dir = (
+        PROJECT_ROOT / "runs" / target.dataset / "Qwen3-Embedding-8B"
+        / target.split / target.model / target.run_name
+    )
+    if retriever != "Qwen3-Embedding-8B":
+        run_dir = (
+            PROJECT_ROOT / "runs" / target.dataset / retriever
+            / target.split / target.model / target.run_name
+        )
+    if not run_dir.is_dir():
+        return
+    scan = scan_empty_runs(run_dir)
+    if scan.empty_paths:
+        log.info("deleting %d empty runs in %s", len(scan.empty_paths), run_dir)
+        _delete_paths(scan.empty_paths)
+
+
+def run_pipeline(args) -> int:
+    """Orchestrate preflight → submit → monitor → eval → summary."""
+    if args.resume and STATE_PATH.is_file():
+        state = load_state()
+        log.info("resumed state at cycle %d, phase=%s", state.cycle_count, state.phase)
+    else:
+        targets = collect_targets()
+        state = PipelineState(
+            pid=os.getpid(),
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            interval_seconds=args.interval_seconds,
+            stuck_threshold=args.stuck_threshold,
+            targets=[TargetState(target=t) for t in targets],
+        )
+        if not state.targets:
+            log.warning("no targets — all MISSING* dicts are empty")
+            return 0
+
+    if not args.skip_preflight and state.phase in ("init", "preflight"):
+        state.phase = "preflight"
+        save_state(state)
+        errors = preflight(
+            [s.target for s in state.targets], run_sbatch_check=args.submit,
+        )
+        if errors:
+            p = write_preflight_failed(errors)
+            log.error("preflight failed — see %s", p)
+            return 1
+
+    state.phase = "submitting"
+    save_state(state)
+    for ts in state.targets:
+        missing_shards, missing_qids = compute_actual_missing(ts.target)
+        ts.missing_qids = missing_qids
+        if not missing_shards:
+            ts.status = "complete"
+            continue
+        jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
+        if jid is not None:
+            ts.submitted_job_ids.append(jid)
+            ts.status = "submitting"
+        else:
+            ts.status = "running" if args.submit else "pending"
+    save_state(state)
+
+    state.phase = "monitoring"
+    save_state(state)
+    while True:
+        state.cycle_count += 1
+        state.last_check_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        all_active_ids = [j for ts in state.targets for j in ts.submitted_job_ids]
+        states_map = poll_jobs(all_active_ids) if args.submit else {}
+        still_running = [j for j, st in states_map.items() if st != "DONE"]
+        if still_running:
+            log.info("cycle %d: %d jobs still active, sleeping %ds",
+                     state.cycle_count, len(still_running), state.interval_seconds)
+            save_state(state)
+            time.sleep(state.interval_seconds)
+            continue
+
+        for ts in state.targets:
+            ts.last_missing_qids = list(ts.missing_qids)
+            missing_shards, missing_qids = compute_actual_missing(ts.target)
+            ts.missing_qids = missing_qids
+            if not missing_shards:
+                _delete_empty_runs_for(ts.target)
+                missing_shards, missing_qids = compute_actual_missing(ts.target)
+                ts.missing_qids = missing_qids
+                if not missing_shards:
+                    ts.status = "complete"
+                    continue
+            ts.status = "running"
+
+        stuck = detect_stuck_targets(state.targets, threshold=state.stuck_threshold)
+        if stuck:
+            for s in stuck:
+                s.status = "stuck"
+            p = write_pipeline_stopped(stuck, state.targets)
+            state.phase = "stuck"
+            save_state(state)
+            log.error("pipeline halted — see %s", p)
+            return 2
+
+        any_submitted = False
+        for ts in state.targets:
+            if ts.status == "complete":
+                continue
+            missing_shards, _ = compute_actual_missing(ts.target)
+            if missing_shards:
+                jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
+                if jid is not None:
+                    ts.submitted_job_ids.append(jid)
+                    any_submitted = True
+
+        save_state(state)
+        if all(ts.status == "complete" for ts in state.targets):
+            break
+        if not any_submitted and not args.submit:
+            break
+        time.sleep(state.interval_seconds)
+
+    if args.skip_eval:
+        state.phase = "done"
+        save_state(state)
+        log.info("skipping eval (--skip-eval)")
+        return 0
+
+    state.phase = "eval"
+    save_state(state)
+    complete_targets = [ts.target for ts in state.targets if ts.status == "complete"]
+    sbatch_path = build_eval_sbatch(complete_targets)
+    if not args.submit:
+        log.info("[dry-run] would submit %s", sbatch_path)
+        state.phase = "done"
+        save_state(state)
+        return 0
+    result = subprocess.run(["sbatch", str(sbatch_path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        write_eval_failed(PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out")
+        return 3
+    m = re.search(r"Submitted batch job (\d+)", result.stdout)
+    eval_jid = int(m.group(1)) if m else None
+    if eval_jid is not None:
+        while poll_jobs([eval_jid]).get(eval_jid, "DONE") != "DONE":
+            time.sleep(state.interval_seconds)
+
+    eval_out_path = PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out"
+    if eval_out_path.is_file() and "Processed" not in eval_out_path.read_text():
+        write_eval_failed(eval_out_path)
+        return 3
+
+    state.phase = "done"
+    save_state(state)
+    write_summary(state, eval_out_path=eval_out_path)
+    log.info("done — see pipeline_summary.md")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submit", action="store_true", help="Actually submit (default: dry-run)")
@@ -551,8 +716,11 @@ def main() -> int:
     _setup_logging()
     log.info("auto_pipeline.py starting (submit=%s, interval=%ds)",
              args.submit, args.interval_seconds)
-    # Orchestrator wired up in later task.
-    return 0
+    try:
+        return run_pipeline(args)
+    except KeyboardInterrupt:
+        log.warning("interrupted")
+        return 130
 
 
 if __name__ == "__main__":

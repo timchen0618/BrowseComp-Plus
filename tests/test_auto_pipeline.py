@@ -264,3 +264,43 @@ def test_write_summary_from_eval_out(tmp_project):
     assert "65.3" in text
     assert "x_seed0" in text
     assert "cycle_count" in text.lower() or "cycles" in text.lower()
+
+
+def test_main_dry_run_does_not_submit(tmp_project, monkeypatch):
+    """Smoke test: dry-run flow completes without calling sbatch."""
+    import submit_missing
+    from pathlib import Path as _P
+    import sys as _sys
+    for name in ("run_qwen3_planning.SBATCH", "run_qwen3_first50.SBATCH",
+                 "run_qwen3_test150.SBATCH", "run_qwen3_train680.SBATCH"):
+        src = _P("/scratch/hc3337/projects/BrowseComp-Plus") / name
+        (tmp_project / name).write_text(src.read_text())
+    monkeypatch.setattr(submit_missing, "MISSING", {}, raising=False)
+    monkeypatch.setattr(submit_missing, "MISSING_FIRST50", {}, raising=False)
+    monkeypatch.setattr(submit_missing, "MISSING_FRAMES_FIRST50", {}, raising=False)
+    monkeypatch.setattr(submit_missing, "MISSING_MUSIQUE_FIRST50", {}, raising=False)
+    monkeypatch.setattr(submit_missing, "MISSING_TEST150",
+                        {"gpt-oss-120b_seed0": [0]}, raising=False)
+    monkeypatch.setattr(submit_missing, "MISSING_TRAIN680", {}, raising=False)
+    # Pretend everything's already done so the loop exits immediately.
+    run_dir = tmp_project / "runs" / "bcp" / "Qwen3-Embedding-8B" / "test150" / "gpt-oss-120b" / "gpt-oss-120b_seed0"
+    run_dir.mkdir(parents=True)
+    for qid in ["q1", "q2", "q3", "q4", "q5", "q6"]:
+        (run_dir / f"run_{qid}.json").write_text(f'{{"query_id": "{qid}"}}')
+    sbatch_calls = []
+    def fake_run(cmd, *a, **kw):
+        import subprocess as sp
+        sbatch_calls.append(cmd)
+        return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(auto_pipeline.subprocess, "run", fake_run)
+    (tmp_project / "eval.SBATCH").write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --job-name=eval\n#SBATCH --output=sbatch_outputs/eval.out\n"
+        'BASE="runs/bcp/Qwen3-Embedding-8B"\n'
+        'CMD_PREFIX="python eval.py"\n'
+    )
+    monkeypatch.setattr(_sys, "argv",
+                        ["auto_pipeline.py", "--skip-preflight", "--skip-eval"])
+    rc = auto_pipeline.main()
+    assert rc == 0
+    assert not any(c and c[0] == "sbatch" for c in sbatch_calls)
