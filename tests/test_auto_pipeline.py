@@ -126,3 +126,19 @@ def test_submit_target_submits_and_parses_jobid(tmp_project, monkeypatch):
     monkeypatch.setattr(auto_pipeline.subprocess, "run", fake_run)
     jid = auto_pipeline.submit_target(t, shards=[0, 1], submit=True)
     assert jid == 987654
+
+
+def test_poll_jobs_parses_squeue(monkeypatch):
+    def fake_run(cmd, *a, **kw):
+        import subprocess as sp
+        out = "987654 RUNNING\n987655 PENDING\n"
+        return sp.CompletedProcess(cmd, 0, stdout=out, stderr="")
+    monkeypatch.setattr(auto_pipeline.subprocess, "run", fake_run)
+    states = auto_pipeline.poll_jobs([987654, 987655, 987656])
+    assert states[987654] == "RUNNING"
+    assert states[987655] == "PENDING"
+    assert states[987656] == "DONE"
+
+
+def test_poll_jobs_empty_list():
+    assert auto_pipeline.poll_jobs([]) == {}

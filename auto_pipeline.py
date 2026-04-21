@@ -233,6 +233,34 @@ def submit_target(target: Target, shards: list[int], submit: bool = False) -> in
     return jid
 
 
+def poll_jobs(job_ids: list[int]) -> dict[int, str]:
+    """Return {job_id: state}. Jobs absent from squeue are reported as 'DONE'."""
+    if not job_ids:
+        return {}
+    jobs_arg = ",".join(str(j) for j in job_ids)
+    result = subprocess.run(
+        ["squeue", "-j", jobs_arg, "-h", "-o", "%i %T"],
+        capture_output=True, text=True,
+    )
+    states: dict[int, str] = {jid: "DONE" for jid in job_ids}
+    if result.returncode != 0:
+        return states
+    for line in result.stdout.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+        # Array jobs appear as "12345_0"; collapse to parent job id.
+        head = parts[0].split("_")[0]
+        if not head.isdigit():
+            continue
+        jid = int(head)
+        if jid in states:
+            # Any still-scheduled array element overrides a stale 'DONE'.
+            if states[jid] == "DONE":
+                states[jid] = parts[1]
+    return states
+
+
 def write_preflight_failed(errors: list[PreflightError], path: Path | None = None) -> Path:
     """Write a human-readable report of preflight failures and return the path."""
     path = path or (PROJECT_ROOT / "preflight_failed.md")
