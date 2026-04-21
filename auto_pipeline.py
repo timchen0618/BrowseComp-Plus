@@ -115,6 +115,37 @@ def collect_targets() -> list[Target]:
     return targets
 
 
+def compute_actual_missing(
+    target: Target,
+    retriever: str = "Qwen3-Embedding-8B",
+    agent_model: str | None = None,
+) -> tuple[list[int], list[str]]:
+    """Return (missing_shard_indices, missing_query_ids) by scanning target's run dir."""
+    import shard_monitor as sm
+
+    agent_model = agent_model or target.model
+    shard_dir = sm.find_shard_dir(target.dataset)
+    if shard_dir is None:
+        return ([], [])
+    shards = sm.load_shard_query_ids(shard_dir)
+    split_ids = sm.load_split_query_ids(target.dataset, target.split)
+    if split_ids is not None:
+        shards = sm.filter_shards_by_split(shards, split_ids)
+
+    run_dir = os.path.join(
+        "runs", target.dataset, retriever, target.split, agent_model, target.run_name,
+    )
+    completed = sm.scan_completed_ids(run_dir)
+    gaps = sm.compute_shard_gaps(shards, completed)
+
+    missing_shards = sorted(
+        int(name.split("_")[-1]) for name in gaps
+        if name.split("_")[-1].isdigit()
+    )
+    missing_qids = sorted({q for ids in gaps.values() for q in ids})
+    return (missing_shards, missing_qids)
+
+
 def preflight(targets: list[Target], run_sbatch_check: bool = True) -> list[PreflightError]:
     """Validate SBATCH templates and confirm `sbatch --test-only` would accept them.
 

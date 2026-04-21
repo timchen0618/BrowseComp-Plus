@@ -70,3 +70,21 @@ def test_preflight_runs_sbatch_test_only(tmp_project, monkeypatch):
     errors = auto_pipeline.preflight([t], run_sbatch_check=True)
     assert errors == []
     assert any("--test-only" in c for c in calls[0])
+
+
+def test_compute_actual_missing_reads_run_dir(tmp_project):
+    run_dir = tmp_project / "runs" / "bcp" / "Qwen3-Embedding-8B" / "test150" / "gpt-oss-120b" / "x_seed0"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_q1.json").write_text('{"query_id": "q1", "result": [1]}')
+    (run_dir / "run_q3.json").write_text('{"query_id": "q3", "result": [1]}')
+
+    t = auto_pipeline.Target(
+        run_name="x_seed0", dataset="bcp", split="test150",
+        template_path="run_qwen3_test150.SBATCH", declared_shards=[0, 1, 2],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    missing_shards, missing_qids = auto_pipeline.compute_actual_missing(
+        t, retriever="Qwen3-Embedding-8B", agent_model="gpt-oss-120b"
+    )
+    assert set(missing_shards) == {0, 1, 2}
+    assert set(missing_qids) == {"q2", "q4", "q5", "q6"}
