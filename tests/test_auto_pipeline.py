@@ -30,3 +30,43 @@ def test_collect_targets_reads_missing_dicts(monkeypatch):
     test150 = next(t for t in targets if t.run_name == "gpt-oss-120b_seed0")
     assert test150.split == "test150"
     assert test150.declared_shards == [2]
+
+
+def test_preflight_detects_missing_template(tmp_project, monkeypatch):
+    t = auto_pipeline.Target(
+        run_name="x_seed0", dataset="bcp", split="test150",
+        template_path="does_not_exist.SBATCH", declared_shards=[0],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    errors = auto_pipeline.preflight([t], run_sbatch_check=False)
+    assert len(errors) == 1
+    assert "does_not_exist.SBATCH" in errors[0].reason
+
+
+def test_preflight_runs_sbatch_test_only(tmp_project, monkeypatch):
+    template = tmp_project / "mini.SBATCH"
+    template.write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --job-name=test\n"
+        "#SBATCH --output=sbatch_outputs/test.out\n"
+        "#SBATCH --array=0\n"
+        'MODEL_NAME="tongyi"\n'
+        'mode="org"\n'
+        'seed=0\n'
+        'dataset="bcp"\n'
+        "echo ok\n"
+    )
+    t = auto_pipeline.Target(
+        run_name="tongyi_seed0", dataset="bcp", split="test150",
+        template_path=str(template), declared_shards=[0],
+        model="tongyi", mode="org", seed=0, traj_model=None,
+    )
+    calls = []
+    def fake_run(cmd, *a, **kw):
+        calls.append(cmd)
+        import subprocess as sp
+        return sp.CompletedProcess(cmd, 0, stdout="sbatch: Job 123 would be submitted\n", stderr="")
+    monkeypatch.setattr(auto_pipeline.subprocess, "run", fake_run)
+    errors = auto_pipeline.preflight([t], run_sbatch_check=True)
+    assert errors == []
+    assert any("--test-only" in c for c in calls[0])

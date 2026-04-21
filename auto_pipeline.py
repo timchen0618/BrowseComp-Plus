@@ -56,6 +56,12 @@ class TargetState:
 
 
 @dataclass
+class PreflightError:
+    target: Target
+    reason: str
+
+
+@dataclass
 class PipelineState:
     pid: int = 0
     started_at: str = ""
@@ -107,6 +113,72 @@ def collect_targets() -> list[Target]:
                 traj_model=traj_model,
             ))
     return targets
+
+
+def preflight(targets: list[Target], run_sbatch_check: bool = True) -> list[PreflightError]:
+    """Validate SBATCH templates and confirm `sbatch --test-only` would accept them.
+
+    Returns a list of PreflightError (empty = all clear).
+    """
+    import tempfile
+    import submit_missing as sm
+
+    errors: list[PreflightError] = []
+    for t in targets:
+        if not os.path.isfile(t.template_path):
+            errors.append(PreflightError(t, f"template not found: {t.template_path}"))
+            continue
+        try:
+            with open(t.template_path) as f:
+                template = f.read()
+            patched = sm.patch_sbatch(
+                template, t.run_name, t.model, t.mode, t.seed,
+                shards=t.declared_shards if t.declared_shards else [0],
+                dataset=t.dataset, split=t.split, traj_model=t.traj_model,
+            )
+        except Exception as e:
+            errors.append(PreflightError(t, f"patch_sbatch failed: {e}"))
+            continue
+
+        if not run_sbatch_check:
+            continue
+
+        with tempfile.NamedTemporaryFile("w", suffix=".SBATCH", delete=False) as tmp:
+            tmp.write(patched)
+            tmp_path = tmp.name
+        try:
+            result = subprocess.run(
+                ["sbatch", "--test-only", tmp_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                errors.append(PreflightError(
+                    t, f"sbatch --test-only failed: {result.stderr.strip()}"
+                ))
+        except Exception as e:
+            errors.append(PreflightError(t, f"sbatch --test-only raised: {e}"))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return errors
+
+
+def write_preflight_failed(errors: list[PreflightError], path: Path | None = None) -> Path:
+    """Write a human-readable report of preflight failures and return the path."""
+    path = path or (PROJECT_ROOT / "preflight_failed.md")
+    lines = ["# Preflight Failed", ""]
+    for e in errors:
+        lines.extend([
+            f"## {e.target.run_name}",
+            f"- Dataset: {e.target.dataset} | Split: {e.target.split}",
+            f"- Template: `{e.target.template_path}`",
+            f"- Reason: {e.reason}",
+            "",
+        ])
+    path.write_text("\n".join(lines))
+    return path
 
 
 def main() -> int:
