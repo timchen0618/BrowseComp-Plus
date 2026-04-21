@@ -119,14 +119,10 @@ MISSING_TEST150 = {
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":                       [1],  # complete
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":             list(range(3)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1":        list(range(3)),  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":        list(range(3)),  # complete
     # "gpt-oss-120b_budget_seed0":                                                    list(range(3)),
-    # "gpt-oss-120b_budget_seed0":                                                   [0, 1, 2],  # 100 incomplete: shard1=50, shard2=50
-    # "gpt-oss-120b_seed0":                                                           [0, 2],  # 60 incomplete: shard0=10, shard2=50
-    # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":             [2],     # 10 incomplete: shard2=10
     # qwen3.5-4b — budget only
     # "qwen3.5-4b_budget_seed0":                                                       list(range(3)),
-    "qwen3.5-4b-sft_budget_seed0":                                                       list(range(3)),
-    # qwen3.6-35b-a3b — seed0 and budget only
     # "qwen3.6-35b-a3b_seed0":                                                        list(range(3)),
     # "qwen3.6-35b-a3b_budget_seed0":                                                 list(range(3)),
     # "qwen3.6-35b-a3b_seed0":                                                        [2],  # complete
@@ -137,7 +133,6 @@ MISSING_TEST150 = {
     # "tongyi_budget5_seed0":                                                          [2],  # complete
     # "tongyi_traj_ext_tongyi_seed0":                                                  list(range(3)),
     # "tongyi_traj_orig_ext_tongyi_seed0":                                             list(range(3)),
-    # "tongyi_traj_summary_ext_tongyi_seed0":                                          [1],
     # "tongyi_traj_summary_orig_ext_tongyi_seed0":                                     list(range(3)),
     # "tongyi_budget_seed0":                                                           list(range(3)),
     "tongyi_traj_budget_orig_ext_gpt-oss-120b_seed0":                               list(range(3)),  # complete
@@ -146,7 +141,6 @@ MISSING_TEST150 = {
     "tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
 }
-
 # Missing shards for bcp/train680 split (8 shards: 0-7).
 MISSING_TRAIN680 = {
     # gpt-oss-120b — all modes
