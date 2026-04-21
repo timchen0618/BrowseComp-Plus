@@ -261,6 +261,26 @@ def poll_jobs(job_ids: list[int]) -> dict[int, str]:
     return states
 
 
+def detect_stuck_targets(
+    states: list[TargetState], threshold: int,
+) -> list[TargetState]:
+    """Mutate stuck_cycles based on missing-qid comparison; return those at/above threshold."""
+    stuck: list[TargetState] = []
+    for s in states:
+        cur = set(s.missing_qids)
+        prev = set(s.last_missing_qids)
+        if not cur:
+            s.stuck_cycles = 0
+            continue
+        if cur == prev:
+            s.stuck_cycles += 1
+        else:
+            s.stuck_cycles = 0
+        if s.stuck_cycles >= threshold:
+            stuck.append(s)
+    return stuck
+
+
 def write_preflight_failed(errors: list[PreflightError], path: Path | None = None) -> Path:
     """Write a human-readable report of preflight failures and return the path."""
     path = path or (PROJECT_ROOT / "preflight_failed.md")

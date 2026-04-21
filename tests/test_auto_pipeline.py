@@ -142,3 +142,25 @@ def test_poll_jobs_parses_squeue(monkeypatch):
 
 def test_poll_jobs_empty_list():
     assert auto_pipeline.poll_jobs([]) == {}
+
+
+def _mk_target_state(name, missing, last, stuck):
+    t = auto_pipeline.Target(
+        run_name=name, dataset="bcp", split="test150",
+        template_path="x.SBATCH", declared_shards=[0],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    return auto_pipeline.TargetState(
+        target=t, missing_qids=missing, last_missing_qids=last, stuck_cycles=stuck,
+    )
+
+
+def test_detect_stuck_targets_flags_unchanged():
+    states = [
+        _mk_target_state("A", ["q1", "q2"], ["q1", "q2"], 2),
+        _mk_target_state("B", ["q3"], ["q4", "q3"], 1),
+        _mk_target_state("C", [], [], 0),
+    ]
+    stuck = auto_pipeline.detect_stuck_targets(states, threshold=3)
+    assert [s.target.run_name for s in stuck] == ["A"]
+    assert states[1].stuck_cycles == 0
