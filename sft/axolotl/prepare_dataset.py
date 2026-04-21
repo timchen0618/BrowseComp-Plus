@@ -26,6 +26,13 @@ Output line shape (one JSON object per line):
 
 Loss masking happens in Axolotl (`roles_to_train: ["assistant"]`); this
 script only reshapes data.
+
+Train/val split: by default (`--split bcp-train680-test150`) examples are
+assigned using the BrowseComp-Plus fixed split in
+`topics-qrels/bcp/queries_train680.tsv` and `queries_test150.tsv` (see
+`scripts/split_bcp_test150.py`). Each input row needs a `query_id` field or a
+resolvable `source_file` trajectory containing `query_id`. Use `--split random`
+for the previous fractional holdout behavior.
 """
 
 from __future__ import annotations
@@ -34,7 +41,18 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# BrowseComp-Plus fixed split (830 = 680 train + 150 test); see scripts/split_bcp_test150.py.
+DEFAULT_BCP_QUERIES_TRAIN_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_train680.tsv"
+DEFAULT_BCP_QUERIES_TEST_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_test150.tsv"
+
+SPLIT_RANDOM = "random"
+SPLIT_BCP_TRAIN680_TEST150 = "bcp-train680-test150"
+SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +82,40 @@ class _SourceTrajectoryCache:
             return None
         self._cache[source_file] = data
         return data
+
+
+def _load_query_ids_from_topics_tsv(path: Path) -> Set[str]:
+    """First column of each line is query_id (tab-separated from question text)."""
+    qids: Set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            qid, _, _ = line.partition("\t")
+            qid = qid.strip()
+            if qid:
+                qids.add(qid)
+    return qids
+
+
+def _query_id_from_record(
+    record: Dict[str, Any], source_cache: _SourceTrajectoryCache
+) -> Optional[str]:
+    """Prefer JSONL `query_id`; else read from the source trajectory file."""
+    raw = record.get("query_id")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    src = record.get("source_file")
+    if not src:
+        return None
+    traj = source_cache.load(str(src))
+    if traj is None:
+        return None
+    q = traj.get("query_id")
+    if q is None or not str(q).strip():
+        return None
+    return str(q).strip()
 
 
 def _system_user_from_source(traj: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -321,19 +373,48 @@ def main() -> None:
         "--output-dir",
         type=Path,
         default=Path("sft/axolotl/data"),
-        help="Directory to write train.jsonl (and val.jsonl if --val-size>0).",
+        help="Directory to write train.jsonl (and val.jsonl if applicable).",
+    )
+    parser.add_argument(
+        "--split",
+        choices=SPLIT_CHOICES,
+        default=SPLIT_BCP_TRAIN680_TEST150,
+        help=(
+            "How to form train vs val. "
+            f"'{SPLIT_BCP_TRAIN680_TEST150}' uses topics-qrels/bcp queries_train680.tsv "
+            "for train and queries_test150.tsv for val (BrowseComp-Plus fixed split). "
+            f"'{SPLIT_RANDOM}' shuffles with --seed and holds out --val-size fraction."
+        ),
+    )
+    parser.add_argument(
+        "--queries-train-tsv",
+        type=Path,
+        default=DEFAULT_BCP_QUERIES_TRAIN_TSV,
+        help=(
+            f"With --split {SPLIT_BCP_TRAIN680_TEST150}: TSV whose first column lists "
+            "training query_ids (default: repo topics-qrels/bcp/queries_train680.tsv)."
+        ),
+    )
+    parser.add_argument(
+        "--queries-test-tsv",
+        type=Path,
+        default=DEFAULT_BCP_QUERIES_TEST_TSV,
+        help=(
+            f"With --split {SPLIT_BCP_TRAIN680_TEST150}: TSV whose first column lists "
+            "held-out query_ids written to val.jsonl (default: queries_test150.tsv)."
+        ),
     )
     parser.add_argument(
         "--val-size",
         type=float,
         default=0.1,
-        help="Fraction of examples held out for validation.",
+        help=f"With --split {SPLIT_RANDOM}: fraction held out for validation.",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Shuffle seed for the train/val split.",
+        help=f"With --split {SPLIT_RANDOM}: shuffle seed.",
     )
     parser.add_argument(
         "--template",
@@ -356,6 +437,12 @@ def main() -> None:
             f"--trajectory-folder not found or not a dir: {args.trajectory_folder}"
         )
 
+    if args.split == SPLIT_BCP_TRAIN680_TEST150:
+        if not args.queries_train_tsv.is_file():
+            parser.error(f"--queries-train-tsv not found: {args.queries_train_tsv}")
+        if not args.queries_test_tsv.is_file():
+            parser.error(f"--queries-test-tsv not found: {args.queries_test_tsv}")
+
     source_cache = _SourceTrajectoryCache(args.trajectory_folder)
 
     raw_total = 0
@@ -375,7 +462,14 @@ def main() -> None:
             else:
                 dropped_bad_excerpt += 1
             continue
-        kept.append({"messages": messages})
+        row: Dict[str, Any] = {"messages": messages}
+        if args.split == SPLIT_BCP_TRAIN680_TEST150:
+            qid = _query_id_from_record(record, source_cache)
+            if qid is None:
+                dropped_bad_excerpt += 1
+                continue
+            row["_query_id"] = qid
+        kept.append(row)
 
     if not kept:
         raise SystemExit(
@@ -385,20 +479,48 @@ def main() -> None:
             f"dropped_bad_excerpt={dropped_bad_excerpt}"
         )
 
-    rng = random.Random(args.seed)
-    rng.shuffle(kept)
+    train: List[Dict[str, Any]]
+    val: List[Dict[str, Any]]
+    dropped_split = 0
 
-    n_val = int(round(len(kept) * args.val_size)) if args.val_size > 0 else 0
-    val, train = kept[:n_val], kept[n_val:]
+    if args.split == SPLIT_RANDOM:
+        rng = random.Random(args.seed)
+        rng.shuffle(kept)
+        n_val = int(round(len(kept) * args.val_size)) if args.val_size > 0 else 0
+        val, train = kept[:n_val], kept[n_val:]
+    else:
+        train_qids = _load_query_ids_from_topics_tsv(args.queries_train_tsv)
+        test_qids = _load_query_ids_from_topics_tsv(args.queries_test_tsv)
+        train = []
+        val = []
+        for row in kept:
+            qid = row.pop("_query_id")
+            if qid in test_qids:
+                val.append(row)
+            elif qid in train_qids:
+                train.append(row)
+            else:
+                dropped_split += 1
+        if dropped_split:
+            print(
+                f"[warn] --split {SPLIT_BCP_TRAIN680_TEST150}: "
+                f"dropped {dropped_split} examples whose query_id is not in "
+                f"{args.queries_train_tsv.name} or {args.queries_test_tsv.name}"
+            )
 
     train_path = args.output_dir / "train.jsonl"
     _write_jsonl(train_path, train)
     print(f"wrote {len(train):>6} -> {train_path}")
 
+    n_val = len(val)
     if n_val > 0:
         val_path = args.output_dir / "val.jsonl"
         _write_jsonl(val_path, val)
         print(f"wrote {len(val):>6} -> {val_path}")
+
+    extra = ""
+    if args.split == SPLIT_BCP_TRAIN680_TEST150 and dropped_split:
+        extra = f" dropped_split={dropped_split}"
 
     print(
         "summary: "
@@ -406,6 +528,7 @@ def main() -> None:
         f"dropped_schema={dropped_schema} "
         f"dropped_missing_source={dropped_missing_source} "
         f"dropped_bad_excerpt={dropped_bad_excerpt}"
+        f"{extra}"
     )
 
 
@@ -416,4 +539,4 @@ if __name__ == "__main__":
     # --input selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl \
     # --trajectory-folder runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
     # --output-dir sft/axolotl/data \
-    # --val-size 0.1 --seed 42
+    # --template "qwen"

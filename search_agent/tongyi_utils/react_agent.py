@@ -213,7 +213,7 @@ class MultiTurnReactAgent(FnCallAgent):
 
         budget_note = ""
         if self.search_budget is not None:
-            budget_note = f"You have a budget of {self.search_budget} search turns — use them efficiently."
+            budget_note = f"You only have a budget of {self.search_budget} search turns — use them efficiently."
 
         combined_note = "\n\n".join(n for n in [traj_note, budget_note] if n)
 
@@ -233,7 +233,7 @@ class MultiTurnReactAgent(FnCallAgent):
 
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
         num_llm_calls_available = self.search_budget if self.search_budget is not None else MAX_LLM_CALL_PER_RUN
-        round = 0
+        round = 0  # total calls (always increments)
 
         while num_llm_calls_available > 0:
             start_inference_time = time.time()
@@ -267,6 +267,7 @@ class MultiTurnReactAgent(FnCallAgent):
             start_tool_call_time = time.time()
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
+                is_valid_tool_call = False
                 try:
                     tool_call = json5.loads(tool_call)
                     tool_name = tool_call.get('name', '')
@@ -277,6 +278,7 @@ class MultiTurnReactAgent(FnCallAgent):
                     result, docids = self.custom_call_tool(tool_name, tool_args)
 
                     if docids is not None:
+                        is_valid_tool_call = True
                         tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
                         if isinstance(tool_args, dict):
                             if len(tool_args) > 0:
@@ -296,11 +298,20 @@ class MultiTurnReactAgent(FnCallAgent):
 
                 except:
                     tool_call_counts_all['invalid_json'] = tool_call_counts_all.get('invalid_json', 0) + 1
-                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field. The "arguments" field should only be a single string. It should NOT be a list.'
+                    result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
+
+                # Don't charge the search budget for invalid tool calls (wrong tool name, bad JSON, etc.)
+                if self.search_budget is not None and not is_valid_tool_call:
+                    num_llm_calls_available += 1
+
                 result = "<tool_response>\n" + result + "\n</tool_response>"
                 messages.append({"role": "user", "content": result})
 
             total_tool_call_time += (time.time() - start_tool_call_time)
+
+            # Hard stop: total calls >= 3x budget regardless of valid-call count
+            if self.search_budget is not None and round >= 3 * self.search_budget:
+                break
 
             start_inference_time = time.time()
             if '<answer>' in content and '</answer>' in content:

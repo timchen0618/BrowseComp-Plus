@@ -160,12 +160,21 @@ def run_conversation_with_tools(
     tool_handler: SearchToolHandler,
     max_iterations: int = 100,
     verbose: bool = False,
+    budget_mode: bool = False,
 ):
     tool_usage: dict[str, int] = {}
     messages = initial_request["input"]
-    iteration = 1
+    iteration = 1      # total calls (always increments)
+    budget_calls = 1   # valid-call counter used only in budget_mode
 
-    while iteration <= max_iterations:
+    while True:
+        if budget_mode:
+            if budget_calls > max_iterations or iteration > 3 * max_iterations:
+                break
+        else:
+            if iteration > max_iterations:
+                break
+
         try:
             request = initial_request.copy()
             request["input"] = messages
@@ -186,6 +195,10 @@ def run_conversation_with_tools(
             messages.pop()
             continue
 
+        if not response_dict["output"]:
+            iteration += 1
+            continue
+
         function_calls = [
             item for item in response_dict["output"] if item["type"] == "function_call"
         ]
@@ -198,12 +211,14 @@ def run_conversation_with_tools(
             return messages, tool_usage, "completed"
 
         new_messages = messages.copy()
+        has_valid_tool_call = False
 
         for tool_call in function_calls:
             try:
                 arguments = json.loads(tool_call["arguments"])
                 result = tool_handler.execute_tool(tool_call["name"], arguments)
                 tool_usage[tool_call["name"]] = tool_usage.get(tool_call["name"], 0) + 1
+                has_valid_tool_call = True
                 new_messages.append(
                     {
                         "type": "function_call_output",
@@ -222,6 +237,8 @@ def run_conversation_with_tools(
 
         messages = new_messages
         iteration += 1
+        if budget_mode and has_valid_tool_call:
+            budget_calls += 1
 
     return messages, tool_usage, "incomplete"
 
@@ -526,6 +543,7 @@ def _process_tsv_dataset(
                 tool_handler,
                 effective_max_iter,
                 args.verbose,
+                budget_mode=(args.search_budget is not None),
             )
 
             if status == "completed":

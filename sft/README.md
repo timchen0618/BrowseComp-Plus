@@ -2,8 +2,10 @@
 
 Train a base LLM (default: `Qwen/Qwen3-30B-A3B`) to produce good
 search-tool calls using hand-selected good excerpts mined from prior agent
-runs. Training framework is
-[Axolotl](https://github.com/axolotl-ai-cloud/axolotl).
+runs. The default training stack is
+[Axolotl](https://github.com/axolotl-ai-cloud/axolotl); an alternative
+[`sft/hf_trainer/`](hf_trainer/) path uses Hugging Face `Trainer` + PEFT on
+the same `{"messages": ...}` JSONL produced by `prepare_dataset.py`.
 
 ---
 
@@ -13,10 +15,14 @@ runs. Training framework is
 sft/
 ├── README.md                             # (this file)
 ├── axolotl/
-│   ├── prepare_dataset.py                # selected-tool-calls -> Axolotl messages JSONL
+│   ├── prepare_dataset.py                # selected-tool-calls -> messages JSONL (shared format)
 │   ├── qwen3_30b_a3b_search_sft.yaml     # Axolotl training config
-│   ├── run_axolotl.sh                    # end-to-end launcher
+│   ├── run_axolotl.sh                    # end-to-end Axolotl launcher
 │   └── data/                             # generated train.jsonl / val.jsonl
+├── hf_trainer/
+│   ├── train_sft.py                      # HF Trainer + LoRA (assistant-only loss via tokenizer masks)
+│   ├── run_hf_trainer.sh                 # prepare_dataset -> accelerate launch train_sft.py
+│   └── data/                             # default output dir for JSONL when using the HF wrapper
 └── checkpoints/                          # saved models (one subdir per run)
 ```
 
@@ -75,6 +81,39 @@ accelerate launch -m axolotl.cli.train sft/axolotl/qwen3_30b_a3b_search_sft.yaml
 Wrapper env vars: `INPUT`, `TRAJECTORY_FOLDER` (required); `DATA_DIR`,
 `CONFIG`, `VAL_SIZE`, `SEED` (optional).
 
+### HF Trainer (optional)
+
+Same JSONL schema as Axolotl (`prepare_dataset.py` → one `messages` list per
+line). Tokenization uses `tokenizer.apply_chat_template` with assistant token
+masks so only assistant spans contribute to loss (analogous to Axolotl
+`roles_to_train: ["assistant"]`). There is no Axolotl `preprocess` cache;
+`datasets` maps examples on load.
+
+One-shot:
+
+```bash
+INPUT=selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages_fixed.repaired.jsonl \
+TRAJECTORY_FOLDER=runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
+    bash sft/hf_trainer/run_hf_trainer.sh
+```
+
+Or reuse existing JSONL and train only:
+
+```bash
+accelerate launch sft/hf_trainer/train_sft.py \
+    --train_file sft/axolotl/data_qwen/train.jsonl \
+    --eval_file sft/axolotl/data_qwen/val.jsonl
+```
+
+Requires `torch`, `transformers`, `datasets`, `accelerate`, and `peft`
+(installed in your training environment). For multi-GPU FSDP, pass
+`--fsdp full_shard,auto_wrap` (and matching `--fsdp_transformer_layer_cls_to_wrap`
+for your model) to match the Axolotl YAML; see `train_sft.py --help`.
+
+Wrapper env vars: `INPUT`, `TRAJECTORY_FOLDER` (required); `DATA_DIR`
+(default `sft/hf_trainer/data`), `VAL_SIZE`, `SEED`, `TEMPLATE` (optional).
+Extra CLI args go to `train_sft.py` (e.g. `bash sft/hf_trainer/run_hf_trainer.sh -- --output_dir ...`).
+
 ---
 
 ## Input data format
@@ -114,9 +153,9 @@ the original run JSON.
 Source trajectories are cached after first load, so repeated `source_file`
 lookups are free even on large input files.
 
-### Output shape (what Axolotl sees)
+### Output shape (what Axolotl and HF Trainer consume)
 
-One JSON object per line under `sft/axolotl/data/`:
+One JSON object per line (e.g. under `sft/axolotl/data/` or `sft/hf_trainer/data/`):
 
 ```json
 {"messages": [
@@ -206,7 +245,11 @@ Env vars worth setting in the SBATCH preamble:
 
 - `sft/axolotl/data/train.jsonl`, `val.jsonl` — regenerable from the
   input JSONL; safe to delete.
+- `sft/hf_trainer/data/train.jsonl`, `val.jsonl` — same format when using
+  `run_hf_trainer.sh` defaults; safe to delete.
 - `sft/axolotl/prepared/` — Axolotl's tokenized dataset cache. Delete
   if you change `chat_template`, `sequence_len`, or dataset contents.
-- `sft/checkpoints/axolotl-qwen3-30b-a3b/` — LoRA adapter, tokenizer,
+- `sft/checkpoints/axolotl-qwen3-30b-a3b/` — Axolotl LoRA adapter, tokenizer,
   trainer state.
+- `sft/checkpoints/hf-trainer-qwen3-30b-a3b/` — default HF Trainer output
+  (override with `--output_dir`).

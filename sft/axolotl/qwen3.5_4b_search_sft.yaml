@@ -1,4 +1,4 @@
-# Axolotl SFT config: train Qwen3-30B-A3B on budget-constrained
+# Axolotl SFT config: train Qwen3.5-4B on budget-constrained
 # search tool-call excerpts.
 #
 # Usage:
@@ -6,10 +6,10 @@
 #       --input selected_tool_calls/<file>.jsonl \
 #       --trajectory-folder runs/bcp/.../<seed> \
 #       --output-dir sft/axolotl/data
-#   axolotl preprocess sft/axolotl/qwen3_30b_a3b_search_sft.yaml
-#   accelerate launch -m axolotl.cli.train sft/axolotl/qwen3_30b_a3b_search_sft.yaml
+#   axolotl preprocess sft/axolotl/qwen3.5_4b_search_sft.yaml
+#   accelerate launch -m axolotl.cli.train sft/axolotl/qwen3.5_4b_search_sft.yaml
 
-base_model: Qwen/Qwen3-30B-A3B
+base_model: Qwen/Qwen3.5-4B
 model_type: AutoModelForCausalLM
 tokenizer_type: AutoTokenizer
 trust_remote_code: true
@@ -19,7 +19,7 @@ trust_remote_code: true
 chat_template: qwen3
 
 datasets:
-  - path: sft/axolotl/data_qwen/train.jsonl
+  - path: sft/axolotl/data_qwen_correct_split/train.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -32,7 +32,7 @@ datasets:
     train_on_eos: turn
 
 test_datasets:
-  - path: sft/axolotl/data_qwen/val.jsonl
+  - path: sft/axolotl/data_qwen_correct_split/val.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -42,13 +42,13 @@ test_datasets:
     train_on_eos: turn
     split: train
 
-dataset_prepared_path: sft/axolotl/prepared
-output_dir: sft/checkpoints/axolotl-qwen3-30b-a3b
+dataset_prepared_path: sft/axolotl/prepared_correct_split
+output_dir: sft/checkpoints/axolotl-qwen3-4b-search-correct-split
 
-sequence_len: 4096
+sequence_len: 32768
 # Shorter eval sequences reduce VRAM during the first eval (Axolotl sets
 # eval_on_start when eval_steps is set). Training still uses sequence_len.
-eval_sequence_len: 4096
+eval_sequence_len: 32768
 # Packing concatenates unrelated trajectories into one sequence; that
 # leaks supervision across tool-call boundaries. Keep it off.
 sample_packing: false
@@ -64,7 +64,7 @@ lora_dropout: 0.05
 lora_target_linear: true
 
 # ----- Optimizer / schedule -----
-num_epochs: 3
+num_epochs: 5
 micro_batch_size: 1
 gradient_accumulation_steps: 16
 learning_rate: 2.0e-5
@@ -75,15 +75,17 @@ optimizer: adamw_torch_fused
 
 bf16: true
 tf32: true
-# With FSDP full shard, use activation_checkpointing in fsdp_config only (HF
-# TrainingArguments.gradient_checkpointing conflicts with FSDP activation
-# checkpointing). See https://github.com/huggingface/transformers/issues/30404
-gradient_checkpointing: false
+# Use HF gradient checkpointing + FSDP, not fsdp_config.activation_checkpointing:
+# PyTorch 2.11 + FSDP1 AC can raise CheckpointError (fp32 saved vs bf16 recomputed).
+# Do not enable both — see https://github.com/huggingface/transformers/issues/30404
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
 flash_attention: true
 
 logging_steps: 10
-save_steps: 100
-eval_steps: 100
+save_steps: 25
+eval_steps: 25
 save_total_limit: 3
 
 # ----- Multi-GPU FSDP -----
@@ -91,14 +93,14 @@ fsdp:
   - full_shard
   - auto_wrap
 fsdp_config:
-  activation_checkpointing: true
-  fsdp_transformer_layer_cls_to_wrap: Qwen3MoeDecoderLayer
+  activation_checkpointing: false
+  fsdp_transformer_layer_cls_to_wrap: Qwen3_5DecoderLayer
   fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_offload_params: true
   # LoRA + FSDP requires use_orig_params=false.
   fsdp_use_orig_params: false
 
 wandb_project: sft-trajectory
-wandb_name: axolotl-qwen3-30b-a3b
+wandb_name: axolotl-qwen3-4b-search-correct-split
 
 seed: 42

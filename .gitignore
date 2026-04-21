@@ -34,3 +34,5 @@ retrospective_plans
 deletable_runs
 sft/axolotl/data/
 .worktrees/
+sft/axolotl/data_*/
+sft/axolotl/prepared*/
