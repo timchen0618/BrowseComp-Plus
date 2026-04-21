@@ -245,6 +245,8 @@ See `sft/axolotl/README.md` for full documentation.
 | `summarize_trajectories.py` | Summarize agent trajectories using vLLM; outputs JSONL with resumable progress |
 | `shard_monitor.py` | Autonomous shard completeness checker with SLURM resubmission generation |
 | `monitor_and_eval.sh` | Polling loop that monitors run completion and auto-submits eval SBATCH |
+| `auto_pipeline.py` | Automated submit → monitor → resubmit → eval → summary pipeline over submit_missing.py targets |
+| `auto_pipeline.sh` | nohup-friendly wrapper for auto_pipeline.py |
 
 ---
 
