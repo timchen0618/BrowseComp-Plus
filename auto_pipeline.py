@@ -281,6 +281,26 @@ def detect_stuck_targets(
     return stuck
 
 
+def save_state(state: PipelineState, path: Path | None = None) -> None:
+    """Serialize PipelineState to JSON."""
+    p = path or STATE_PATH
+    p.write_text(json.dumps(asdict(state), indent=2))
+
+
+def load_state(path: Path | None = None) -> PipelineState:
+    """Load PipelineState from JSON, reconstructing nested dataclasses."""
+    p = path or STATE_PATH
+    data = json.loads(p.read_text())
+    targets: list[TargetState] = []
+    for ts in data.get("targets", []):
+        t = Target(**ts["target"])
+        ts_copy = dict(ts)
+        ts_copy["target"] = t
+        targets.append(TargetState(**ts_copy))
+    data["targets"] = targets
+    return PipelineState(**data)
+
+
 ERROR_PATTERNS = [
     re.compile(r"CUDA out of memory", re.I),
     re.compile(r"torch\.cuda\.OutOfMemoryError", re.I),

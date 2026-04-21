@@ -177,3 +177,28 @@ def test_diagnose_slurm_out_finds_oom(tmp_project, sample_slurm_out):
     )
     assert "CUDA out of memory" in text
     assert "slurm-9999.out" in text
+
+
+def test_save_and_load_state_roundtrip(tmp_project):
+    t = auto_pipeline.Target(
+        run_name="x_seed0", dataset="bcp", split="test150",
+        template_path="x.SBATCH", declared_shards=[0, 1],
+        model="gpt-oss-120b", mode="org", seed=0, traj_model=None,
+    )
+    ts = auto_pipeline.TargetState(
+        target=t, missing_qids=["q1"], last_missing_qids=[], stuck_cycles=0,
+        submitted_job_ids=[42], status="running",
+    )
+    state = auto_pipeline.PipelineState(
+        pid=123, started_at="2026-04-20T10:00:00", phase="monitoring",
+        interval_seconds=600, stuck_threshold=3, targets=[ts],
+    )
+    path = tmp_project / "auto_pipeline_state.json"
+    auto_pipeline.save_state(state, path)
+    loaded = auto_pipeline.load_state(path)
+    assert loaded.pid == 123
+    assert loaded.phase == "monitoring"
+    assert len(loaded.targets) == 1
+    assert loaded.targets[0].target.run_name == "x_seed0"
+    assert loaded.targets[0].missing_qids == ["q1"]
+    assert loaded.targets[0].submitted_job_ids == [42]
