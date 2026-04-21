@@ -88,3 +88,41 @@ def test_compute_actual_missing_reads_run_dir(tmp_project):
     )
     assert set(missing_shards) == {0, 1, 2}
     assert set(missing_qids) == {"q2", "q4", "q5", "q6"}
+
+
+def _mini_sbatch_text():
+    return (
+        "#!/bin/bash\n"
+        "#SBATCH --job-name=x\n"
+        "#SBATCH --output=sbatch_outputs/x.out\n"
+        "#SBATCH --array=0\n"
+        'MODEL_NAME="tongyi"\nmode="org"\nseed=0\ndataset="bcp"\necho ok\n'
+    )
+
+
+def test_submit_target_dry_run_returns_none(tmp_project, monkeypatch):
+    template = tmp_project / "mini.SBATCH"
+    template.write_text(_mini_sbatch_text())
+    t = auto_pipeline.Target(
+        run_name="tongyi_seed0", dataset="bcp", split="test150",
+        template_path=str(template), declared_shards=[0, 1],
+        model="tongyi", mode="org", seed=0, traj_model=None,
+    )
+    jid = auto_pipeline.submit_target(t, shards=[0, 1], submit=False)
+    assert jid is None
+
+
+def test_submit_target_submits_and_parses_jobid(tmp_project, monkeypatch):
+    template = tmp_project / "mini.SBATCH"
+    template.write_text(_mini_sbatch_text())
+    t = auto_pipeline.Target(
+        run_name="tongyi_seed0", dataset="bcp", split="test150",
+        template_path=str(template), declared_shards=[0, 1],
+        model="tongyi", mode="org", seed=0, traj_model=None,
+    )
+    def fake_run(cmd, *a, **kw):
+        import subprocess as sp
+        return sp.CompletedProcess(cmd, 0, stdout="Submitted batch job 987654\n", stderr="")
+    monkeypatch.setattr(auto_pipeline.subprocess, "run", fake_run)
+    jid = auto_pipeline.submit_target(t, shards=[0, 1], submit=True)
+    assert jid == 987654

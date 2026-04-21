@@ -196,6 +196,43 @@ def preflight(targets: list[Target], run_sbatch_check: bool = True) -> list[Pref
     return errors
 
 
+def submit_target(target: Target, shards: list[int], submit: bool = False) -> int | None:
+    """Render target's SBATCH for the given shards and submit. Returns job_id or None."""
+    import submit_missing as sm
+    import tempfile
+
+    with open(target.template_path) as f:
+        template = f.read()
+    content = sm.patch_sbatch(
+        template, target.run_name, target.model, target.mode, target.seed,
+        shards=shards, dataset=target.dataset, split=target.split,
+        traj_model=target.traj_model,
+    )
+    if not submit:
+        log.info("[dry-run] would submit %s shards=%s", target.run_name, shards)
+        return None
+    with tempfile.NamedTemporaryFile("w", suffix=".SBATCH", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(["sbatch", tmp_path], capture_output=True, text=True)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    if result.returncode != 0:
+        log.error("sbatch failed for %s: %s", target.run_name, result.stderr.strip())
+        return None
+    m = re.search(r"Submitted batch job (\d+)", result.stdout)
+    if not m:
+        log.error("could not parse job_id from: %s", result.stdout.strip())
+        return None
+    jid = int(m.group(1))
+    log.info("submitted %s shards=%s job_id=%d", target.run_name, shards, jid)
+    return jid
+
+
 def write_preflight_failed(errors: list[PreflightError], path: Path | None = None) -> Path:
     """Write a human-readable report of preflight failures and return the path."""
     path = path or (PROJECT_ROOT / "preflight_failed.md")
