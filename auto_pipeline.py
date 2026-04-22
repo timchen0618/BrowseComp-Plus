@@ -29,6 +29,9 @@ LOG_PATH = PROJECT_ROOT / "auto_pipeline.log"
 
 log = logging.getLogger("auto_pipeline")
 
+# Set to False in dry-run mode so state writes are no-ops (dry-run must be read-only).
+_SAVE_STATE_ENABLED = True
+
 
 @dataclass
 class Target:
@@ -468,7 +471,7 @@ def build_eval_sbatch(
         gt = GROUND_TRUTH_BY_SPLIT.get(t.split, "data/browsecomp_plus_decrypted.jsonl")
         lines.append(EVAL_LINE_TEMPLATE.format(
             split=t.split, agent_model=t.model,
-            run_name=t.run_name, ground_truth=gt,
+            run_name=_resolve_run_subdir(t), ground_truth=gt,
         ))
         lines.append("")
     out_path.write_text("\n".join(lines))
@@ -567,7 +570,9 @@ def write_summary(
 
 
 def save_state(state: PipelineState, path: Path | None = None) -> None:
-    """Serialize PipelineState to JSON."""
+    """Serialize PipelineState to JSON. No-op in dry-run mode."""
+    if not _SAVE_STATE_ENABLED:
+        return
     p = path or STATE_PATH
     p.write_text(json.dumps(asdict(state), indent=2))
 
@@ -874,6 +879,9 @@ def main() -> int:
     parser.add_argument("--skip-eval", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+
+    global _SAVE_STATE_ENABLED
+    _SAVE_STATE_ENABLED = args.submit
 
     _setup_logging()
     log.info("auto_pipeline.py starting (submit=%s, interval=%ds)",
