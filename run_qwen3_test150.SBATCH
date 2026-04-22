@@ -50,7 +50,7 @@ elif [ "$MODEL_NAME" == "qwen3.5-4b" ]; then
     VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft=sft/checkpoints/axolotl-qwen3-4b-search-correct-split/checkpoint-50"
+    lora_modules="qwen3.5-4b-sft=sft/checkpoints/axolotl-qwen3-4b-search-correct-split/checkpoint-100"
     PORT_STR=""
     VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
