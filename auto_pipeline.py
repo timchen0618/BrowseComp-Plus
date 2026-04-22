@@ -68,8 +68,8 @@ class PipelineState:
     last_check_at: str = ""
     cycle_count: int = 0
     phase: str = "init"         # init | preflight | submitting | monitoring | stuck | eval | done
-    interval_seconds: int = 7200
-    stuck_threshold: int = 3
+    interval_seconds: int = 14400
+    stuck_threshold: int = 6
     targets: list[TargetState] = field(default_factory=list)
 
 
@@ -868,8 +868,10 @@ def run_pipeline(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submit", action="store_true", help="Actually submit (default: dry-run)")
-    parser.add_argument("--interval-seconds", type=int, default=7200)
-    parser.add_argument("--stuck-threshold", type=int, default=3)
+    parser.add_argument("--interval-seconds", type=int, default=14400,
+                        help="Seconds between completion checks (default: 14400 = 4h)")
+    parser.add_argument("--stuck-threshold", type=int, default=6,
+                        help="Halt after this many consecutive no-progress checks (default: 6)")
     parser.add_argument("--skip-preflight", action="store_true")
     parser.add_argument("--skip-eval", action="store_true")
     parser.add_argument("--resume", action="store_true")
