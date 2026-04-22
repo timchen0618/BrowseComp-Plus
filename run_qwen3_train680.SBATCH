@@ -94,6 +94,7 @@ OUT_BASE="runs/${dataset}/${RETRIEVER}/train680/${MODEL_NAME}"
 base_mode="${mode%_reinject_every_5}"
 [ "$base_mode" != "$mode" ] && reinject_args="--plan-reinject-every 5" || reinject_args=""
 
+RANDOM_FILE_SUFFIX=""
 # Strip trigger modifier
 if [[ "$base_mode" == *_traj_ext ]]; then
     inner_mode="${base_mode%_traj_ext}"
@@ -119,6 +120,10 @@ elif [[ "$base_mode" == "traj_summary_orig_ext" ]]; then
 elif [[ "$base_mode" == "traj_summary_orig_ext_selected_tools" ]]; then
     inner_mode="${base_mode}"
     trigger="traj_summary_orig_ext_selected_tools"
+elif [[ "$base_mode" == traj_summary_orig_ext_selected_tools_random_seed* ]]; then
+    inner_mode="${base_mode}"
+    trigger="traj_summary_orig_ext_selected_tools"
+    RANDOM_FILE_SUFFIX="${base_mode#traj_summary_orig_ext_selected_tools}"
 elif [[ "$base_mode" == *_start_ext ]]; then
     inner_mode="${base_mode%_start_ext}"
     trigger="start_ext"
@@ -160,7 +165,7 @@ case "$inner_mode" in
         ;;
     traj_summary_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train680/selected_tool_calls_train680_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train680/gpt-oss-120b/seed${seed}/selected_tool_calls_train680_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_ext)
         output_dir="${OUT_BASE}/traj_summary_ext_${TRAJ_MODEL}_seed${seed}"
@@ -172,7 +177,11 @@ case "$inner_mode" in
         ;;
     traj_summary_orig_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train680/selected_tool_calls_gpt-oss-120b_use_original_messages_train680_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train680/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages_train680_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        ;;
+    traj_summary_orig_ext_selected_tools_random_seed*)
+        output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools${RANDOM_FILE_SUFFIX}_${TRAJ_MODEL}_seed${seed}"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train680/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages${RANDOM_FILE_SUFFIX}_train680_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     planning_v*)
         if [ "$trigger" = "start_ext" ]; then
