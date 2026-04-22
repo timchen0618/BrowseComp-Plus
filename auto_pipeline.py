@@ -26,11 +26,34 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATE_PATH = PROJECT_ROOT / "auto_pipeline_state.json"
 LOG_PATH = PROJECT_ROOT / "auto_pipeline.log"
+HEARTBEAT_PATH = PROJECT_ROOT / "auto_pipeline_heartbeat"
 
 log = logging.getLogger("auto_pipeline")
 
 # Set to False in dry-run mode so state writes are no-ops (dry-run must be read-only).
 _SAVE_STATE_ENABLED = True
+
+
+def _write_heartbeat() -> None:
+    """Touch the heartbeat file so the SLURM backup job knows we're alive."""
+    if not _SAVE_STATE_ENABLED:
+        return
+    try:
+        HEARTBEAT_PATH.write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+def _sleep_with_heartbeat(seconds: int) -> None:
+    """Sleep for `seconds` total, refreshing the heartbeat every 5 minutes."""
+    _write_heartbeat()
+    elapsed = 0
+    chunk = 300  # 5-minute heartbeat interval
+    while elapsed < seconds:
+        sleep_time = min(chunk, seconds - elapsed)
+        time.sleep(sleep_time)
+        elapsed += sleep_time
+        _write_heartbeat()
 
 
 @dataclass
@@ -158,7 +181,7 @@ def _resolve_run_subdir(target: Target) -> str:
         "traj_summary_orig_ext",
         "traj_summary_ext_selected_tools",
         "traj_summary_orig_ext_selected_tools",
-    }:
+    } or mode.startswith("traj_summary_orig_ext_selected_tools_random_seed"):
         return f"{mode}_{traj}_seed{seed}"
     # planning_v*_start_ext[_reinject_every_5] — plan_model gets injected
     m = re.match(r"^(planning_v[^_]+)_start_ext(_reinject_every_\d+)?$", mode)
@@ -733,6 +756,7 @@ def _delete_empty_runs_for(target: Target, retriever: str = "Qwen3-Embedding-8B"
 
 def run_pipeline(args) -> int:
     """Orchestrate preflight → submit → monitor → eval → summary."""
+    _write_heartbeat()
     if args.resume and STATE_PATH.is_file():
         state = load_state()
         log.info("resumed state at cycle %d, phase=%s", state.cycle_count, state.phase)
@@ -789,7 +813,7 @@ def run_pipeline(args) -> int:
             log.info("cycle %d: %d jobs still active, sleeping %ds",
                      state.cycle_count, len(still_running), state.interval_seconds)
             save_state(state)
-            time.sleep(state.interval_seconds)
+            _sleep_with_heartbeat(state.interval_seconds)
             continue
 
         for ts in state.targets:
@@ -831,7 +855,7 @@ def run_pipeline(args) -> int:
             break
         if not any_submitted and not args.submit:
             break
-        time.sleep(state.interval_seconds)
+        _sleep_with_heartbeat(state.interval_seconds)
 
     if args.skip_eval:
         state.phase = "done"
@@ -856,7 +880,7 @@ def run_pipeline(args) -> int:
     eval_jid = int(m.group(1)) if m else None
     if eval_jid is not None:
         while poll_jobs([eval_jid]).get(eval_jid, "DONE") != "DONE":
-            time.sleep(state.interval_seconds)
+            _sleep_with_heartbeat(state.interval_seconds)
 
     eval_out_path = PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out"
     if eval_out_path.is_file() and "Processed" not in eval_out_path.read_text():
@@ -891,6 +915,9 @@ def main() -> int:
     except KeyboardInterrupt:
         log.warning("interrupted")
         return 130
+    except Exception:
+        log.exception("unhandled exception — pipeline exiting")
+        return 1
 
 
 if __name__ == "__main__":
