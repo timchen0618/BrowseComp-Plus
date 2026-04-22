@@ -124,7 +124,7 @@ MISSING_TEST150 = {
     # qwen3.5-4b — budget only
     # "qwen3.5-4b_budget_seed0":                                                       list(range(3)),
     # "qwen3.6-35b-a3b_seed0":                                                        list(range(3)),
-    # "qwen3.6-35b-a3b_budget_seed0":                                                 list(range(3)),
+    # "qwen3.6-35b-a3b_budget_seed0":                                                   list(range(3)),
     # "qwen3.6-35b-a3b_seed0":                                                        [2],  # complete
     # "qwen3.6-35b-a3b_budget_seed1":                                                [0],  # complete
     # tongyi — all modes
@@ -135,11 +135,14 @@ MISSING_TEST150 = {
     # "tongyi_traj_orig_ext_tongyi_seed0":                                             list(range(3)),
     # "tongyi_traj_summary_orig_ext_tongyi_seed0":                                     list(range(3)),
     # "tongyi_budget_seed0":                                                           list(range(3)),
-    "tongyi_traj_budget_orig_ext_gpt-oss-120b_seed0":                               list(range(3)),  # complete
-    "tongyi_traj_budget_orig_ext_tongyi_seed0":                               list(range(3)),  # complete
-    "tongyi_traj_budget_orig_ext_qwen3.6-35b-a3b_seed0":                               list(range(3)),  # complete
-    "tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
-    "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
+    # "tongyi_traj_budget_orig_ext_gpt-oss-120b_seed0":                               [1,2],  # complete
+    # "tongyi_traj_budget_orig_ext_tongyi_seed0":                               [1],  # complete
+    # Blocked on qwen3.6-35b-a3b_budget_seed0 baseline regen — re-enable once baseline has original_messages
+    # "tongyi_traj_budget_orig_ext_qwen3.6-35b-a3b_seed0":                               [0, 1, 2],
+    "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":                            [1],
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                              [1, 2],
+    #"tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
+    # "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
 }
 # Missing shards for bcp/train680 split (8 shards: 0-7).
 MISSING_TRAIN680 = {

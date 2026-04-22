@@ -36,7 +36,20 @@ def parse_messages_to_result_array(messages: list) -> list:
     result_array = []
 
     for i, msg in enumerate(messages):
-        if msg.get("role") != "assistant":
+        role = msg.get("role")
+
+        if role == "user":
+            content = msg.get("content", "")
+            if "<tool_response>" not in content and content.strip():
+                result_array.append({
+                    "type": "user",
+                    "tool_name": None,
+                    "arguments": None,
+                    "output": content,
+                })
+            continue
+
+        if role != "assistant":
             continue
 
         content = msg.get("content", "")
