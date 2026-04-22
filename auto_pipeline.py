@@ -220,6 +220,68 @@ def compute_actual_missing(
     return (missing_shards, missing_qids)
 
 
+# Modes whose SBATCH trigger is traj_orig_ext / traj_summary_orig_ext —
+# react_agent.py requires original_messages in each upstream trajectory JSON.
+_ORIG_MESSAGES_MODES = {
+    "traj_orig_ext",
+    "traj_budget_orig_ext",
+    "traj_summary_orig_ext",
+}
+
+
+def _upstream_traj_dir(target: Target, retriever: str = "Qwen3-Embedding-8B") -> Path | None:
+    """Return the upstream trajectory dir a traj_*_orig_ext target reads from."""
+    if target.mode not in _ORIG_MESSAGES_MODES or not target.traj_model:
+        return None
+    if target.mode == "traj_budget_orig_ext":
+        # Read SEARCH_BUDGET from the template (default 5).
+        search_budget = "5"
+        try:
+            tpl = Path(target.template_path).read_text()
+            m = re.search(r"^SEARCH_BUDGET=(\S+)", tpl, re.MULTILINE)
+            if m:
+                search_budget = m.group(1).strip('"')
+        except OSError:
+            pass
+        subdir = f"budget{search_budget}_seed{target.seed}"
+    else:
+        subdir = f"seed{target.seed}"
+    return (
+        PROJECT_ROOT / "runs" / target.dataset / retriever
+        / target.split / target.traj_model / subdir
+    )
+
+
+def _check_upstream_original_messages(
+    target: Target, sample_size: int = 5,
+) -> str | None:
+    """Return a preflight error string if the upstream traj dir lacks original_messages."""
+    up = _upstream_traj_dir(target)
+    if up is None:
+        return None
+    if not up.is_dir():
+        return f"upstream trajectory dir missing: {up}"
+    json_files = sorted(up.glob("run_*.json"))
+    if not json_files:
+        return f"upstream trajectory dir has no run_*.json files: {up}"
+    # Sample-check: spread across the list (not just the first few).
+    step = max(1, len(json_files) // sample_size)
+    sampled = json_files[::step][:sample_size]
+    for p in sampled:
+        try:
+            with p.open() as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            return f"cannot read {p}: {e}"
+        if not data.get("original_messages"):
+            return (
+                f"{p.name} in {up} lacks 'original_messages' — "
+                f"regenerate upstream with --save-raw-messages before running "
+                f"mode={target.mode}"
+            )
+    return None
+
+
 def preflight(targets: list[Target], run_sbatch_check: bool = True) -> list[PreflightError]:
     """Validate SBATCH templates and confirm `sbatch --test-only` would accept them.
 
@@ -243,6 +305,11 @@ def preflight(targets: list[Target], run_sbatch_check: bool = True) -> list[Pref
             )
         except Exception as e:
             errors.append(PreflightError(t, f"patch_sbatch failed: {e}"))
+            continue
+
+        orig_err = _check_upstream_original_messages(t)
+        if orig_err:
+            errors.append(PreflightError(t, orig_err))
             continue
 
         if not run_sbatch_check:
