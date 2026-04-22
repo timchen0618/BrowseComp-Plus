@@ -7,6 +7,10 @@ Reads run_qwen3_planning.SBATCH as a template and patches
 Usage:
     python submit_missing.py          # dry-run: prints sbatch commands
     python submit_missing.py --submit # actually submits
+
+Run names for ``traj_summary_orig_ext_selected_tools_random_seed<N>`` (random k-tool JSONL) use
+``..._traj_summary_orig_ext_selected_tools_random_seed{RS}_{traj_model}_seed{S}``; see MISSING*
+comments and ``parse_run_name``.
 """
 
 import argparse
@@ -23,7 +27,12 @@ TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
-    # "tongyi_seed3":                                                                  list(range(10)),
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    "tongyi_seed4":                                                                  list(range(10)),
+    "tongyi_seed5":                                                                  list(range(10)),
+    "tongyi_seed6":                                                                  list(range(10)),
+    "tongyi_seed7":                                                                  list(range(10)),
+    "tongyi_seed8":                                                                  list(range(10)),
     # "gpt-oss-120b_planning_retrospective_seed0":                                     list(range(10)),
     # "gpt-oss-120b_planning_retrospective_reinject_every_5_seed0":                     list(range(10)),
     # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_seed0":                     list(range(10)),
@@ -35,13 +44,15 @@ MISSING = {
     # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                       list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
-    # "gpt-oss-120b_seed7":      list(range(10)),
+    "gpt-oss-120b_seed8":      list(range(10)),
+    "gpt-oss-120b_seed9":      list(range(10)),
+    "gpt-oss-120b_seed10":      list(range(10)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],
     # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             [3,5,7],
-    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],  # complete
 }
 
 # Missing runs for first50 split (no shards — each entry is a full re-run).
@@ -101,14 +112,14 @@ MISSING_MUSIQUE_FIRST50 = {
 
 # Missing shards for bcp/test150 split (3 shards: 0-2).
 MISSING_TEST150 = {
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(3)),
     # gpt-oss-120b — all modes
     # "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":                               list(range(3)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_tongyi_seed0":                               list(range(3)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.6-35b-a3b_seed0":                               list(range(3)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
-    # "gpt-oss-120b_seed0":                                                             [2],  # complete
-    # "gpt-oss-120b_seed0":                                                           list(range(3)),
+    # "gpt-oss-120b_seed1":                                                           list(range(3)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                      [2],  # 16 missing: all in shard 2
     # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":                                 [2],  # 16 missing: all in shard 2
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                              [2],  # 16 missing: all in shard 2
@@ -118,8 +129,12 @@ MISSING_TEST150 = {
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                            list(range(3)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":                       [1],  # complete
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":             list(range(3)),  # complete
-    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1":        list(range(3)),  # complete
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1":        list(range(3)),  # complete
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed2":        list(range(3)),  # complete
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed3":        list(range(3)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":        list(range(3)),  # complete
+    # Random 5-tool baseline (random_select_tool_calls.py); mode ..._random_seed42 — match FILE_SUFFIX to JSONL
+    
     # "gpt-oss-120b_budget_seed0":                                                    list(range(3)),
     # qwen3.5-4b — budget only
     # "qwen3.5-4b_budget_seed0":                                                       list(range(3)),
@@ -139,7 +154,7 @@ MISSING_TEST150 = {
     # "tongyi_traj_budget_orig_ext_tongyi_seed0":                               [1],  # complete
     # Blocked on qwen3.6-35b-a3b_budget_seed0 baseline regen — re-enable once baseline has original_messages
     # "tongyi_traj_budget_orig_ext_qwen3.6-35b-a3b_seed0":                               [0, 1, 2],
-    "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":                            [1],
+    # "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":                            [1],
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                              [1, 2],
     #"tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     # "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
@@ -154,6 +169,7 @@ MISSING_TRAIN680 = {
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":                       list(range(8)),
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":             list(range(8)),
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":        list(range(8)),
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(8)),  # mode traj_summary_orig_ext_selected_tools_random_seed42
     # "gpt-oss-120b_budget_seed0":                                                    list(range(8)),
     # qwen3.6-35b-a3b — seed0 and budget only
     # "qwen3.6-35b-a3b_seed0":                                                        list(range(8)),
@@ -204,21 +220,32 @@ def parse_run_name(name):
     # Handle traj_ext_{traj_model} and traj_summary_ext_{traj_model} patterns.
     # Extract TRAJ_MODEL before stripping so patch_sbatch can override it when needed.
     traj_model = None
-    traj_model_patterns = [
-        (r"^traj_budget_orig_ext_(.*)", "traj_budget_orig_ext"),
-        (r"^traj_orig_ext_(.*)", "traj_orig_ext"),
-        (r"^traj_summary_orig_ext_selected_tools_(.*)", "traj_summary_orig_ext_selected_tools"),
-        (r"^traj_summary_orig_ext_(?!selected_tools)(.*)", "traj_summary_orig_ext"),
-        (r"^traj_summary_ext_selected_tools_(.*)", "traj_summary_ext_selected_tools"),
-        (r"^traj_summary_ext_(?!selected_tools)(.*)", "traj_summary_ext"),
-        (r"^traj_ext_(.*)", "traj_ext"),
-    ]
-    for pattern, normalized_mode in traj_model_patterns:
-        m = re.match(pattern, rest)
-        if m:
-            traj_model = m.group(1) or None
-            rest = normalized_mode
-            break
+    # random_select_tool_calls.py output: must run before the generic
+    # traj_summary_orig_ext_selected_tools_(.*) pattern (otherwise "_random_seed42_"
+    # is absorbed into traj_model).
+    m_rand = re.match(
+        r"^traj_summary_orig_ext_selected_tools_random_seed(\d+)_(.+)$", rest
+    )
+    if m_rand:
+        rs = m_rand.group(1)
+        traj_model = m_rand.group(2)
+        rest = f"traj_summary_orig_ext_selected_tools_random_seed{rs}"
+    else:
+        traj_model_patterns = [
+            (r"^traj_budget_orig_ext_(.*)", "traj_budget_orig_ext"),
+            (r"^traj_orig_ext_(.*)", "traj_orig_ext"),
+            (r"^traj_summary_orig_ext_selected_tools_(.*)", "traj_summary_orig_ext_selected_tools"),
+            (r"^traj_summary_orig_ext_(?!selected_tools)(.*)", "traj_summary_orig_ext"),
+            (r"^traj_summary_ext_selected_tools_(.*)", "traj_summary_ext_selected_tools"),
+            (r"^traj_summary_ext_(?!selected_tools)(.*)", "traj_summary_ext"),
+            (r"^traj_ext_(.*)", "traj_ext"),
+        ]
+        for pattern, normalized_mode in traj_model_patterns:
+            m = re.match(pattern, rest)
+            if m:
+                traj_model = m.group(1) or None
+                rest = normalized_mode
+                break
 
     # Aliases only — everything else passes through as-is
     aliases = {
@@ -272,12 +299,12 @@ def main():
     os.makedirs("sbatch_outputs", exist_ok=True)
 
     jobs = (
-        [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
-        [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
-        [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
-        [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()] +
         [(run_name, shards, template_test150, "test150", "bcp")    for run_name, shards in MISSING_TEST150.items()] +
-        [(run_name, shards, template_train680,"train680","bcp")    for run_name, shards in MISSING_TRAIN680.items()]
+        [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
+        [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
+        [(run_name, shards, template_train680,"train680","bcp")    for run_name, shards in MISSING_TRAIN680.items()] + 
+        [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
+        [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()]
     )
 
     for run_name, shards, template, split, dataset in jobs:

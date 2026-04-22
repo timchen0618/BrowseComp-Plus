@@ -7,6 +7,42 @@ def test_module_imports():
     assert hasattr(auto_pipeline, "PipelineState")
 
 
+def test_parse_run_name_random_selected_tools_baseline():
+    import submit_missing as sm
+
+    m, mode, seed, tm = sm.parse_run_name(
+        "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0"
+    )
+    assert m == "gpt-oss-120b"
+    assert mode == "traj_summary_orig_ext_selected_tools_random_seed42"
+    assert seed == 0
+    assert tm == "gpt-oss-120b"
+
+    m2, mode2, seed2, tm2 = sm.parse_run_name(
+        "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0"
+    )
+    assert mode2 == "traj_summary_orig_ext_selected_tools"
+    assert tm2 == "gpt-oss-120b"
+    assert seed2 == 0
+
+
+def test_resolve_run_subdir_random_selected_tools():
+    t = auto_pipeline.Target(
+        run_name="gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0",
+        dataset="bcp",
+        split="test150",
+        template_path="run_qwen3_test150.SBATCH",
+        declared_shards=[0],
+        model="gpt-oss-120b",
+        mode="traj_summary_orig_ext_selected_tools_random_seed42",
+        seed=0,
+        traj_model="gpt-oss-120b",
+    )
+    assert auto_pipeline._resolve_run_subdir(t) == (
+        "traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0"
+    )
+
+
 def test_collect_targets_reads_missing_dicts(monkeypatch):
     import submit_missing
     monkeypatch.setattr(submit_missing, "MISSING", {"tongyi_seed3": [0, 1]}, raising=False)
