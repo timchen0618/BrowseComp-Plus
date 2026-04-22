@@ -564,6 +564,24 @@ def diagnose_slurm_out(
     return "\n\n".join(out) if out else "_No matching error patterns found._"
 
 
+def _tail_sbatch_out_for(target: Target, n_lines: int = 80) -> str:
+    """Return a tail of the latest sbatch_outputs/*.out matching this target."""
+    import glob as gb
+
+    split_tag = f"_{target.split}" if target.split != "full" else ""
+    pat = f"sbatch_outputs/{target.run_name}{split_tag}*.out"
+    candidates = sorted(gb.glob(pat), key=os.path.getmtime, reverse=True)
+    if not candidates:
+        return "_(no matching sbatch output file found)_"
+    path = candidates[0]
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError as e:
+        return f"_(failed to read {path}: {e})_"
+    lines = text.splitlines()[-n_lines:]
+    return f"Tail of `{path}` (last {len(lines)} lines):\n\n```\n" + "\n".join(lines) + "\n```"
+
+
 def write_pipeline_stopped(
     stuck_states: list[TargetState],
     all_states: list[TargetState],
@@ -575,14 +593,20 @@ def write_pipeline_stopped(
         missing_preview = ", ".join(s.missing_qids[:30])
         if len(s.missing_qids) > 30:
             missing_preview += "..."
+        job_ids_str = ", ".join(str(j) for j in s.submitted_job_ids) or "(none)"
         lines.extend([
             f"## Stuck: {s.target.run_name}",
             f"- Dataset: {s.target.dataset} | Split: {s.target.split} | Model: {s.target.model}",
+            f"- Mode: {s.target.mode} | Seed: {s.target.seed} | Traj model: {s.target.traj_model}",
             f"- Stuck cycles: {s.stuck_cycles}",
+            f"- Resubmissions ({len(s.submitted_job_ids)}): {job_ids_str}",
             f"- Missing query IDs ({len(s.missing_qids)}): {missing_preview}",
             "",
-            "### Diagnostic log excerpts",
+            "### Diagnostic log excerpts (error-pattern scan)",
             diagnose_slurm_out(s.target),
+            "",
+            "### Latest sbatch output tail",
+            _tail_sbatch_out_for(s.target),
             "",
         ])
     lines.extend(["## All targets summary", ""])
@@ -590,7 +614,8 @@ def write_pipeline_stopped(
         flag = " (stuck)" if s in stuck_states else ""
         lines.append(
             f"- `{s.target.run_name}`: status={s.status}, "
-            f"missing={len(s.missing_qids)}{flag}"
+            f"missing={len(s.missing_qids)}, "
+            f"resubmits={len(s.submitted_job_ids)}{flag}"
         )
     path.write_text("\n".join(lines))
     return path
