@@ -45,8 +45,11 @@ if [ "${_AUTO_PIPELINE_SLURM:-}" = "1" ]; then
             return 0
         fi
         echo "Submitting chained job at $(date)..."
-        local tmp args_quoted
-        args_quoted=$(printf '%q ' "${PIPELINE_ARGS[@]}")
+        local tmp args_quoted filtered_args=()
+        for arg in "${PIPELINE_ARGS[@]}"; do
+            [ "$arg" != "--resume" ] && filtered_args+=("$arg")
+        done
+        args_quoted=$(printf '%q ' "${filtered_args[@]}")
         tmp=$(mktemp $TMPDIR/auto_pipeline_XXXXXX.sbatch)
         cat > "$tmp" << SBATCH_EOF
 #!/bin/bash

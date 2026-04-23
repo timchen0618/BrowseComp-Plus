@@ -784,21 +784,22 @@ def run_pipeline(args) -> int:
             log.error("preflight failed — see %s", p)
             return 1
 
-    state.phase = "submitting"
-    save_state(state)
-    for ts in state.targets:
-        missing_shards, missing_qids = compute_actual_missing(ts.target)
-        ts.missing_qids = missing_qids
-        if not missing_shards:
-            ts.status = "complete"
-            continue
-        jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
-        if jid is not None:
-            ts.submitted_job_ids.append(jid)
-            ts.status = "submitting"
-        else:
-            ts.status = "running" if args.submit else "pending"
-    save_state(state)
+    if state.phase in ("init", "preflight", "submitting"):
+        state.phase = "submitting"
+        save_state(state)
+        for ts in state.targets:
+            missing_shards, missing_qids = compute_actual_missing(ts.target)
+            ts.missing_qids = missing_qids
+            if not missing_shards:
+                ts.status = "complete"
+                continue
+            jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
+            if jid is not None:
+                ts.submitted_job_ids.append(jid)
+                ts.status = "submitting"
+            else:
+                ts.status = "running" if args.submit else "pending"
+        save_state(state)
 
     state.phase = "monitoring"
     save_state(state)

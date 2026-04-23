@@ -38,7 +38,9 @@ BrowseComp-Plus/
 ├── qampari_experiments/    # QAMPARI benchmark scripts
 ├── topics-qrels/           # Relevance judgments
 ├── figures/                # Generated charts
-├── select_useful_tool_calls.py  # Select k useful tool calls from trajectories via Gemini
+├── src_select_tool_calls/      # Tool call selection scripts
+│   ├── select_useful_tool_calls.py  # Select k useful tool calls via Gemini
+│   └── random_select_tool_calls.py  # Random baseline tool call selection
 ├── summarize_trajectories.py    # Summarize agent trajectories via vLLM
 ├── shard_monitor.py        # Shard completeness checker and resubmission generator
 ├── monitor_and_eval.sh     # Monitor run completion and auto-submit eval SBATCH
@@ -241,7 +243,8 @@ See `sft/axolotl/README.md` for full documentation.
 
 | File | Purpose |
 |------|---------|
-| `select_useful_tool_calls.py` | Select k useful tool calls from trajectories via Gemini; produces verbatim excerpts |
+| `src_select_tool_calls/select_useful_tool_calls.py` | Select k useful tool calls from trajectories via Gemini; produces verbatim excerpts |
+| `src_select_tool_calls/random_select_tool_calls.py` | Random baseline: same candidate indices as select_useful, random subset |
 | `summarize_trajectories.py` | Summarize agent trajectories using vLLM; outputs JSONL with resumable progress |
 | `shard_monitor.py` | Autonomous shard completeness checker with SLURM resubmission generation |
 | `monitor_and_eval.sh` | Polling loop that monitors run completion and auto-submits eval SBATCH |
