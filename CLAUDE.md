@@ -196,7 +196,8 @@ evals/
 |------|---------|
 | `evaluate_run.py` | Main grader — Qwen3-32B as judge, batch vLLM inference |
 | `deduplicate_trajectories.py` | Remove duplicate query_id entries |
-| `compute_pass_k.py` | pass@k metrics |
+| `compute_pass_k.py` | pass@k oracle: best-of-N accuracy across multiple eval dirs |
+| `merge_oracle_summary.py` | Merge N eval dirs into a single oracle summary (per-query max); required before `paired_bootstrap_eval_summaries.py` when comparing groups |
 | `aggregate_score.py` | Aggregate scores across runs |
 
 ### src_utils/
@@ -256,6 +257,7 @@ See `sft/axolotl/README.md` for full documentation.
 | `monitor_and_eval.sh` | Polling loop that monitors run completion and auto-submits eval SBATCH |
 | `auto_pipeline.py` | Automated submit → monitor → resubmit → eval → summary pipeline over submit_missing.py targets |
 | `auto_pipeline.sh` | nohup-friendly wrapper for auto_pipeline.py |
+| `paired_bootstrap_eval_summaries.py` | Paired bootstrap significance test between two `evaluation_summary.json` files; use `merge_oracle_summary.py` first when comparing multi-seed groups |
 
 ---
 
