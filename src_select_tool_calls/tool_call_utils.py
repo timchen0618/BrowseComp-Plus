@@ -425,16 +425,19 @@ def run_one_om(
     find_candidates_fn: Callable[[dict, Set[str]], List[int]],
     build_catalog_fn: Callable[[dict, List[int], int], List[str]],
     build_excerpt_fn: Callable[[dict, Sequence[int]], str],
+    format_context_fn: Optional[Callable[..., str]] = None,
+    require_original_messages: bool = True,
 ) -> dict:
     """Load one trajectory, select k tool calls via Gemini, return result dict.
 
-    find_candidates_fn, build_catalog_fn, build_excerpt_fn are model-specific
-    OM parsers supplied by each script.
+    find_candidates_fn, build_catalog_fn, build_excerpt_fn are model-specific parsers.
+    format_context_fn overrides the context block formatter (defaults to format_trajectory_for_prompt).
+    require_original_messages=False skips the missing-OM guard (for result-based mode).
     """
     with path.open(encoding="utf-8") as f:
         traj = json.load(f)
 
-    if not traj.get("original_messages"):
+    if require_original_messages and not traj.get("original_messages"):
         return {
             "query_id": str(traj.get("query_id", "")),
             "source_file": path.name,
@@ -459,6 +462,22 @@ def run_one_om(
             "k_requested": k,
             "k_effective": 0,
         }
+    if len(candidates) <= k:
+        excerpt = build_excerpt_fn(traj, candidates)
+        # print('&'*100)
+        # print(excerpt)
+        # print('&'*100)
+        return {
+            "query_id": str(traj.get("query_id", "")),
+            "source_file": path.name,
+            "selected_indices": candidates,
+            "rationale": "all_candidates_selected",
+            "excerpt": excerpt,
+            "candidates": candidates,
+            "correct_num_selected": True,
+            "k_requested": k,
+            "k_effective": k_eff,
+        }
     if k_eff < k:
         print(
             f"[warn] {path.name}: only {len(candidates)} candidate tool calls; using k={k_eff}",
@@ -473,20 +492,25 @@ def run_one_om(
     if not question:
         question = traj.get("query") or traj.get("question") or ""
 
-    context_block = format_trajectory_for_prompt(
+    _fmt_ctx = format_context_fn if format_context_fn is not None else format_trajectory_for_prompt
+    context_block = _fmt_ctx(
         traj,
         max_chars=context_max_chars,
         reasoning_max_chars=context_reasoning_max,
         tool_output_max_chars=context_tool_max,
     )
 
+    allowed_json = json.dumps(candidates)
     user_parts = [
         f"User question:\n{question}\n",
         f"K = {k_eff} (you must return exactly {k_eff} indices).",
+        "Allowed candidate indices (choose only from this list; each value is a message index in original_messages): "
+        + allowed_json,
         "Candidate tool calls (choose by index=...):",
         *catalog_lines,
         "\nTrajectory context (may be truncated for length; use indices from the catalog only):",
         context_block,
+        f"\nReminder: selected_indices must be a subset of this list only: {allowed_json}",
     ]
     user_content = "\n".join(user_parts)
     system = SYSTEM_PROMPT_TEMPLATE.format(k=k_eff)
@@ -639,11 +663,11 @@ def add_common_args(ap: "argparse.ArgumentParser") -> None:  # type: ignore[name
     ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--preview-chars", type=int, default=1200,
                     help="Per-tool output preview length in catalog")
-    ap.add_argument("--context-max-chars", type=int, default=120_000,
+    ap.add_argument("--context-max-chars", type=int, default=280_000,
                     help="Cap full trajectory context in prompt")
-    ap.add_argument("--context-reasoning-max-chars", type=int, default=0,
+    ap.add_argument("--context-reasoning-max-chars", type=int, default=2000,
                     help="Per reasoning block cap (0=none)")
-    ap.add_argument("--context-tool-max-chars", type=int, default=500,
+    ap.add_argument("--context-tool-max-chars", type=int, default=3000,
                     help="Per tool result cap in context block")
     ap.add_argument("--queries-tsv", type=Path, default=DEFAULT_BCP_QUERIES_TSV,
                     help=f"BCP topics TSV (query_id\\tquestion). Default: {DEFAULT_BCP_QUERIES_TSV}")

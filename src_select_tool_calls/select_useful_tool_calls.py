@@ -17,7 +17,7 @@ import copy
 import json
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Set
+from typing import Any, List, Optional, Sequence, Set  # noqa: F401 (re-exported for random_select_tool_calls)
 
 _DIR = Path(__file__).resolve().parent
 if str(_DIR) not in sys.path:
@@ -70,6 +70,32 @@ def format_original_messages_for_prompt(
 
 
 
+def _truncate_om_reasoning_content_chunk(chunk: Any, max_chars: int) -> Any:
+    """Shorten a single item in a reasoning message content list (strings or content-part dicts)."""
+    if max_chars <= 0:
+        return chunk
+    if isinstance(chunk, str):
+        if len(chunk) > max_chars:
+            return chunk[:max_chars] + "..."
+        return chunk
+    if isinstance(chunk, dict) and "text" in chunk and isinstance(chunk.get("text"), str):
+        t = chunk["text"]
+        if len(t) > max_chars:
+            out = copy.deepcopy(chunk)
+            out["text"] = t[:max_chars] + "..."
+            return out
+        return chunk
+    # Fallback: stringify non-string parts (e.g. unexpected shapes) for safe truncation
+    s = (
+        json.dumps(chunk, ensure_ascii=False)
+        if isinstance(chunk, (dict, list))
+        else str(chunk)
+    )
+    if len(s) > max_chars:
+        return s[:max_chars] + "..."
+    return chunk
+
+
 def format_trajectory_for_prompt_orig(
     trajectory: dict,
     *,
@@ -95,8 +121,9 @@ def format_trajectory_for_prompt_orig(
                 if "content" in step_clone and isinstance(step_clone["content"], list):
                     if reasoning_max_chars > 0:
                         for i in range(len(step_clone["content"])):
-                            # truncate the content if it is too long
-                            step_clone["content"][i] = step_clone["content"][i][:reasoning_max_chars] + "..."
+                            step_clone["content"][i] = _truncate_om_reasoning_content_chunk(
+                                step_clone["content"][i], reasoning_max_chars
+                            )
                 try:
                     parts.append(json.dumps(step_clone, ensure_ascii=False))
                 except Exception as e:
@@ -265,170 +292,6 @@ def build_full_excerpt_om(
     return separator.join(chunks)
 
 
-def run_one(
-    path: Path,
-    model: Any,
-    gen_params: Any,
-    k: int,
-    allowed_tool_names: Set[str],
-    preview_chars: int,
-    context_max_chars: int,
-    context_reasoning_max: int,
-    context_tool_max: int,
-    dry_run: bool,
-    use_original_messages: bool = False,
-    query_by_id: Optional[dict[str, str]] = None,
-) -> dict:
-    with path.open(encoding="utf-8") as f:
-        traj = json.load(f)
-
-    if use_original_messages and not traj.get("original_messages"):
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "error": "missing_original_messages",
-            "selected_indices": [],
-            "rationale": "",
-            "excerpt": "",
-            "k_requested": k,
-            "k_effective": 0,
-        }
-
-    if use_original_messages:
-        candidates = find_candidate_tool_indices_om(traj, allowed_tool_names)
-    else:
-        candidates = find_candidate_tool_indices(traj, allowed_tool_names)
-    k_eff = min(k, len(candidates))
-    if k_eff == 0:
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "error": "no_candidate_tool_calls",
-            "selected_indices": [],
-            "rationale": "",
-            "excerpt": "",
-            "k_requested": k,
-            "k_effective": 0,
-        }
-
-    if k_eff < k:
-        print(
-            f"[warn] {path.name}: only {len(candidates)} candidate tool calls; using k={k_eff}",
-            file=sys.stderr,
-        )
-
-    if use_original_messages:
-        catalog_lines = build_catalog_lines_om(traj, candidates, preview_chars)
-    else:
-        catalog_lines = build_catalog_lines(traj, candidates, preview_chars)
-    qid_str = str(traj.get("query_id", "")).strip()
-    question = ""
-    if query_by_id:
-        question = question_from_bcp_map(query_by_id, qid_str)
-    if not question:
-        question = traj.get("query") or traj.get("question") or ""
-    if use_original_messages:
-        context_block = format_trajectory_for_prompt_orig(
-            traj,
-            max_chars=context_max_chars,
-            reasoning_max_chars=context_reasoning_max,
-            tool_output_max_chars=context_tool_max,
-        )
-    else:
-        context_block = format_trajectory_for_prompt(
-            traj,
-            max_chars=context_max_chars,
-            reasoning_max_chars=context_reasoning_max,
-            tool_output_max_chars=context_tool_max,
-        )
-
-    user_parts = [
-        f"User question:\n{question}\n",
-        f"K = {k_eff} (you must return exactly {k_eff} indices).",
-        "Candidate tool calls (choose by index=...):",
-        *catalog_lines,
-        "\nTrajectory context (may be truncated for length; use indices from the catalog only):",
-        context_block,
-    ]
-    user_content = "\n".join(user_parts)
-
-    system = SYSTEM_PROMPT_TEMPLATE.format(k=k_eff)
-
-    if dry_run:
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "dry_run": True,
-            "user_content_chars": len(user_content),
-            "candidate_count": len(candidates),
-            "k_effective": k_eff,
-        }
-
-    print('-'*100)
-    print(user_content)
-    print('-'*100)
-    raw = model.generate(
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ],
-        params=gen_params,
-    )
-
-    try:
-        parsed = parse_json_response(raw)
-    except Exception as e:
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "error": f"json_parse_failed: {e}",
-            "raw_response": raw[:2000],
-            "k_effective": k_eff,
-        }
-
-    sel = parsed.get("selected_indices")
-    rationale = parsed.get("rationale", "")
-    if not isinstance(sel, list):
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "error": "selected_indices_not_a_list",
-            "raw_response": raw[:2000],
-            "k_effective": k_eff,
-            "candidates": candidates,
-        }
-
-    try:
-        sel_ints = [int(x) for x in sel]
-        valid_set = set(candidates)
-        ordered = validate_and_sort_indices(sel_ints, k_eff, valid_set)
-    except Exception as e:
-        return {
-            "query_id": str(traj.get("query_id", "")),
-            "source_file": path.name,
-            "error": str(e),
-            "raw_response": raw[:2000],
-            "k_effective": k_eff,
-            "candidates": candidates,
-        }
-
-    if use_original_messages:
-        excerpt = build_full_excerpt_om(traj, ordered)
-    else:
-        excerpt = build_full_excerpt(traj, ordered)
-    return {
-        "query_id": str(traj.get("query_id", "")),
-        "source_file": path.name,
-        "selected_indices": ordered,
-        "rationale": rationale,
-        "excerpt": excerpt,
-        "candidates": candidates,
-        "correct_num_selected": len(ordered) == k_eff,
-        "k_requested": k,
-        "k_effective": k_eff,
-    }
-
-
 def main() -> None:
     from tool_call_utils import add_common_args, resolve_common_args
     ap = argparse.ArgumentParser(
@@ -444,11 +307,26 @@ def main() -> None:
 
     paths, allowed, query_by_id, model, gen_params = resolve_common_args(args)
 
+    if args.use_original_messages:
+        find_fn, catalog_fn, excerpt_fn = (
+            find_candidate_tool_indices_om,
+            build_catalog_lines_om,
+            build_full_excerpt_om,
+        )
+        ctx_fn = format_trajectory_for_prompt_orig
+        req_om = True
+    else:
+        find_fn, catalog_fn, excerpt_fn = (
+            find_candidate_tool_indices,
+            build_catalog_lines,
+            build_full_excerpt,
+        )
+        ctx_fn = None
+        req_om = False
+
     def job(p: Path) -> dict:
-        return run_one(
-            p,
-            model,
-            gen_params,
+        return run_one_om(
+            p, model, gen_params,
             k=args.k,
             allowed_tool_names=allowed,
             preview_chars=args.preview_chars,
@@ -456,8 +334,12 @@ def main() -> None:
             context_reasoning_max=args.context_reasoning_max_chars,
             context_tool_max=args.context_tool_max_chars,
             dry_run=args.dry_run,
-            use_original_messages=args.use_original_messages,
             query_by_id=query_by_id,
+            find_candidates_fn=find_fn,
+            build_catalog_fn=catalog_fn,
+            build_excerpt_fn=excerpt_fn,
+            format_context_fn=ctx_fn,
+            require_original_messages=req_om,
         )
 
     run_pipeline(paths, args.num_threads, job, args.output, dry_run=args.dry_run)
