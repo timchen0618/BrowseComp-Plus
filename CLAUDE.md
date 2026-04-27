@@ -39,7 +39,10 @@ BrowseComp-Plus/
 ├── topics-qrels/           # Relevance judgments
 ├── figures/                # Generated charts
 ├── src_select_tool_calls/      # Tool call selection scripts
-│   ├── select_useful_tool_calls.py  # Select k useful tool calls via Gemini
+│   ├── tool_call_utils.py           # Shared utilities (I/O, Gemini parsing, result-based helpers, generic OM driver)
+│   ├── select_useful_tool_calls.py  # Gemini selection — gpt-oss-120b (OpenAI function_call OM format)
+│   ├── select_useful_tool_calls_glm.py    # Gemini selection — GLM (role/tool_calls OM format)
+│   ├── select_useful_tool_calls_tongyi.py # Gemini selection — Tongyi (<tool_call> XML OM format)
 │   └── random_select_tool_calls.py  # Random baseline tool call selection
 ├── summarize_trajectories.py    # Summarize agent trajectories via vLLM
 ├── shard_monitor.py        # Shard completeness checker and resubmission generator
@@ -243,7 +246,10 @@ See `sft/axolotl/README.md` for full documentation.
 
 | File | Purpose |
 |------|---------|
-| `src_select_tool_calls/select_useful_tool_calls.py` | Select k useful tool calls from trajectories via Gemini; produces verbatim excerpts |
+| `src_select_tool_calls/tool_call_utils.py` | Shared I/O, Gemini parsing, result-based helpers, generic `run_one_om` driver |
+| `src_select_tool_calls/select_useful_tool_calls.py` | Gemini selection for gpt-oss-120b; uses OpenAI `function_call` OM format; `--use-original-messages` flag |
+| `src_select_tool_calls/select_useful_tool_calls_glm.py` | Gemini selection for GLM; reads `tool_calls` array + `role=tool` OM messages |
+| `src_select_tool_calls/select_useful_tool_calls_tongyi.py` | Gemini selection for Tongyi; parses `<tool_call>` XML + `<tool_response>` OM messages |
 | `src_select_tool_calls/random_select_tool_calls.py` | Random baseline: same candidate indices as select_useful, random subset |
 | `summarize_trajectories.py` | Summarize agent trajectories using vLLM; outputs JSONL with resumable progress |
 | `shard_monitor.py` | Autonomous shard completeness checker with SLURM resubmission generation |

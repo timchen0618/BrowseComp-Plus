@@ -17,6 +17,7 @@ mkdir -p sbatch_outputs
 PROJECT_DIR="$(pwd)"
 ARGS_QUOTED=$(printf '%q ' "$@")
 
+TMPDIR="/scratch/hc3337/tmp"
 echo ${ARGS_QUOTED}
 echo "hey"
 echo $TMPDIR
