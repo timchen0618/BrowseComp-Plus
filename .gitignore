@@ -39,3 +39,8 @@ sft/axolotl/prepared*/
 selected_tool_calls/
 figures/
 sft/axolotl/debug_*
+auto_pipeline.log
+auto_pipeline.pid
+auto_pipeline_heartbeat
+auto_pipeline_state.json
+missing*.txt
