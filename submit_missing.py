@@ -28,11 +28,12 @@ TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    "tongyi_seed4":                                                                  list(range(10)),
-    "tongyi_seed5":                                                                  list(range(10)),
-    "tongyi_seed6":                                                                  list(range(10)),
-    "tongyi_seed7":                                                                  list(range(10)),
-    "tongyi_seed8":                                                                  list(range(10)),
+    "tongyi_seed3":                                                                  [2],
+    # "tongyi_seed4":                                                                  list(range(10)),
+    # "tongyi_seed5":                                                                  list(range(10)),
+    # "tongyi_seed6":                                                                  list(range(10)),
+    # "tongyi_seed7":                                                                  list(range(10)),
+    # "tongyi_seed8":                                                                  list(range(10)),
     # "gpt-oss-120b_planning_retrospective_seed0":                                     list(range(10)),
     # "gpt-oss-120b_planning_retrospective_reinject_every_5_seed0":                     list(range(10)),
     # # "gpt-oss-120b_planning_v0.5_start_ext_gemini_2.5_pro_seed0":                     list(range(10)),
@@ -44,15 +45,15 @@ MISSING = {
     # "gpt-oss-120b_planning_v3_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_seed0":                       list(range(10)),
     # "gpt-oss-120b_planning_v4_start_ext_gemini_2.5_pro_reinject_every_5_seed0":      [1, 8],
-    "gpt-oss-120b_seed8":      list(range(10)),
-    "gpt-oss-120b_seed9":      list(range(10)),
-    "gpt-oss-120b_seed10":      list(range(10)),
+    # "gpt-oss-120b_seed8":      list(range(10)),
+    # "gpt-oss-120b_seed9":      list(range(10)),
+    # "gpt-oss-120b_seed10":      list(range(10)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                     list(range(10)),
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],
     # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":      [3,4,5],
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":      [4,5],
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                             [3,5,7],
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      [1,3,6,9],  # complete
 }
 
 # Missing runs for first50 split (no shards — each entry is a full re-run).
@@ -121,7 +122,7 @@ MISSING_TEST150 = {
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
     # "gpt-oss-120b_seed1":                                                           list(range(3)),
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                      [2],  # 16 missing: all in shard 2
-    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":                                 [2],  # 16 missing: all in shard 2
+    # "gpt-oss-120b_traj_orig_ext_gpt-oss-120b_seed0":                                 [3, 4],  # 16 missing: all in shard 2
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                              [2],  # 16 missing: all in shard 2
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":                         [2],  # 16 missing: all in shard 2
     # "gpt-oss-120b_traj_ext_gpt-oss-120b_seed0":                                    list(range(3)),  # complete
@@ -129,9 +130,10 @@ MISSING_TEST150 = {
     # "gpt-oss-120b_traj_summary_ext_gpt-oss-120b_seed0":                            list(range(3)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_gpt-oss-120b_seed0":                       [1],  # complete
     # "gpt-oss-120b_traj_summary_ext_selected_tools_gpt-oss-120b_seed0":             list(range(3)),  # complete
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1":        list(range(3)),  # complete
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed2":        list(range(3)),  # complete
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed3":        list(range(3)),  # complete
+    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":        list(range(3)),  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1":        list(range(3)),  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed2":        list(range(3)),  # complete
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed3":        list(range(3)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":        list(range(3)),  # complete
     # Random 5-tool baseline (random_select_tool_calls.py); mode ..._random_seed42 — match FILE_SUFFIX to JSONL
     
