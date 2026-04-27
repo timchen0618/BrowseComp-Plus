@@ -232,6 +232,7 @@ See `scripts/README.md` for full documentation.
 | `filter_empty_runs_gpt_oss_120b_seeds4_7.sh` | Shell wrapper for filter_empty_runs on gpt-oss-120b seeds |
 | `filter_empty_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for filtering empty selected tool calls |
 | `repair_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for repairing gpt-oss-120b selected tool calls |
+| `plot_tool_call_overlap.py` | Pairwise Jaccard heatmap of selected_indices across JSONL runs → `figures/tool_call_overlap_heatmap.png` |
 
 ### sft/axolotl/ — Axolotl SFT Pipeline
 

@@ -9,9 +9,10 @@ python src_select_tool_calls/select_useful_tool_calls.py --k 5 --use-original-me
   --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
   --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
   --context-max-chars ${CONTEXT_MAX_CHARS} \
-  --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_more_chars.jsonl \
+  --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini_3.1-pro-preview.jsonl \
   --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ \
-  --num-threads 8 
+  --num-threads 8 \
+  --model @vertexai-gemini-ec5413/gemini-3.1-pro-preview
 
 # # tongyi (830 files in seed4)
 # python src_select_tool_calls/select_useful_tool_calls_tongyi.py --k 5  \
