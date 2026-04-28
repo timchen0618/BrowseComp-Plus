@@ -6,24 +6,36 @@
 
 ## BrowseComp-Plus (BCP) — Qwen3-Embedding-8B retriever
 
-| Model | Condition | Acc | Recall | # calls |
-| :---- | :---- | ----: | ----: | ----: |
-| GLM-4.7-Flash (30B) | Base (No Plan) — base agent | 48.0 | 55.4 | 22.0 |
-| GLM-4.7-Flash (30B) | Base (No Plan) — full first-run trajectory injected | 47.3 | 20.3 | 4.3 |
-| GLM-4.7-Flash (30B) | Base (Summary) — first-run trajectory summary injected | 53.3 | 52.5 | 12.7 |
-| GLM-4.7-Flash (30B) | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts | 46.7 | 29.1 | 8.6 |
-| GLM-4.7-Flash (30B) | Base (Selected Tool Calls, seed1 rerun) | 46.0 | 29.4 | 9.7 |
-| GLM-4.7-Flash (30B) | Base (Random Tool Calls) — random k=5 excerpts (ablation) | 47.3 | 34.6 | 9.7 |
-| Qwen3.5-122B-A10B | Base (No Plan) — base agent | 45.3 | 54.3 | 21.8 |
-| Qwen3.5-122B-A10B | Base (No Plan) — full first-run trajectory injected | 48.4 | 0.0 | 0.1 |
-| Qwen3.5-122B-A10B | Base (Summary) — first-run trajectory summary injected | 48.3 | 56.5 | 14.4 |
-| Qwen3.5-122B-A10B | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts (N=148) | 48.7 | 25.4 | 15.9 |
-| **TODO: Qwen3.5 random tool calls (running)** |  |  |  |  |
-| MiniMax-M2.5 (229B) | Base (No Plan) — base agent | 48.7 | 56.9 | 15.3 |
-| MiniMax-M2.5 (229B) | Base (No Plan) — full first-run trajectory injected | 54.0 | 20.0 | 3.2 |
-| MiniMax-M2.5 (229B) | Base (Summary) — first-run trajectory summary injected | 56.0 | 56.7 | 10.0 |
-| MiniMax-M2.5 (229B) | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts | 55.3 | 45.4 | 8.6 |
-| **TODO: MiniMax random tool calls (chained after selected)** |  |  |  |  |
+**Model: GLM-4.7-Flash (30B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 48.0 | 55.4 | 22.0 |
+| + full trajectory | 47.3 | 20.3 | 4.3 |
+| **+ trajectory summary** | **53.3** | 52.5 | 12.7 |
+| + selected k=5 tool calls | 46.7 | 29.1 | 8.6 |
+| + selected k=5 tool calls (seed1 rerun) | 46.0 | 29.4 | 9.7 |
+| + random k=5 tool calls (ablation) | 47.3 | 34.6 | 9.7 |
+
+**Model: Qwen3.5-122B-A10B**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 45.3 | 54.3 | 21.8 |
+| + full trajectory | 48.4 | 0.0 | 0.1 |
+| + trajectory summary | 48.3 | 56.5 | 14.4 |
+| **+ selected k=5 tool calls** (N=148) | **48.7** | 25.4 | 15.9 |
+| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
+
+**Model: MiniMax-M2.5 (229B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 48.7 | 56.9 | 15.3 |
+| + full trajectory | 54.0 | 20.0 | 3.2 |
+| **+ trajectory summary** | **56.0** | 56.7 | 10.0 |
+| + selected k=5 tool calls | 55.3 | 45.4 | 8.6 |
+| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed).
 
