@@ -22,7 +22,6 @@
 | + full trajectory | 47.3 | 20.3 | 4.3 |
 | **+ trajectory summary** | **53.3** | 52.5 | 12.7 |
 | + selected k=5 tool calls | 46.7 | 29.1 | 8.6 |
-| + selected k=5 tool calls (seed1 rerun) | 46.0 | 29.4 | 9.7 |
 | + random k=5 tool calls (ablation) | 47.3 | 34.6 | 9.7 |
 
 **Model: Qwen3.5-122B-A10B**
