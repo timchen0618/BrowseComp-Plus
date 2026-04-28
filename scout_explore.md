@@ -40,9 +40,9 @@
 | :---- | ----: | ----: | ----: |
 | Baseline | 48.7 | 56.9 | 15.3 |
 | + full trajectory | 54.0 | 20.0 | 3.2 |
-| **+ trajectory summary** | **56.0** | 56.7 | 10.0 |
+| + trajectory summary | 56.0 | 56.7 | 10.0 |
 | + selected k=5 tool calls | 55.3 | 45.4 | 8.6 |
-| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
+| **+ random k=5 tool calls (ablation)** | **57.3** | 49.8 | 9.1 |
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed).
 
