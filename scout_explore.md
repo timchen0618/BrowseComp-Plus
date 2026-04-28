@@ -43,17 +43,29 @@
 
 ## FRAMES — BGE-M3 retriever, Upstash Wikipedia
 
-| Model | Condition | Acc | Recall | # calls |
-| :---- | :---- | ----: | ----: | ----: |
-| GLM-4.7-Flash (30B) | Base (No Plan) — base agent | 44.7 | 70.6 | 27.7 |
-| GLM-4.7-Flash (30B) | Base (No Plan) — full first-run trajectory injected | 46.2 | 15.9 | 8.5 |
-| GLM-4.7-Flash (30B) | Base (Summary) — first-run trajectory summary injected | 51.3 | 52.2 | 14.9 |
-| **TODO: Qwen3.5 baseline (cancelled to free h200_public for BCP, will resubmit)** |  |  |  |  |
-| **TODO: Qwen3.5 traj_orig_ext** |  |  |  |  |
-| **TODO: Qwen3.5 traj_summary_orig_ext** |  |  |  |  |
-| **TODO: MiniMax baseline (cancelled to free h200_public for BCP, will resubmit)** |  |  |  |  |
-| **TODO: MiniMax traj_orig_ext** |  |  |  |  |
-| **TODO: MiniMax traj_summary_orig_ext** |  |  |  |  |
+**Model: GLM-4.7-Flash (30B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 44.7 | 70.6 | 27.7 |
+| + full trajectory | 46.2 | 15.9 | 8.5 |
+| **+ trajectory summary** | **51.3** | 52.2 | 14.9 |
+
+**Model: Qwen3.5-122B-A10B**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | TBD | TBD | TBD |
+| + full trajectory | TBD | TBD | TBD |
+| + trajectory summary | TBD | TBD | TBD |
+
+**Model: MiniMax-M2.5 (229B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | TBD | TBD | TBD |
+| + full trajectory | TBD | TBD | TBD |
+| + trajectory summary | TBD | TBD | TBD |
 
 *Caveats:* FRAMES Recall is **article-level** (did the agent retrieve ≥1 passage from each of the relevant Wikipedia articles for that query) — computed post-hoc in `scripts/compute_frames_recall.py` from each query's `wiki_links` field in the GT, joined to the BGE-M3 corpus row IDs. After fixing URL canonicalization (GT uses `_` for spaces, url_map uses `%20`), **88.5% of GT URLs match (2209/2496) and 149/150 test150 qids have qrel evidence** — recall is now reported on essentially the full slice. GLM context_limit rate on FRAMES: 7% (baseline) / 11% (traj_orig) / 3% (traj_summary). GLM traj_orig was evaluated on N=143 (7 qids errored before producing output: 26, 74, 78, 99, 127, 129, 132).
 
