@@ -58,6 +58,8 @@
 | Baseline | 44.7 | 70.6 | 27.7 |
 | + full trajectory | 46.2 | 15.9 | 8.5 |
 | **+ trajectory summary** | **51.3** | 52.2 | 14.9 |
+| + selected k=5 tool calls | TBD | TBD | TBD |
+| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
 **Model: Qwen3.5-122B-A10B**
 
@@ -66,6 +68,8 @@
 | Baseline | TBD | TBD | TBD |
 | + full trajectory | TBD | TBD | TBD |
 | + trajectory summary | TBD | TBD | TBD |
+| + selected k=5 tool calls | TBD | TBD | TBD |
+| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
 **Model: MiniMax-M2.5 (229B)**
 
@@ -74,6 +78,8 @@
 | Baseline | TBD | TBD | TBD |
 | + full trajectory | TBD | TBD | TBD |
 | + trajectory summary | TBD | TBD | TBD |
+| + selected k=5 tool calls | TBD | TBD | TBD |
+| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
 *Caveats:* FRAMES Recall is **article-level** (did the agent retrieve ≥1 passage from each of the relevant Wikipedia articles for that query) — computed post-hoc in `scripts/compute_frames_recall.py` from each query's `wiki_links` field in the GT, joined to the BGE-M3 corpus row IDs. After fixing URL canonicalization (GT uses `_` for spaces, url_map uses `%20`), **88.5% of GT URLs match (2209/2496) and 149/150 test150 qids have qrel evidence** — recall is now reported on essentially the full slice. GLM context_limit rate on FRAMES: 7% (baseline) / 11% (traj_orig) / 3% (traj_summary). GLM traj_orig was evaluated on N=143 (7 qids errored before producing output: 26, 74, 78, 99, 127, 129, 132).
 
