@@ -12,16 +12,17 @@
 | GLM-4.7-Flash (30B) | Base (No Plan) — full first-run trajectory injected | 47.3 | 20.3 | 4.3 |
 | GLM-4.7-Flash (30B) | Base (Summary) — first-run trajectory summary injected | 53.3 | 52.5 | 12.7 |
 | GLM-4.7-Flash (30B) | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts | 46.7 | 29.1 | 8.6 |
+| GLM-4.7-Flash (30B) | Base (Selected Tool Calls, seed1 rerun) | 46.0 | 29.4 | 9.7 |
 | GLM-4.7-Flash (30B) | Base (Random Tool Calls) — random k=5 excerpts (ablation) | 47.3 | 34.6 | 9.7 |
 | Qwen3.5-122B-A10B | Base (No Plan) — base agent | 45.3 | 54.3 | 21.8 |
 | Qwen3.5-122B-A10B | Base (No Plan) — full first-run trajectory injected | 48.4 | 0.0 | 0.1 |
 | Qwen3.5-122B-A10B | Base (Summary) — first-run trajectory summary injected | 48.3 | 56.5 | 14.4 |
-| **TODO: Qwen3.5 selected tool calls (running, h200 PENDING)** |  |  |  |  |
-| **TODO: Qwen3.5 random tool calls (chained after selected)** |  |  |  |  |
+| Qwen3.5-122B-A10B | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts (N=148) | 48.7 | 25.4 | 15.9 |
+| **TODO: Qwen3.5 random tool calls (running)** |  |  |  |  |
 | MiniMax-M2.5 (229B) | Base (No Plan) — base agent | 48.7 | 56.9 | 15.3 |
 | MiniMax-M2.5 (229B) | Base (No Plan) — full first-run trajectory injected | 54.0 | 20.0 | 3.2 |
 | MiniMax-M2.5 (229B) | Base (Summary) — first-run trajectory summary injected | 56.0 | 56.7 | 10.0 |
-| **TODO: MiniMax selected tool calls (running, h200 PENDING)** |  |  |  |  |
+| MiniMax-M2.5 (229B) | Base (Selected Tool Calls) — Gemini-selected k=5 excerpts | 55.3 | 45.4 | 8.6 |
 | **TODO: MiniMax random tool calls (chained after selected)** |  |  |  |  |
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed).

@@ -4,6 +4,58 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-04-28 — Qwen3.5 selected_tools cancelled at 148/150 (last 2 queries hung)
+
+**Context:** Job 7372606 (Qwen3.5 BCP selected_tools resume after the earlier vLLM TMA crash) ran for 5h14m. After hitting 148/150 trajectories, the last 2 queries cycled in a long agent loop for ~1.5h with no progress. vLLM stayed healthy (240 tok/s gen, 11% KV cache), so the issue was the agent client's iteration loop — likely repetitive search-failure cycles that don't trip the iter cap of 100.
+
+**Action:** `scancel 7372606`. Submitted eval on the 148 trajectories we have (`sbatch run_bcp_eval_qwen3_5_test150_selected_tools.SBATCH` → 7391578). Submitted Qwen3.5 random_tools (7391579) to continue the experiment matrix.
+
+**Caveat:** Qwen3.5 selected_tools result will be on N=148 instead of 150. Note in scout_explore.md row.
+
+**Revert path:** If the 2 missing trajectories are critical, resubmit `run_bcp_test150_qwen3_5_selected_tools.SBATCH` later — idempotent client picks up just those 2.
+
+---
+
+## 2026-04-28 — eval `max_model_len` 4096 → 16384 (silent prompt drop bug)
+
+**Context:** GLM seed1 selected_tools eval (job 7373745) reported 37.21% acc on **only 86/150 trajectories**. The eval log showed:
+
+```
+Error running vLLM batch 64//64: The decoder prompt (length 6772) is longer than the maximum model length of 4096.
+```
+
+vLLM throws this as a non-fatal batch error — the batch is dropped from results but eval continues. With `max_model_len=4096` (`evaluate_run.py:460`) and seed1 having 10.5 search calls/query (vs seed0's 8.6), longer trajectory_history representations in the judge prompt exceeded the limit on 64/150 queries. Seed0 (8.6 searches/query) happened to fit and got 150/150 evaluated cleanly at 46.7%, so this bug was latent.
+
+**Fix:** Bumped `max_model_len` to 16384 in `scripts_evaluation/evaluate_run.py:460`. Qwen3-32B judge can handle that easily on 2×H100 with `gpu_memory_utilization=0.85`.
+
+**Resubmitted GLM seed1 eval as 7374231** after deleting stale eval JSONs.
+
+**Risk:** All historical eval numbers in scout_explore.md were produced under max_model_len=4096. If any past run had >4096-token judge prompts, those queries were silently dropped. For models running shorter trajectories (low search count) this likely didn't bite, but verbose runs (Qwen3.5 + MiniMax with 21+ search calls on baseline) could've silently lost prompts. **Worth a re-eval pass on all completed conditions** with the new ceiling — but that's user-call. For now flag in scout_explore.md once seed1 number lands.
+
+**Revert path:** `git diff` evaluate_run.py shows the one-line change. Revert if 16K causes OOM on the 2×H100 judge.
+
+---
+
+## 2026-04-28 — Qwen3.5 BCP selected_tools resubmit after silent vLLM TMA crash (job 7369110)
+
+**Context:** Job 7369110 (Qwen3.5 BCP selected_tools, h200_public 2 GPU) ran for 38min and exited cleanly (`COMPLETED 0:0`), but only produced 21/150 trajectories. Tail of log shows 129 queries failing with `Connection error` after vLLM internal crash at 01:23:01:
+
+```
+Error: Failed to initialize the TMA descriptor 716
+RuntimeError: [TensorRT-LLM][ERROR] Failed to initialize cutlass TMA WS grouped gemm.
+torch.AcceleratorError: CUDA error: misaligned address
+```
+
+vLLM `multiproc_executor.py` workers died on cutlass MoE GEMM kernel for sm90 (H200). The API server stayed up but couldn't service requests, so the client got 3 consecutive connection errors per query and aborted each (after 3 retries, marks the qid failed and moves on, never writes JSON). Slurm sees client exit 0.
+
+**Resubmitted** as 7372606. `qwen35_client.py:665-679` is idempotent — scans output dir, skips qids already in `run_*.json` files. Will pick up remaining 129.
+
+**Why not a different mitigation:** Qwen3.5 baseline + traj_orig + traj_summary all completed 150 trajectories on this same h200/vLLM stack, so the TMA crash is not deterministic for this model — likely transient (specific input shape + cuda graph state). Plain resubmission is the right first try. If 7372606 also crashes mid-run, consider `--enforce-eager` to disable cuda graphs, accepting ~30% throughput loss.
+
+**Revert path:** `scancel 7372606`. Existing 21 trajectories are usable; a fresh run would just resume from there.
+
+---
+
 ## 2026-04-20 — Qwen3.5-122B-A10B full-run SBATCH generation
 
 **Context:** User instructed autonomous submission of Qwen full run once smoke 6697628 passes. Then clarified they only have access to 2 H200 GPUs at a time on `h200_public`, so sharding into two concurrent jobs offers no wall-clock benefit. Reworked to a single 830-query job.
@@ -139,6 +191,395 @@ Explicitly NOT using `traj_ext` / `traj_summary_ext` (template-tag variants) —
 3. **`minimax_client.py` based on `qwen35_client.py`** — removed `enable_thinking` chat_template_kwargs (MiniMax emits reasoning by default, no kwarg needed); changed tool-call leak detection to `<minimax:tool_call>`.
 4. **No `original_messages` round-2 until smoke passes** — traj_orig and summarize SBATCHes queued after smoke COMPLETED.
 
-**Next steps if smoke passes:** submit `run_bcp_test150_minimax.SBATCH` (already written), then eval, summarize, traj_orig, traj_summary.
+**Smoke result (job 6789048, COMPLETED, 16 min):** TP=2 on 2×H200 confirmed feasible. All 10/10 trajectories ran with 15-19 searches each. All 10 hit `context_limit` (not `completed`) because `max_model_len=65536` fills at ~49K tokens with heavy search. KV cache peaked at 69% — healthy headroom. Model loaded and served correctly; `minimax_m2_append_think` and `minimax_m2` parsers both present in container.
 
-**Revert path:** `scancel 6789048`, `rm sbatch/run_bcp_first10_minimax.SBATCH sbatch/run_bcp_test150_minimax.SBATCH search_agent/minimax_client.py`. No trajectory cleanup needed.
+**Context-limit note:** All smoke trajectories show `status=context_limit`. This is expected given the 65536 token ceiling. The client's `_force_final_answer` handler fires and the model still produces a final answer. Accepted for now; test150 baseline uses the same 65536 limit. If accuracy suffers vs GLM/Qwen3.5 due to truncation, a re-run at 98304 may be warranted.
+
+**test150 baseline submitted:** job **6798680** (`run_bcp_test150_minimax.SBATCH`). 150 queries, h200_public, 2×H200, 24h walltime, MAX_NUM_SEQS=16.
+
+**test150 baseline COMPLETED** (1h35m): 150/150 trajectories. Status: 44 `completed` + 106 `context_limit`. Avg 15.3 searches/query (min=5, max=20). Context-limit rate (71%) consistent with smoke test — 65536 token ceiling fills quickly under heavy search. No missing qids; no fill-in needed.
+
+**Round-2 jobs submitted in parallel:**
+- traj_orig_ext → job **6811307** (`run_bcp_test150_minimax_traj_orig.SBATCH`)
+- summarize → job **6811308** (`run_bcp_summarize_minimax_test150.SBATCH`)
+- traj_summary_orig_ext → will submit once 6811308 completes and summaries/minimax-m2.5_test150.jsonl exists
+
+**traj_orig_ext COMPLETED** (job 6811307, 44:25): 150/150 trajectories. Status: 93 `completed` + 57 `context_limit`. Avg search calls: **0.0** — MiniMax (229B) reads the prepended full trajectory and answers directly without issuing any new searches, identical collapse behavior to Qwen3.5-122B in traj_orig (which had 1.1 avg steps). The prepended `original_messages` context alone fills context enough to trigger 57 context_limits even without searches.
+
+**summarize COMPLETED** (job 6811308, 18:43): 150/150 summaries written to `summaries/minimax-m2.5_test150.jsonl`.
+
+**traj_summary_orig_ext submitted:** job **6825882** (`run_bcp_test150_minimax_traj_summary_orig.SBATCH`), h200_public, 2×H200, 24h walltime.
+
+**traj_summary_orig_ext job 6825882 CANCELLED** — port conflict on gh116 (port 8000 occupied by co-tenant job); job also hung 20+ min past expected exit (likely overlay unmount deadlock after trap kill). **Fix applied:** `sbatch/run_bcp_test150_minimax_traj_summary_orig.SBATCH` now computes `PORT=$((20000 + SLURM_JOB_ID % 10000))` so each job binds a unique port. **Resubmitted:** job **6836427**, COMPLETED on gh114 (1:02:49).
+
+**traj_summary_orig_ext COMPLETED** (job 6836427, 1:02:49): 150/150 trajectories. Status: 108 `completed` + 42 `context_limit`. Avg search calls: **0.0** — same zero-search behavior as traj_orig. MiniMax (229B) reads prepended summary and answers directly without searching. Notably better `completed` rate than both baseline (44) and traj_orig (93), as the shorter summary leaves more context budget for reasoning.
+
+**MiniMax-M2.5 pipeline COMPLETE.** All three test150 round-2 runs finished:
+| Condition | Status | completed | context_limit | avg searches |
+|-----------|--------|-----------|---------------|--------------|
+| baseline (seed0) | DONE | 44 | 106 | 15.3 |
+| traj_orig_ext (6811307) | DONE | 93 | 57 | 0.0 |
+| traj_summary_orig_ext (6836427) | DONE | 108 | 42 | 0.0 |
+
+**Eval jobs submitted (2026-04-26):**
+- baseline eval → job **7232739** (`run_bcp_eval_minimax_test150_baseline.SBATCH`)
+- traj_orig_ext eval → job **7232740** (`run_bcp_eval_minimax_test150_traj_orig.SBATCH`)
+- traj_summary_orig_ext eval → job **7232741** (`run_bcp_eval_minimax_test150_traj_summary_orig.SBATCH`)
+All three on h100_tandon, 2×H100, 2h walltime, Qwen3-32B judge.
+
+**Eval results (2026-04-26):**
+| Condition | Acc | Recall | avg searches |
+|-----------|-----|--------|--------------|
+| baseline (seed0) | 27.3% | 56.9% | 15.3 |
+| traj_orig_ext_seed0 | 48.0% | 20.0% | 3.2 |
+| traj_summary_orig_ext_seed0 | 52.0% | 56.7% | 10.0 |
+
+Key findings: MiniMax baseline (27.3%) is lower than GLM (44%) and Qwen3.5 (42.7%). traj_orig gives +20.7pp accuracy gain but recall collapses (57%→20%). traj_summary achieves +24.7pp accuracy gain while maintaining recall (56.7% ≈ baseline). scout_explore.md updated.
+
+---
+
+## 2026-04-26 — Bug fix: evaluate_run.py drops forced final answers
+
+**Bug:** `scripts_evaluation/evaluate_run.py:546` had `if response == "" or not is_completed:` which auto-failed any trajectory with `status != "completed"` even when a non-empty `output_text` response was present. The clients deliberately inject *"You have now reached the maximum context length... provide your final answer now"* on context_limit, and the model produces a real answer that gets stored as the last `output_text` entry — but the eval threw it away.
+
+**Impact (MiniMax baseline example):** 106/150 trajectories were `context_limit`; all auto-failed. On the 44 that completed, accuracy was 93.2%, but headline number reported as 27.3%. Bias scaled with verbosity: GLM (9% ctx_limit) lightly affected, Qwen3.5 (42%) moderately, MiniMax (71%) severely.
+
+**Fix:** Removed the `or not is_completed` clause. The `response == ""` check still skips trajectories with no extractable answer.
+
+**Re-eval submitted (2026-04-26, jobs 7242846–7242854):**
+| Job | Model | Condition |
+|-----|-------|-----------|
+| 7242846 | glm-4.7-flash | full (830) baseline |
+| 7242847 | glm-4.7-flash | test150 traj_orig |
+| 7242848 | glm-4.7-flash | test150 traj_summary |
+| 7242849 | qwen3.5-122b-a10b | test150 baseline |
+| 7242850 | qwen3.5-122b-a10b | test150 traj_orig |
+| 7242851 | qwen3.5-122b-a10b | test150 traj_summary |
+| 7242852 | minimax-m2.5 | test150 baseline |
+| 7242853 | minimax-m2.5 | test150 traj_orig |
+| 7242854 | minimax-m2.5 | test150 traj_summary |
+
+Pre-fix evals backed up to `evals.backup_pre_force_answer_fix_2026-04-26/`.
+
+---
+
+## 2026-04-26 — GLM selected_tool_calls round-2 condition submitted
+
+GLM-4.7-Flash test150 round-2 "selected_tool_calls" run submitted as job **7244602**. Uses Gemini-selected tool-call excerpts from `selected_tool_calls/selected_tool_calls_glm_use_original_messages.jsonl` (830 entries, `excerpt` field) as the trajectory context, plugged into the existing `--trajectory-summary-file` path with `--planning-trigger traj_summary_orig_ext` and `--query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY` — the loader at `search_agent/trajectory_utils.py:_load_trajectory_summaries` accepts both `summary` and `excerpt` fields. SBATCH: `sbatch/run_bcp_test150_glm_selected_tools.SBATCH`. Output dir: `runs/bcp/Qwen3-Embedding-8B/test150/glm-4.7-flash/selected_tools_seed0/`.
+
+
+---
+
+## 2026-04-26 — BCP re-eval (round 1) was a no-op due to caching; resubmitted with --force
+
+**Bug-on-bug:** the first re-eval batch (jobs 7242846–7242854) ran the bug-fixed `evaluate_run.py`, but `scripts_evaluation/evaluate_run.py:486` short-circuits with `if eval_path.exists() and not args.force:` — so the per-query `*_eval.json` files (computed under the OLD pre-fix logic and never deleted) were just reloaded. The "new" `evaluation_summary.json` was rebuilt from those stale per-query files, so MiniMax baseline still read 27.3% etc.
+
+**Fix:** added `--force` to all 9 eval SBATCHes; deleted every `*_eval.json` / `evaluation_summary.json` / `detailed_judge_results.csv` under `evals/bcp/` (originals safe at `evals.backup_pre_force_answer_fix_2026-04-26/`); cancelled the still-pending 7242854 and resubmitted all 9 as **7244953–7244961**.
+
+**Lesson:** when changing `evaluate_run.py` grading logic, always pair it with `--force` OR an explicit cache wipe. The caching means stale per-query files survive any code change to the grading branch.
+
+---
+
+## 2026-04-26 — FRAMES smoke #1 (job 7244214) failed: search_description signature mismatch
+
+**Symptom:** vLLM came up cleanly, BgeM3Searcher loaded the 47M-passage index on cuda:0, but `glm_client.py:94` crashed with `TypeError: BgeM3Searcher.search_description() takes 1 positional argument but 2 were given`. BCP's `BaseSearcher.search_description(self, k: int = 10)` passes `self.k` to format the tool description; parent's `BgeM3Searcher.search_description(self)` ignores k.
+
+**Fix:** override `search_description(self, k=10)` in the BCP adapter (`searcher/searchers/bge_m3_searcher.py`). Parent project untouched.
+
+**Resubmitted:** job **7245695**.
+
+---
+
+## 2026-04-26 — MiniMax baseline eval (7244959) failed transiently; resubmitted as 7246960
+
+vLLM worker subprocess died silently during `determine_available_memory` after Qwen3-32B weights loaded fine (30.59 GiB/shard). Worker error string was empty. Same SBATCH succeeded for GLM/Qwen3.5 sibling jobs in the same batch. No code change; resubmitted unchanged.
+
+---
+
+## 2026-04-26 — BCP scout/explore corrected results
+
+All 9 BCP re-evals (jobs 7244953-7244961, plus resubmit 7246960 for transient MiniMax baseline failure) completed with the bug-fixed eval + `--force` flag. scout_explore.md tables updated.
+
+| Model | Cond | Pre-fix Acc | Post-fix Acc | Δ |
+|---|---|---|---|---|
+| GLM | baseline | 44.0 | 48.0 | +4.0 |
+| GLM | traj_orig | 44.0 | 47.3 | +3.3 |
+| GLM | traj_summary | 53.3 | 53.3 | 0 |
+| Qwen3.5 | baseline | 42.7 | 45.3 | +2.6 |
+| Qwen3.5 | traj_orig | 46.3 | 48.4 | +2.1 |
+| Qwen3.5 | traj_summary | 48.3 | 48.3 | 0 |
+| MiniMax | baseline | 27.3 | **48.7** | **+21.4** |
+| MiniMax | traj_orig | 48.0 | 54.0 | +6.0 |
+| MiniMax | traj_summary | 52.0 | 56.0 | +4.0 |
+
+**Headline:** MiniMax baseline correction (+21.4pp) is the most consequential — it had 71% context_limit rate, all of which were previously auto-failed. Pattern-wise, the summary-prepend advantage still holds for all three models. MiniMax now leads on every condition.
+
+---
+
+## 2026-04-26 — FRAMES Stage F1 (smoke) PASS → Stage F2 baselines submitted
+
+**Smoke test (job 7245695):** 10/10 trajectories landed in `runs/frames/BGE-M3/first10/glm-4.7-flash/seed0/`. Status: 8 completed + 2 incomplete. All have tool calls + original_messages. Spot-checked first trajectory (qid 2): BGE-M3 returned real Wikipedia content (Groundhog Day / Punxsutawney Phil snippet matching the query). End-to-end integration validated.
+
+**Stage F2 baselines submitted:**
+- GLM:     job **7248509** (`run_frames_test150_glm.SBATCH`)
+- Qwen3.5: job **7248510** (`run_frames_test150_qwen3_5.SBATCH`)
+- MiniMax: job **7248511** (`run_frames_test150_minimax.SBATCH`)
+
+Same architectural choices as BCP test150 SBATCHes, with these FRAMES-specific deltas:
+- `--searcher-type bge_m3` + `--bge-index-path/--bge-texts-path/--bge-device cuda:0/--bge-nprobe 128` (BGE-M3 on GPU per user directive)
+- Output dir under `runs/frames/BGE-M3/test150/<model>/seed0/` (BGE-M3 in path to disambiguate retriever from BCP's Qwen3-Embedding-8B)
+- `EMBED_RESERVE_GB` bumped from 5 → 10 for Qwen3.5 + MiniMax (BGE-M3 needs ~3 GB on GPU; 10 GB leaves headroom)
+- `EMBED_RESERVE_GB` stays at 25 for GLM (h100_tandon has plenty of headroom on 2×H100 80GB)
+- Dynamic vLLM port for h200_public co-tenancy (`PORT=$((20000 + SLURM_JOB_ID % 10000))`)
+
+---
+
+## 2026-04-26 — GLM selected_tool_calls run COMPLETED → eval submitted
+
+Job 7244602 finished in 49:30. 150/150 trajectories in `runs/bcp/Qwen3-Embedding-8B/test150/glm-4.7-flash/selected_tools_seed0/`. Eval submitted as job **7249478** (`sbatch/run_bcp_eval_glm_test150_selected_tools.SBATCH`). Once it completes, append a 4th GLM row to scout_explore.md.
+
+---
+
+## 2026-04-26 — GLM selected_tool_calls eval result
+
+Job 7249478 completed in 5:28.
+
+**GLM selected_tools (n=150):** Acc=46.7%, Recall=29.1%, avg_searches=8.6  
+- by status: completed=66/141 (46.8%), context_limit=4/9 (44.4%)
+
+GLM round-2 picture:
+| condition | Acc | Recall | searches |
+|---|---|---|---|
+| baseline | 48.0 | 55.4 | 22.0 |
+| traj_orig_ext | 47.3 | 20.3 | 4.3 |
+| traj_summary_orig_ext | **53.3** | 52.5 | 12.7 |
+| selected_tools | 46.7 | 29.1 | 8.6 |
+
+LLM-summary still wins for GLM. Selected-tool-calls underperforms: less helpful than the LLM summary (-6.6pp) and even slightly below baseline. Hypothesis: 5 raw excerpts ≈ 8.6 fresh searches' worth of context but lack the orienting synthesis the LLM summary provides; recall jumps vs traj_orig (20→29%) because the model still searches modestly, but accuracy doesn't catch up.
+
+scout_explore.md updated with the 4th GLM row.
+
+---
+
+## 2026-04-26 — FRAMES Qwen3.5 baseline (7248510) OOM with --bge-device cuda:0; falling back to CPU for both 2×H200 jobs
+
+**Symptom:** Qwen3.5 vLLM died with `EngineDeadError` after ~12 minutes; only 1/150 trajectory landed before crash. Root cause: `torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 139.80 GiB of which 11.44 MiB is free. Process 1434939 has 132.95 GiB memory in use.` vLLM consumed ~133 GiB of the 140 GB H200, leaving ~7 GiB. BGE-M3 (~2.3 GiB model) + FAISS shards (3 procs × ~1.7 GiB = ~5 GiB) + fragmentation pushed past the budget.
+
+**Fix:** the plan's documented fallback — drop BGE-M3 to CPU for both 2×H200 SBATCHes (Qwen3.5 + MiniMax). GLM stays on GPU since h100_tandon has plenty of headroom. Specific changes per SBATCH:
+- `--bge-device cuda:0` → `cpu`
+- `EMBED_RESERVE_GB=10` → `5` (no GPU need for BGE)
+- Add `export CUDA_VISIBLE_DEVICES=-1` before client (redundant given --bge-device cpu, but matches BCP convention)
+- Bump Qwen3.5 walltime 12h → 24h (CPU encoding adds ~1-2s/query on 16-thread parallel)
+
+**Resubmitted:** Qwen3.5 → job **7254737**, MiniMax → job **7254738**. Cancelled the dead 7248510 (still allocating gh109 with crashed engine) and the pending 7248511.
+
+---
+
+## 2026-04-26 — Symmetric force-final-answer at iter cap (all 3 clients)
+
+**Asymmetry found:** the agent loop's `context_limit` exit calls `_force_final_answer(...)` so the trajectory has a gradable final `output_text`. The iter-cap exit (`max_iterations=100` reached without the model returning a final answer) just returns `"incomplete"` with no final-answer call → eval skips those trajectories entirely (response = "" → grading short-circuits).
+
+**Fix:** patched all 3 clients (`glm_client.py:417`, `qwen35_client.py:416`, `minimax_client.py:416`) to call `_force_final_answer(...)` before the `"incomplete"` return. Symmetric with the `context_limit` branch.
+
+**FRAMES GLM fill-in:** the FRAMES test150 GLM baseline (job 7248509) had 13 trajectories at iter cap. Deleted those JSONs (resume-safe client → only re-runs missing qids) and resubmitted as job **7260922** with the patched client. The 13 should come back with status="incomplete" but a forced final answer the eval can grade.
+
+**Per-baseline auto-eval:** updated cron job (now `b759969b`) to submit `sbatch/run_frames_eval.SBATCH` (parameterized by MODEL+CONDITION env vars) the moment each FRAMES baseline reaches 150 trajectories — no longer waits for all 3. New eval SBATCH at `sbatch/run_frames_eval.SBATCH` uses BCP's `evaluate_run.py` against `data/frames_ground_truth.jsonl`.
+
+---
+
+## 2026-04-27 — FRAMES GLM baseline (post-fill-in) DONE → eval submitted
+
+GLM FRAMES test150 baseline now at 150/150 after fill-in (7260922) re-ran the 13 iter-cap qids with the patched client. New status distribution: **138 completed + 10 context_limit + 2 incomplete** (was 131 + 6 + 13 pre-fill-in). The 13 fill-in qids resolved as 7 → completed, 4 → context_limit, 2 → still incomplete (but now with forced final answers thanks to the iter-cap patch — eval will grade them).
+
+Eval submitted: job **7266999** (`sbatch --export=ALL,MODEL=glm-4.7-flash,CONDITION=seed0 sbatch/run_frames_eval.SBATCH`). When complete, append GLM row to scout_explore.md FRAMES section.
+
+## 2026-04-27 — GLM FRAMES eval result (job 7266999)
+
+**GLM FRAMES test150 baseline:** Acc=44.7%, Recall=n/a (FRAMES has no evidence qrels), avg_searches=27.7
+- by status: completed=64/138 (46.4%), context_limit=3/10 (30.0%), incomplete=0/2 (0%)
+
+GLM FRAMES (44.7%) is comparable to GLM BCP (48.0%). Avg search count noticeably higher on FRAMES (27.7 vs 22.0) — multi-hop reasoning queries push the agent to explore more before converging. Iter-cap patch worked: only 2 trajectories hit it this time, both with forced final answers (graded as 0/2 — bad luck on those two queries).
+
+scout_explore.md FRAMES section created with the GLM row; round-2 cells left blank pending Qwen3.5/MiniMax baselines + round-2 runs.
+
+---
+
+## 2026-04-27 — Per-model independent staging (cron `26f63469`)
+
+Old cron `b759969b` deleted; new cron `26f63469` does per-model independent staging instead of waiting for all 3 baselines before submitting any round-2 work. As soon as a model's baseline hits 150 trajectories, its traj_orig + summarize fire (in parallel); when summarize finishes, its traj_summary fires; each round-2 condition gets auto-evaluated when its trajectories complete.
+
+**GLM round-2 submitted now** (GLM baseline already done):
+- traj_orig → job **7281082** (`run_frames_test150_glm_traj_orig.SBATCH`)
+- summarize → job **7281083** (`run_frames_summarize_glm_test150.SBATCH`)
+
+**Created 9 round-2 SBATCHes** under `sbatch/`:
+- `run_frames_test150_{glm,qwen3_5,minimax}_traj_orig.SBATCH`
+- `run_frames_summarize_{glm,qwen3_5,minimax}_test150.SBATCH`
+- `run_frames_test150_{glm,qwen3_5,minimax}_traj_summary_orig.SBATCH`
+
+GLM uses `--bge-device cuda:0` (h100_tandon has plenty of VRAM headroom). Qwen3.5 + MiniMax use `--bge-device cpu` + `CUDA_VISIBLE_DEVICES=-1` for the client (h200_public's vLLM consumes ~133 GiB, leaves no GPU headroom for BGE-M3 → OOM history).
+
+---
+
+## 2026-04-27 — All 4 pending FRAMES jobs CANCELLED
+
+Jobs **7281082** (GLM FRAMES traj_orig), **7281083** (GLM FRAMES summarize), **7254737** (Qwen3.5 FRAMES baseline), **7254738** (MiniMax FRAMES baseline) all hit `CANCELLED+` state with `0:00:00` elapsed — i.e. cancelled while still pending, never started running. Likely user-initiated `scancel`. Cron will NOT autonomously resubmit (per the "never resubmit without diagnosing" rule); waiting for user direction.
+
+If the cancel was unintentional, resubmit with:
+```
+sbatch sbatch/run_frames_test150_qwen3_5.SBATCH
+sbatch sbatch/run_frames_test150_minimax.SBATCH
+sbatch sbatch/run_frames_test150_glm_traj_orig.SBATCH
+sbatch sbatch/run_frames_summarize_glm_test150.SBATCH
+```
+
+---
+
+## 2026-04-27 — Mass cancellation diagnosis: `CANCELLED by 0` (root)
+
+The 4 cancelled jobs (7254737, 7254738, 7281082, 7281083) all show `CANCELLED by 0` in `sacct -j <id> -o State%30 -X` — UID 0 is **root**. Cluster admin (or root-owned cleanup process) issued mass scancel at 2026-04-27T09:46:59. Likely cause: long-pending Priority queue on shared `h200_public` (the 2 baselines had been pending many hours; admins occasionally clear stale pendings, OR a maintenance reservation conflicted with the slots).
+
+**Resubmitted (with user authorization to auto-resubmit on root cancellations going forward):**
+- 7299058: Qwen3.5 baseline (resubmit of 7254737)
+- 7299059: MiniMax baseline (resubmit of 7254738)
+- 7299060: GLM traj_orig (resubmit of 7281082)
+- 7299061: GLM summarize (resubmit of 7281083)
+
+**Cron updated to `0ab38444`** with new rule: auto-resubmit on `CANCELLED by 0`, but still require diagnosis for FAILED/TIMEOUT/NODE_FAIL/`CANCELLED by <other_uid>`.
+
+---
+
+## 2026-04-27 — BCP selected_tools for Qwen3.5 + MiniMax (HIGH PRIORITY)
+
+User dropped 2 new selected_tool_calls JSONL files into `selected_tool_calls/` (150 entries each, already filtered to test150):
+- `selected_tool_calls_qwen3.5-122b-a10b_use_original_messages.jsonl`
+- `selected_tool_calls_minimax_use_original_messages.jsonl`
+
+Same `excerpt` field format as the GLM file → existing summary loader handles them natively. Created 2 SBATCHes (mirror of `run_bcp_test150_glm_selected_tools.SBATCH`):
+- `sbatch/run_bcp_test150_qwen3_5_selected_tools.SBATCH` → submitted as job **7311137**
+- `sbatch/run_bcp_test150_minimax_selected_tools.SBATCH` → submitted as job **7311140**
+
+**Cancelled to free h200_public queue priority**: FRAMES Qwen3.5 baseline (7299058, was at 1/150 — no progress lost) and FRAMES MiniMax baseline (7299059, 0/150). They will be resubmitted by the new cron `dfa110ab` after both selected_tools jobs (7311137, 7311140) complete.
+
+GLM FRAMES round-2 jobs (7299060 traj_orig, 7299061 summarize) remain in flight on h100_tandon — not affected.
+
+## 2026-04-27 — GLM FRAMES summarize COMPLETE → submitted traj_summary
+
+GLM FRAMES summarize (job 7299061) finished; `summaries/glm-4.7-flash_frames_test150.jsonl` has 150 lines. Submitted GLM traj_summary as job **7320902** (`run_frames_test150_glm_traj_summary_orig.SBATCH`). GLM FRAMES traj_orig (7299060) currently at 126/150, ~83% done.
+
+## 2026-04-27 — GLM FRAMES traj_orig done at 143/150 → eval submitted
+
+GLM FRAMES traj_orig (job 7299060) COMPLETED with 143/150 trajectories. Status distribution: 124 completed + 17 context_limit + 1 incomplete + 1 broken_tool_call. **7 qids missing entirely** (no output file): 26, 74, 78, 99, 127, 129, 132 — these errored before producing any trajectory file. Could fill in with a small resubmit (resume-safe client skips existing); deferring unless results look biased.
+
+Submitted eval on the 143 as job **7322121**. scout_explore.md will note partial coverage when the row is appended.
+
+## 2026-04-27 — GLM FRAMES traj_orig eval result + traj_summary eval submitted
+
+**GLM FRAMES traj_orig (job 7322121)** completed in 5:42. Result: Acc=46.2% (+1.5pp vs baseline 44.7%), avg_searches=8.5 (down from 27.7 — prepended trajectory makes the model search less). Per status: completed=62/124, context_limit=4/17, incomplete/broken_tool_call=0/1 each. n=143 due to 7 missing qids. scout_explore.md updated.
+
+**GLM FRAMES traj_summary** at 150/150 trajectories. Submitted eval as job **7324985**.
+
+## 2026-04-27 — GLM FRAMES traj_summary eval result — GLM FRAMES sweep COMPLETE
+
+**GLM FRAMES traj_summary (job 7324985)** completed in 4:12. Result: Acc=51.3% (+6.6pp vs baseline 44.7%, +5.1pp vs traj_orig 46.2%), avg_searches=14.9. Per status: completed=76/143 (53.1%), context_limit=1/5, incomplete=0/2.
+
+**GLM FRAMES sweep complete** — all 3 conditions populated:
+| condition | Acc | searches |
+|---|---|---|
+| baseline | 44.7 | 27.7 |
+| traj_orig_ext | 46.2 | 8.5 |
+| **traj_summary_orig_ext** | **51.3** | **14.9** |
+
+Same pattern as BCP: summary-prepend wins (+6.6pp on FRAMES; +5.3pp on BCP). traj_orig collapses search count without much accuracy gain.
+
+## 2026-04-27 — Random tools ablation submitted
+
+User dropped 3 random ablation files into `selected_tool_calls/`:
+- `glm_random_tools_calls.jsonl` (830 lines)
+- `qwen3.5-122b-a10b_random_tools_calls.jsonl` (150 lines)
+- `minimax_random_tools_calls.jsonl` (150 lines)
+
+Same `excerpt` field schema as the gemini-selected versions — plug-and-play.
+
+**Created 3 run SBATCHes + 4 eval SBATCHes** (mirrored from selected_tools templates):
+- `run_bcp_test150_{glm,qwen3_5,minimax}_random_tools.SBATCH`
+- `run_bcp_eval_{glm,qwen3_5,minimax}_test150_random_tools.SBATCH` + previously-missing eval SBATCHes for qwen3_5/minimax selected_tools
+
+**GLM random_tools submitted now** as job **7332862** (h100_tandon, parallel to FRAMES selected_tools). Qwen3.5 + MiniMax random_tools queued for cron auto-submission after their selected_tools complete (h200_public is bottleneck — submitting both would just fight for the same slot).
+
+**Cron updated to `b601b394`** with new state machine:
+- Auto-eval each (model, condition) when 150 trajectories land
+- Auto-submit Qwen3.5/MiniMax random_tools when their selected_tools finish
+- Resubmit FRAMES baselines after all BCP work clears
+
+---
+
+## 2026-04-27 — Storage relocation: home → scratch (file-count quota was at 93%)
+
+**Problem:** `/home/afw8937` hit 27,991/30,000 inodes (93%). The bulk of inodes lived in `evals/` (~2,626 per-query JSON files) and an `evals.backup_pre_force_answer_fix_2026-04-26/` directory (~2,000 more files from a safety snapshot earlier in the session). Mid-day, several running BCP jobs failed because the user moved `runs/` and `data/` out of `/home` to `/scratch/afw8937/temp-upload/` to avoid the inode wall:
+
+- 7311137 (Qwen3.5 selected_tools): every query failed with "Connection error" — vLLM-side died likely because the relative path `runs/...` disappeared mid-write
+- 7311140 (MiniMax selected_tools): exited 13 in 0:02 during setup, same root cause
+- 7332862 (GLM random_tools): "COMPLETED" but only 81/150 trajectories landed before output dir vanished
+
+**Fix applied (2026-04-27):**
+1. Deleted `evals.backup_pre_force_answer_fix_2026-04-26/` — eval bug-fix already validated by the corrected scout_explore.md numbers; backup no longer needed (~2,000 inodes recovered)
+2. Moved `evals/` → `/scratch/afw8937/temp-upload/evals/` and symlinked
+3. Moved `summaries/` → `/scratch/afw8937/temp-upload/summaries/` and symlinked
+4. Created symlinks for the user's pre-existing moves: `runs/` → `/scratch/.../runs/`, `data/` → `/scratch/.../data/`
+5. Resubmitted the 2 BCP selected_tools jobs (7369110, 7369111) and the GLM random_tools eval on the partial 81 (7369183)
+
+**Where outputs go now:**
+
+| Path in repo | Resolves to | Notes |
+|---|---|---|
+| `runs/*` | `/scratch/afw8937/temp-upload/runs/*` | Trajectory JSON outputs |
+| `evals/*` | `/scratch/afw8937/temp-upload/evals/*` | Per-query + summary eval JSONs |
+| `summaries/*` | `/scratch/afw8937/temp-upload/summaries/*` | Trajectory summaries |
+| `data/*` | `/scratch/afw8937/temp-upload/data/*` | Ground-truth + input JSONLs |
+| Logs (`#SBATCH --output=`) | `/scratch/afw8937/logs/` directly | Already on scratch — no change |
+| `selected_tool_calls/*` | `/home/...` (still home) | Read-only inputs, only 6 files — not a quota concern |
+| HF cache (`HF_HOME`) | `/scratch/afw8937/.huggingface/` | Already on scratch via singularity bind |
+| vLLM container (SIF + overlay) | `/scratch/afw8937/singularity_images/` | Already on scratch |
+
+All SBATCHes use relative paths (`runs/...`, `evals/...`, `summaries/...`) so they transparently resolve through the symlinks — **no SBATCH edits required**.
+
+**Quota after cleanup:** /home 25,172/30,000 inodes (83%). /scratch 1.8 TB / 5 TB (36%) — plenty of headroom.
+
+**Going forward:** any new SBATCHes should use the same relative-path pattern. If the user ever rebuilds the project on a fresh checkout, they'll need to recreate these 4 symlinks (or `mkdir -p` real dirs if they want home-resident).
+
+## 2026-04-28 — GLM BCP random_tools eval result (partial n=81)
+
+Job 7369183 completed; ablation on the 81 trajectories that landed before the dir-move interruption (job 7332862 only got 81/150 of `random_tools_seed0/` written).
+
+**GLM random_tools (n=81):** Acc=49.4%, Recall=36.5%, avg_searches=9.1
+
+**Surprising on partial:** Random tool calls (49.4%) currently *out-performs* Gemini-selected (46.7%) on GLM. Heavy caveat — different N (81 vs 150), so the random subset may be enriched for easier queries (the 81 that completed before the disruption are the queries the agent dispatched first). Need full 150-query random_tools run to confirm. If the gap holds with full data, it suggests Gemini's selection of "useful" tool calls is no better than random for downstream answer accuracy in this regime.
+
+scout_explore.md updated with the partial row.
+
+## 2026-04-28 — GLM random_tools fillin submitted
+
+Resubmitted `run_bcp_test150_glm_random_tools.SBATCH` as job **7370023**. Client is resume-safe — will skip the 81 already-completed qids and process the missing 69. Once all 150 land, re-eval needs to overwrite the partial-81 result; the eval SBATCH already has `--force` so just resubmitting the eval after will do the right thing. The cron will auto-re-eval when 150 trajectories are present (its guard checks `evaluation_summary.json` exists, so we'd need to delete that first to trigger re-eval — manual: `rm evals/bcp/Qwen3-Embedding-8B/test150/glm-4.7-flash/random_tools_seed0/*` after the run completes).
+
+## 2026-04-28 — GLM random_tools 150/150 → full eval submitted
+
+GLM random_tools fillin (job 7370023) brought trajectory count from 81 → 150. Full eval submitted as job **7371029**. Will overwrite the partial-81 row (49.4%) in scout_explore.md with the corrected full-150 numbers.
+
+## 2026-04-28 — FRAMES recall computed post-hoc (article-level, n=39 subsample)
+
+Built `topics-qrels/frames/qrel_evidence.txt` from joining `frames-all-gt.jsonl` `wiki_links` with `frames_wiki_url_to_rowindex.json`. Two issues encountered:
+
+1. **URL match rate: 21%** — only 234/2496 unique GT URLs found in the BGE-M3 corpus URL map. Causes likely: redirects, anchor fragments, non-English variants, or articles outside the indexed Upstash subset. After matching, 172/824 qids (21%) have any evidence; on test150 this is 39/150 qids.
+2. **URL → list of row_ids, not single row_id** — each Wikipedia article is split into many passages. Bug fixed in `scripts/compute_frames_recall.py` by expanding the list into multiple qrel lines.
+
+**Article-level recall** (more meaningful than passage-level — agent only needs to retrieve ≥1 passage per article) computed by grouping consecutive row_ids per qid into "articles". The script lives at `scripts/compute_frames_recall.py` — set-intersection only, no LLM judge needed.
+
+**Results — GLM FRAMES, n=39 with evidence:**
+| condition | article-recall |
+|---|---|
+| baseline | 62.8% |
+| traj_orig_ext | 16.9% |
+| traj_summary_orig_ext | 41.2% |
+
+Pattern matches BCP recall: traj_orig collapses; traj_summary partially recovers; baseline is highest.
