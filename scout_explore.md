@@ -2,6 +2,14 @@
 
 **Setup:** 150-query test slice on each benchmark. LLM-as-judge: Qwen3-32B. All numbers reflect the corrected `evaluate_run.py` (eval bug fix, 2026-04-26) that grades `context_limit` trajectories using their forced final answers; pre-fix numbers undercounted accuracy for verbose models (full diff in NOTABLE_ASSUMPTIONS.md).
 
+**Conditions tested** (each model is evaluated under all 5):
+
+1. **Baseline** — agent runs with no prepended evidence; standard agentic loop.
+2. **+ full trajectory** — the entire first-run trajectory (all tool calls + observations) is injected into the prompt before the agent starts. Tests the upper bound of "everything we already learned."
+3. **+ trajectory summary** — an LLM-generated summary of the first-run trajectory is injected instead of the raw trajectory. Tests whether a compressed orientation helps.
+4. **+ selected k=5 tool calls** — Gemini selects the 5 most useful tool-call/observation pairs from the first-run trajectory and prepends only those excerpts. Tests whether targeted excerpts beat full or summary.
+5. **+ random k=5 tool calls (ablation)** — 5 tool-call/observation pairs sampled uniformly at random from the first-run trajectory. Controls for whether the *selection* matters or just the *amount* of prepended evidence.
+
 ---
 
 ## BrowseComp-Plus (BCP) — Qwen3-Embedding-8B retriever
