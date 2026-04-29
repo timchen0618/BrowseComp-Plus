@@ -13,9 +13,9 @@
 #
 # Optional env vars:
 #   DATA_DIR   where prepare_dataset.py writes train.jsonl / val.jsonl
-#              (default: sft/axolotl/data)
+#              (default: sft/axolotl/data/raw/data_qwen)
 #   CONFIG     Axolotl YAML config
-#              (default: sft/axolotl/qwen3_30b_a3b_search_sft.yaml)
+#              (default: sft/axolotl/qwen3.5_4b_search_sft.yaml)
 #   SPLIT      prepare_dataset --split (default: bcp-train680-test150)
 #   VAL_SIZE   only for --split random: val fraction (default: 0.1)
 #   SEED       only for --split random: shuffle seed (default: 42)
@@ -37,7 +37,7 @@ cd "${REPO_ROOT}"
 : "${INPUT:?set INPUT to a selected-tool-calls JSONL}"
 : "${TRAJECTORY_FOLDER:?set TRAJECTORY_FOLDER to the folder holding source_file trajectories}"
 
-DATA_DIR="${DATA_DIR:-sft/axolotl/data_qwen}"
+DATA_DIR="${DATA_DIR:-sft/axolotl/data/raw/data_qwen}"
 # CONFIG="${CONFIG:-sft/axolotl/qwen3_30b_a3b_search_sft.yaml}"
 CONFIG="${CONFIG:-sft/axolotl/qwen3.5_4b_search_sft.yaml}"
 SPLIT="${SPLIT:-bcp-train680-test150}"

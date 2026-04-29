@@ -8,11 +8,11 @@ from pathlib import Path
 
 TRAJ_FOLDER = Path("/scratch/hc3337/projects/BrowseComp-Plus/runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4")
 ORIGINAL    = Path("/scratch/hc3337/projects/BrowseComp-Plus/selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl")
-TRAIN_GPT   = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/train.jsonl")
-VAL_GPT     = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/val.jsonl")
-TRAIN_QWEN  = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data_qwen/train.jsonl")
-VAL_QWEN    = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data_qwen/val.jsonl")
-OUTPUT      = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/sft_diff_combined.jsonl")
+TRAIN_GPT   = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data/train.jsonl")
+VAL_GPT     = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data/val.jsonl")
+TRAIN_QWEN  = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data_qwen/train.jsonl")
+VAL_QWEN    = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data_qwen/val.jsonl")
+OUTPUT      = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data_qwen/sft_diff_combined.jsonl")
 
 def build_index(paths):
     idx = {}  # first_user_content -> messages list

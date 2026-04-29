@@ -5,7 +5,7 @@
 #   python sft/axolotl/prepare_dataset.py \
 #       --input selected_tool_calls/<file>.jsonl \
 #       --trajectory-folder runs/bcp/.../<seed> \
-#       --output-dir sft/axolotl/data
+#       --output-dir sft/axolotl/data/raw/data_qwen
 #   axolotl preprocess sft/axolotl/qwen3_30b_a3b_search_sft.yaml
 #   accelerate launch -m axolotl.cli.train sft/axolotl/qwen3_30b_a3b_search_sft.yaml
 
@@ -19,7 +19,7 @@ trust_remote_code: true
 chat_template: qwen3
 
 datasets:
-  - path: sft/axolotl/data_qwen/train.jsonl
+  - path: sft/axolotl/data/raw/data_qwen/train.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -32,7 +32,7 @@ datasets:
     train_on_eos: turn
 
 test_datasets:
-  - path: sft/axolotl/data_qwen/val.jsonl
+  - path: sft/axolotl/data/raw/data_qwen/val.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -42,7 +42,7 @@ test_datasets:
     train_on_eos: turn
     split: train
 
-dataset_prepared_path: sft/axolotl/prepared
+dataset_prepared_path: sft/axolotl/data/prepared/data_qwen
 output_dir: sft/checkpoints/axolotl-qwen3-30b-a3b
 
 sequence_len: 4096

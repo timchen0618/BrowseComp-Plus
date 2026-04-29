@@ -19,7 +19,7 @@ trust_remote_code: true
 chat_template: qwen3
 
 datasets:
-  - path: sft/axolotl/data_qwen_correct_split/train.jsonl
+  - path: sft/axolotl/data/raw/data_qwen_correct_split/train.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -32,7 +32,7 @@ datasets:
     train_on_eos: turn
 
 test_datasets:
-  - path: sft/axolotl/data_qwen_correct_split/val.jsonl
+  - path: sft/axolotl/data/raw/data_qwen_correct_split/val.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -42,7 +42,7 @@ test_datasets:
     train_on_eos: turn
     split: train
 
-dataset_prepared_path: sft/axolotl/prepared_correct_split
+dataset_prepared_path: sft/axolotl/data/prepared/data_qwen_correct_split
 output_dir: sft/checkpoints/axolotl-qwen3-4b-search-correct-split
 
 sequence_len: 32768

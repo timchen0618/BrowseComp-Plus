@@ -1,0 +1,14 @@
+[
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0"
+    },
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed1/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed5",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed1"
+    }
+  ]

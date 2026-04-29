@@ -33,11 +33,45 @@ assigned using the BrowseComp-Plus fixed split in
 `scripts/split_bcp_test150.py`). Each input row needs a `query_id` field or a
 resolvable `source_file` trajectory containing `query_id`. Use `--split random`
 for the previous fractional holdout behavior.
+
+Multi-input mode (--multi-input):
+    Instead of a single --input + --trajectory-folder pair, provide a JSON
+    config file listing multiple (input, trajectory_folder, subsequent_folder,
+    subsequent_eval_folder) tuples. Use --mode to choose how candidates for
+    each query_id are selected across the multiple inputs:
+
+      mode a: pick one candidate per query_id — the shortest successful run;
+              if none succeed, the shortest run overall.
+
+      mode b: include ALL successful candidates per query_id; if none succeed,
+              include exactly one chosen at random.
+
+    Config file format (list of objects):
+      [
+        {
+          "input":                 "path/to/selected_tool_calls.jsonl",
+          "trajectory_folder":     "path/to/source_trajectory_folder",
+          "subsequent_folder":     "path/to/subsequent_run_folder",
+          "subsequent_eval_folder": "path/to/subsequent_eval_folder"
+        },
+        ...
+      ]
+
+    * trajectory_folder     — source trajectories referenced by source_file
+                              (used for original_messages / the prompt).
+    * subsequent_folder     — trajectories produced when the agent continued
+                              executing from the selected tool calls; used to
+                              measure trajectory length.
+    * subsequent_eval_folder — eval results (*_eval.json) for the subsequent
+                              runs; used to determine success
+                              (judge_result.correct). Optional: if omitted,
+                              all candidates are treated as unsuccessful.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import random
 from pathlib import Path
@@ -53,6 +87,12 @@ DEFAULT_BCP_QUERIES_TEST_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_tes
 SPLIT_RANDOM = "random"
 SPLIT_BCP_TRAIN680_TEST150 = "bcp-train680-test150"
 SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150)
+
+MODE_A = "a"
+MODE_B = "b"
+MODE_CHOICES = (MODE_A, MODE_B)
+
+_INF_LENGTH: float = float("inf")
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +370,153 @@ def _coerce_excerpt(
 
 
 # ---------------------------------------------------------------------------
+# Multi-input: subsequent-execution helpers and candidate selection
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class _MultiInputSpec:
+    """One entry from the --multi-input JSON config."""
+    input_path: Path
+    trajectory_folder: Path
+    subsequent_folder: Path
+    subsequent_eval_folder: Optional[Path]
+
+
+@dataclasses.dataclass
+class _Candidate:
+    """A selected-tool-calls record with its associated metadata."""
+    record: Dict[str, Any]
+    source_cache: _SourceTrajectoryCache
+    success: bool
+    subsequent_length: float  # float so we can use inf for unknown
+
+
+def _load_subsequent_folder(path: Path) -> Dict[str, int]:
+    """Scan a folder of trajectory JSONs. Return {query_id: result_length}."""
+    mapping: Dict[str, int] = {}
+    for p in sorted(path.glob("*.json")):
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        qid = data.get("query_id")
+        if not qid:
+            continue
+        qid = str(qid).strip()
+        if qid in mapping:
+            print(f"[warn] duplicate query_id {qid!r} in {path}, using first seen")
+            continue
+        mapping[qid] = len(data.get("result", []))
+    return mapping
+
+
+def _load_subsequent_eval_folder(path: Path) -> Dict[str, bool]:
+    """Scan eval folder for *_eval.json files. Return {query_id: correct}."""
+    mapping: Dict[str, bool] = {}
+    for p in sorted(path.glob("*_eval.json")):
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        qid = data.get("query_id")
+        if not qid:
+            continue
+        qid = str(qid).strip()
+        if qid in mapping:
+            print(f"[warn] duplicate query_id {qid!r} in {path}, using first seen")
+            continue
+        correct = bool((data.get("judge_result") or {}).get("correct", False))
+        mapping[qid] = correct
+    return mapping
+
+
+def _load_multi_input_specs(config_path: Path) -> List[_MultiInputSpec]:
+    with config_path.open("r", encoding="utf-8") as f:
+        entries = json.load(f)
+    if not isinstance(entries, list):
+        raise ValueError(f"--multi-input JSON must be a list, got {type(entries).__name__}")
+    specs: List[_MultiInputSpec] = []
+    for i, entry in enumerate(entries):
+        input_path = Path(entry["input"])
+        traj_folder = Path(entry["trajectory_folder"])
+        subseq_folder = Path(entry["subsequent_folder"])
+        eval_folder = Path(entry["subsequent_eval_folder"]) if entry.get("subsequent_eval_folder") else None
+        specs.append(_MultiInputSpec(input_path, traj_folder, subseq_folder, eval_folder))
+    return specs
+
+
+def _select_mode_a(candidates: List[_Candidate]) -> Optional[_Candidate]:
+    """Setting A: shortest successful run; if none succeed, shortest run overall."""
+    if not candidates:
+        return None
+    successful = [c for c in candidates if c.success]
+    pool = successful if successful else candidates
+    return min(pool, key=lambda c: c.subsequent_length)
+
+
+def _select_mode_b(candidates: List[_Candidate], rng: random.Random) -> List[_Candidate]:
+    """Setting B: all successful runs; if none succeed, exactly one at random."""
+    if not candidates:
+        return []
+    successful = [c for c in candidates if c.success]
+    if successful:
+        return successful
+    return [rng.choice(candidates)]
+
+
+def _build_candidates_per_query(specs: List[_MultiInputSpec]) -> Dict[str, List[_Candidate]]:
+    """Load all input specs and group candidates by query_id."""
+    grouped: Dict[str, List[_Candidate]] = {}
+    for spec in specs:
+        if not spec.input_path.is_file():
+            print(f"[warn] input not found: {spec.input_path}, skipping")
+            continue
+        if not spec.trajectory_folder.is_dir():
+            print(f"[warn] trajectory_folder not found: {spec.trajectory_folder}, skipping")
+            continue
+        if not spec.subsequent_folder.is_dir():
+            print(f"[warn] subsequent_folder not found: {spec.subsequent_folder}, skipping")
+            continue
+
+        source_cache = _SourceTrajectoryCache(spec.trajectory_folder)
+        subseq_lengths = _load_subsequent_folder(spec.subsequent_folder)
+
+        eval_map: Dict[str, bool] = {}
+        if spec.subsequent_eval_folder is not None:
+            if spec.subsequent_eval_folder.is_dir():
+                eval_map = _load_subsequent_eval_folder(spec.subsequent_eval_folder)
+            else:
+                print(f"[warn] subsequent_eval_folder not found: {spec.subsequent_eval_folder}")
+
+        for record in _iter_jsonl(spec.input_path):
+            qid = record.get("query_id")
+            if qid is None or not str(qid).strip():
+                src = record.get("source_file")
+                if src:
+                    traj = source_cache.load(str(src))
+                    if traj:
+                        qid = traj.get("query_id")
+            if not qid or not str(qid).strip():
+                continue
+            qid = str(qid).strip()
+
+            success = eval_map.get(qid, False)
+            length = float(subseq_lengths.get(qid, _INF_LENGTH))
+
+            candidate = _Candidate(
+                record=record,
+                source_cache=source_cache,
+                success=success,
+                subsequent_length=length,
+            )
+            grouped.setdefault(qid, []).append(candidate)
+
+    return grouped
+
+
+# ---------------------------------------------------------------------------
 # I/O helpers & driver
 # ---------------------------------------------------------------------------
 
@@ -354,21 +541,48 @@ def _write_jsonl(path: Path, records: List[Dict[str, Any]]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+
+    # ---- single-input mode args (original) ----
     parser.add_argument(
         "--input",
         type=Path,
-        required=True,
+        default=None,
         help="Path to a selected-tool-calls JSONL with {source_file, excerpt, ...} rows.",
     )
     parser.add_argument(
         "--trajectory-folder",
         type=Path,
-        required=True,
+        default=None,
         help=(
             "Folder containing the source trajectory JSON files referenced "
             "by each record's `source_file` field."
         ),
     )
+
+    # ---- multi-input mode args (new) ----
+    parser.add_argument(
+        "--multi-input",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON config file listing multiple input specs for "
+            "multi-trajectory selection. Each entry must have: input, "
+            "trajectory_folder, subsequent_folder, and optionally "
+            "subsequent_eval_folder. Mutually exclusive with --input."
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=MODE_CHOICES,
+        default=None,
+        help=(
+            "Candidate selection mode for --multi-input. "
+            "'a': one per query_id — shortest successful run, else shortest overall. "
+            "'b': all successful runs per query_id, else one at random."
+        ),
+    )
+
+    # ---- shared args ----
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -414,7 +628,7 @@ def main() -> None:
         "--seed",
         type=int,
         default=42,
-        help=f"With --split {SPLIT_RANDOM}: shuffle seed.",
+        help=f"With --split {SPLIT_RANDOM}: shuffle seed. Also used for --mode b random selection.",
     )
     parser.add_argument(
         "--template",
@@ -430,12 +644,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.input.is_file():
-        parser.error(f"--input not found: {args.input}")
-    if not args.trajectory_folder.is_dir():
-        parser.error(
-            f"--trajectory-folder not found or not a dir: {args.trajectory_folder}"
-        )
+    # ---- validate mode choice ----
+    multi_mode = args.multi_input is not None
+    single_mode = args.input is not None
+
+    if multi_mode and single_mode:
+        parser.error("--multi-input and --input are mutually exclusive.")
+    if not multi_mode and not single_mode:
+        parser.error("Provide either --input (single-input mode) or --multi-input (multi-input mode).")
+
+    if multi_mode and args.mode is None:
+        parser.error("--mode {a,b} is required with --multi-input.")
+    if single_mode and args.trajectory_folder is None:
+        parser.error("--trajectory-folder is required with --input.")
 
     if args.split == SPLIT_BCP_TRAIN680_TEST150:
         if not args.queries_train_tsv.is_file():
@@ -443,48 +664,116 @@ def main() -> None:
         if not args.queries_test_tsv.is_file():
             parser.error(f"--queries-test-tsv not found: {args.queries_test_tsv}")
 
-    source_cache = _SourceTrajectoryCache(args.trajectory_folder)
+    rng = random.Random(args.seed)
 
-    raw_total = 0
+    # ---- collect kept examples ----
     kept: List[Dict[str, Any]] = []
     dropped_schema = 0
     dropped_missing_source = 0
     dropped_bad_excerpt = 0
 
-    for record in _iter_jsonl(args.input):
-        raw_total += 1
-        messages, reason = _coerce_excerpt(record, source_cache, args.template)
-        if messages is None:
-            if reason == "schema":
-                dropped_schema += 1
-            elif reason == "missing_source":
-                dropped_missing_source += 1
-            else:
-                dropped_bad_excerpt += 1
-            continue
-        row: Dict[str, Any] = {"messages": messages}
-        if args.split == SPLIT_BCP_TRAIN680_TEST150:
-            qid = _query_id_from_record(record, source_cache)
-            if qid is None:
-                dropped_bad_excerpt += 1
-                continue
-            row["_query_id"] = qid
-        kept.append(row)
+    if single_mode:
+        # ---- original single-input path ----
+        if not args.input.is_file():
+            parser.error(f"--input not found: {args.input}")
+        if not args.trajectory_folder.is_dir():
+            parser.error(
+                f"--trajectory-folder not found or not a dir: {args.trajectory_folder}"
+            )
 
-    if not kept:
-        raise SystemExit(
-            f"No usable examples found in {args.input}. "
+        source_cache = _SourceTrajectoryCache(args.trajectory_folder)
+        raw_total = 0
+
+        for record in _iter_jsonl(args.input):
+            raw_total += 1
+            messages, reason = _coerce_excerpt(record, source_cache, args.template)
+            if messages is None:
+                if reason == "schema":
+                    dropped_schema += 1
+                elif reason == "missing_source":
+                    dropped_missing_source += 1
+                else:
+                    dropped_bad_excerpt += 1
+                continue
+            row: Dict[str, Any] = {"messages": messages}
+            if args.split == SPLIT_BCP_TRAIN680_TEST150:
+                qid = _query_id_from_record(record, source_cache)
+                if qid is None:
+                    dropped_bad_excerpt += 1
+                    continue
+                row["_query_id"] = qid
+            kept.append(row)
+
+        print(
+            f"single-input: read={raw_total} kept={len(kept)} "
             f"dropped_schema={dropped_schema} "
             f"dropped_missing_source={dropped_missing_source} "
             f"dropped_bad_excerpt={dropped_bad_excerpt}"
         )
 
+    else:
+        # ---- multi-input path ----
+        if not args.multi_input.is_file():
+            parser.error(f"--multi-input not found: {args.multi_input}")
+
+        specs = _load_multi_input_specs(args.multi_input)
+        grouped = _build_candidates_per_query(specs)
+
+        total_qids = len(grouped)
+        selected_count = 0
+
+        for qid, candidates in grouped.items():
+            if args.mode == MODE_A:
+                chosen = _select_mode_a(candidates)
+                chosen_list = [chosen] if chosen is not None else []
+            else:
+                chosen_list = _select_mode_b(candidates, rng)
+
+            for candidate in chosen_list:
+                messages, reason = _coerce_excerpt(
+                    candidate.record, candidate.source_cache, args.template
+                )
+                if messages is None:
+                    if reason == "schema":
+                        dropped_schema += 1
+                    elif reason == "missing_source":
+                        dropped_missing_source += 1
+                    else:
+                        dropped_bad_excerpt += 1
+                    continue
+                row = {"messages": messages}
+                if args.split == SPLIT_BCP_TRAIN680_TEST150:
+                    row["_query_id"] = qid
+                kept.append(row)
+                selected_count += 1
+
+        n_success = sum(
+            1 for candidates in grouped.values() if any(c.success for c in candidates)
+        )
+        print(
+            f"multi-input (mode={args.mode}): "
+            f"total_query_ids={total_qids} "
+            f"query_ids_with_success={n_success} "
+            f"selected_examples={selected_count} "
+            f"dropped_schema={dropped_schema} "
+            f"dropped_missing_source={dropped_missing_source} "
+            f"dropped_bad_excerpt={dropped_bad_excerpt}"
+        )
+
+    if not kept:
+        raise SystemExit(
+            "No usable examples found. "
+            f"dropped_schema={dropped_schema} "
+            f"dropped_missing_source={dropped_missing_source} "
+            f"dropped_bad_excerpt={dropped_bad_excerpt}"
+        )
+
+    # ---- train/val split ----
     train: List[Dict[str, Any]]
     val: List[Dict[str, Any]]
     dropped_split = 0
 
     if args.split == SPLIT_RANDOM:
-        rng = random.Random(args.seed)
         rng.shuffle(kept)
         n_val = int(round(len(kept) * args.val_size)) if args.val_size > 0 else 0
         val, train = kept[:n_val], kept[n_val:]
@@ -518,25 +807,30 @@ def main() -> None:
         _write_jsonl(val_path, val)
         print(f"wrote {len(val):>6} -> {val_path}")
 
-    extra = ""
-    if args.split == SPLIT_BCP_TRAIN680_TEST150 and dropped_split:
-        extra = f" dropped_split={dropped_split}"
-
-    print(
-        "summary: "
-        f"read={raw_total} kept={len(kept)} "
-        f"dropped_schema={dropped_schema} "
-        f"dropped_missing_source={dropped_missing_source} "
-        f"dropped_bad_excerpt={dropped_bad_excerpt}"
-        f"{extra}"
-    )
-
 
 if __name__ == "__main__":
     main()
 
+    # Single-input example:
     # python sft/axolotl/prepare_dataset.py \
     # --input selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl \
     # --trajectory-folder runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
-    # --output-dir sft/axolotl/data \
+    # --output-dir sft/axolotl/data/raw/data_qwen \
     # --template "qwen"
+
+    # Multi-input example (mode a):
+    # python sft/axolotl/prepare_dataset.py \
+    # --multi-input sft/axolotl/multi_input_config.json \
+    # --mode a \
+    # --output-dir sft/axolotl/data/raw/data_qwen \
+    # --template "qwen"
+    #
+    # multi_input_config.json:
+    # [
+    #   {
+    #     "input": "selected_tool_calls/test150/gpt-oss-120b/seed4.jsonl",
+    #     "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/test150/gpt-oss-120b/seed4",
+    #     "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/test150/gpt-oss-120b/subsequent_seed4",
+    #     "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/test150/gpt-oss-120b/subsequent_seed4"
+    #   }
+    # ]

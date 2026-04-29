@@ -3,7 +3,7 @@ from pathlib import Path
 from datasets import Dataset
 from huggingface_hub import HfApi
 
-COMBINED = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/sft_diff_combined.jsonl")
+COMBINED = Path("/scratch/hc3337/projects/BrowseComp-Plus/sft/axolotl/data/raw/data_qwen/sft_diff_combined.jsonl")
 HF_REPO  = "timchen0618/browsecomp-plus-sft-diff-v1"
 
 api = HfApi()
