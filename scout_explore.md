@@ -31,8 +31,8 @@
 | Baseline | 45.3 | 54.3 | 21.8 |
 | + full trajectory | 48.4 | 0.0 | 0.1 |
 | + trajectory summary | 48.3 | 56.5 | 14.4 |
-| **+ selected k=5 tool calls** (N=148) | **48.7** | 25.4 | 15.9 |
-| + random k=5 tool calls (ablation) | TBD | TBD | TBD |
+| + selected k=5 tool calls (N=148) | 48.7 | 25.4 | 15.9 |
+| **+ random k=5 tool calls (ablation, N=130)** | **54.6** | 30.7 | 14.3 |
 
 **Model: MiniMax-M2.5 (229B)**
 
