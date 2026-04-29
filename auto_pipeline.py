@@ -115,12 +115,12 @@ def collect_targets() -> list[Target]:
     import submit_missing as sm
 
     groups = [
-        (sm.MISSING,                  sm.TEMPLATE_PATH,           "full",     "bcp"),
+        (sm.MISSING_TEST150,          sm.TEMPLATE_PATH_TEST150,   "test150",  "bcp"),
         (sm.MISSING_FIRST50,          sm.TEMPLATE_PATH_FIRST50,   "first50",  "bcp"),
+        (sm.MISSING,                  sm.TEMPLATE_PATH,           "full",     "bcp"),
+        (sm.MISSING_TRAIN680,         sm.TEMPLATE_PATH_TRAIN680,  "train680", "bcp"),
         (sm.MISSING_FRAMES_FIRST50,   sm.TEMPLATE_PATH_FIRST50,   "first50",  "frames"),
         (sm.MISSING_MUSIQUE_FIRST50,  sm.TEMPLATE_PATH_FIRST50,   "first50",  "musique"),
-        (sm.MISSING_TEST150,          sm.TEMPLATE_PATH_TEST150,   "test150",  "bcp"),
-        (sm.MISSING_TRAIN680,         sm.TEMPLATE_PATH_TRAIN680,  "train680", "bcp"),
     ]
     targets: list[Target] = []
     for missing_dict, template, split, dataset in groups:
@@ -787,16 +787,21 @@ def run_pipeline(args) -> int:
     if state.phase in ("init", "preflight", "submitting"):
         state.phase = "submitting"
         save_state(state)
+        first_submission = True
         for ts in state.targets:
             missing_shards, missing_qids = compute_actual_missing(ts.target)
             ts.missing_qids = missing_qids
             if not missing_shards:
                 ts.status = "complete"
                 continue
+            if args.submit and not first_submission:
+                log.info("sleeping %ds before next submission", args.submit_interval)
+                time.sleep(args.submit_interval)
             jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
             if jid is not None:
                 ts.submitted_job_ids.append(jid)
                 ts.status = "submitting"
+                first_submission = False
             else:
                 ts.status = "running" if args.submit else "pending"
         save_state(state)
@@ -846,6 +851,9 @@ def run_pipeline(args) -> int:
                 continue
             missing_shards, _ = compute_actual_missing(ts.target)
             if missing_shards:
+                if args.submit and any_submitted:
+                    log.info("sleeping %ds before next submission", args.submit_interval)
+                    time.sleep(args.submit_interval)
                 jid = submit_target(ts.target, shards=missing_shards, submit=args.submit)
                 if jid is not None:
                     ts.submitted_job_ids.append(jid)
@@ -899,6 +907,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submit", action="store_true", help="Actually submit (default: dry-run)")
     parser.add_argument("--interval-seconds", type=int, default=7200)
+    parser.add_argument("--submit-interval", type=int, default=200,
+                        help="Seconds to sleep between consecutive sbatch submissions")
     parser.add_argument("--stuck-threshold", type=int, default=3)
     parser.add_argument("--skip-preflight", action="store_true")
     parser.add_argument("--skip-eval", action="store_true")

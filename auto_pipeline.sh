@@ -77,9 +77,20 @@ SBATCH_EOF
 
     # USR1 = SLURM pre-termination warning (300s before time limit)
     # TERM = SLURM kill at time limit
+    _CHAIN_SUBMITTED=0
+
+    _submit_next_once() {
+        if [ "$_CHAIN_SUBMITTED" = "1" ]; then
+            echo "Chain already submitted; skipping duplicate."
+            return 0
+        fi
+        _submit_next || echo "WARNING: chain submission failed"
+        _CHAIN_SUBMITTED=1
+    }
+
     _on_signal() {
         echo "Signal received at $(date); chaining next job..."
-        _submit_next || echo "WARNING: chain submission failed"
+        _submit_next_once
         [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null
         wait "$CHILD_PID" 2>/dev/null || true
         exit 0
@@ -93,7 +104,7 @@ SBATCH_EOF
     CHILD_PID=""
 
     # Python exited normally — chain if not done
-    _submit_next || true
+    _submit_next_once || true
     exit 0
 fi
 
