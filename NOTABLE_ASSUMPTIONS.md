@@ -551,7 +551,7 @@ Same `excerpt` field schema as the gemini-selected versions — plug-and-play.
 
 ## 2026-04-27 — Storage relocation: home → scratch (file-count quota was at 93%)
 
-**Problem:** `/home/afw8937` hit 27,991/30,000 inodes (93%). The bulk of inodes lived in `evals/` (~2,626 per-query JSON files) and an `evals.backup_pre_force_answer_fix_2026-04-26/` directory (~2,000 more files from a safety snapshot earlier in the session). Mid-day, several running BCP jobs failed because the user moved `runs/` and `data/` out of `/home` to `/scratch/afw8937/temp-upload/` to avoid the inode wall:
+**Problem:** `/home/afw8937` hit 27,991/30,000 inodes (93%). The bulk of inodes lived in `evals/` (~2,626 per-query JSON files) and an `evals.backup_pre_force_answer_fix_2026-04-26/` directory (~2,000 more files from a safety snapshot earlier in the session). Mid-day, several running BCP jobs failed because the user moved `runs/` and `data/` out of `/home` to `/scratch/afw8937/browsecomp-plus/` to avoid the inode wall:
 
 - 7311137 (Qwen3.5 selected_tools): every query failed with "Connection error" — vLLM-side died likely because the relative path `runs/...` disappeared mid-write
 - 7311140 (MiniMax selected_tools): exited 13 in 0:02 during setup, same root cause
@@ -559,8 +559,8 @@ Same `excerpt` field schema as the gemini-selected versions — plug-and-play.
 
 **Fix applied (2026-04-27):**
 1. Deleted `evals.backup_pre_force_answer_fix_2026-04-26/` — eval bug-fix already validated by the corrected scout_explore.md numbers; backup no longer needed (~2,000 inodes recovered)
-2. Moved `evals/` → `/scratch/afw8937/temp-upload/evals/` and symlinked
-3. Moved `summaries/` → `/scratch/afw8937/temp-upload/summaries/` and symlinked
+2. Moved `evals/` → `/scratch/afw8937/browsecomp-plus/evals/` and symlinked
+3. Moved `summaries/` → `/scratch/afw8937/browsecomp-plus/summaries/` and symlinked
 4. Created symlinks for the user's pre-existing moves: `runs/` → `/scratch/.../runs/`, `data/` → `/scratch/.../data/`
 5. Resubmitted the 2 BCP selected_tools jobs (7369110, 7369111) and the GLM random_tools eval on the partial 81 (7369183)
 
@@ -568,10 +568,10 @@ Same `excerpt` field schema as the gemini-selected versions — plug-and-play.
 
 | Path in repo | Resolves to | Notes |
 |---|---|---|
-| `runs/*` | `/scratch/afw8937/temp-upload/runs/*` | Trajectory JSON outputs |
-| `evals/*` | `/scratch/afw8937/temp-upload/evals/*` | Per-query + summary eval JSONs |
-| `summaries/*` | `/scratch/afw8937/temp-upload/summaries/*` | Trajectory summaries |
-| `data/*` | `/scratch/afw8937/temp-upload/data/*` | Ground-truth + input JSONLs |
+| `runs/*` | `/scratch/afw8937/browsecomp-plus/runs/*` | Trajectory JSON outputs |
+| `evals/*` | `/scratch/afw8937/browsecomp-plus/evals/*` | Per-query + summary eval JSONs |
+| `summaries/*` | `/scratch/afw8937/browsecomp-plus/summaries/*` | Trajectory summaries |
+| `data/*` | `/scratch/afw8937/browsecomp-plus/data/*` | Ground-truth + input JSONLs |
 | Logs (`#SBATCH --output=`) | `/scratch/afw8937/logs/` directly | Already on scratch — no change |
 | `selected_tool_calls/*` | `/home/...` (still home) | Read-only inputs, only 6 files — not a quota concern |
 | HF cache (`HF_HOME`) | `/scratch/afw8937/.huggingface/` | Already on scratch via singularity bind |
@@ -688,7 +688,7 @@ Pattern observed 2-3× now with Qwen3.5: a long generation that never hits a sto
 | URL→row_id map | `/scratch/afw8937/efficient-search-agents/frames/index/frames_wiki_url_to_rowindex.json` |
 | FRAMES SBATCH templates | `sbatch/run_frames_test150_*.SBATCH` (in branch) |
 | Article-level recall computation | `scripts/compute_frames_recall.py` (in branch) |
-| Trajectory output | `runs/frames/...` (symlink → `/scratch/afw8937/temp-upload/runs/frames/`) |
+| Trajectory output | `runs/frames/...` (symlink → `/scratch/afw8937/browsecomp-plus/runs/frames/`) |
 
 **Implication:** if a coworker checks out `afw-scout-first10` *standalone* without the parent `efficient-search-agents` directory, the FRAMES retriever import will fail at the `sys.path.insert(0, parents[4]/"frames"/"retrieval")` line in `bge_m3_searcher.py`. Either bundle `bge_m3_backend.py` into the BCP repo or document the parent-project dependency in the README.
 
@@ -703,3 +703,22 @@ Choosing **option 2** for write-up purity: "best-of-4 over the N qids where all 
 - N_intersection (qids in all 4 evals)
 - pass@4 accuracy on intersection
 - per-seed accuracy on intersection (for honest comparison)
+
+## 2026-05-01: scratch reorganization — temp-upload → browsecomp-plus
+
+Renamed `/scratch/afw8937/temp-upload/` → `/scratch/afw8937/browsecomp-plus/` to give the BCP/scout-explore data tree a project-descriptive name instead of "temp-upload" (which was historically meaningful as the rsync staging path but became the canonical home for runs/evals/summaries/data).
+
+Layout under the new root:
+- `/scratch/afw8937/browsecomp-plus/runs/`     ← agent trajectories  (was `/scratch/afw8937/temp-upload/runs/`)
+- `/scratch/afw8937/browsecomp-plus/evals/`    ← eval results        (was `/scratch/afw8937/temp-upload/evals/`)
+- `/scratch/afw8937/browsecomp-plus/summaries/`← trajectory summaries (was `/scratch/afw8937/temp-upload/summaries/`)
+- `/scratch/afw8937/browsecomp-plus/data/`     ← BCP ground truth     (was `/scratch/afw8937/temp-upload/data/`)
+- `/scratch/afw8937/browsecomp-plus/logs/`     ← SLURM job logs       (NEW — formerly mixed into `/scratch/afw8937/logs/`)
+
+Updates applied:
+- 4 in-repo symlinks (`runs/`, `evals/`, `summaries/`, `data/`) point to the new path
+- New `logs/` symlink in repo root for convenience
+- 56 SBATCH templates: `#SBATCH --output=/scratch/afw8937/browsecomp-plus/logs/...`
+- Historical logs at `/scratch/afw8937/logs/` left in place (shared with other projects); only future BCP/FRAMES SLURM logs land under the new path
+
+The 10 currently-queued random_tools jobs (job IDs 7741696–7741705) were submitted with the OLD `--output=/scratch/afw8937/logs/...` baked in, so their logs land at the old path. All future submissions land at the new path.

@@ -40,13 +40,13 @@ For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory
 | Qwen3.5-122B-A10B | ⏳ TODO | ⏳ TODO | ⏳ TODO |
 | MiniMax-M2.5 | ⏳ TODO | ⏳ TODO | ⏳ TODO |
 
-**Task 3 — Vanilla qwen3.5-4b explorer × 3 main agents (3 runs):** Hung-Ting will provide the fine-tuned qwen3.5-4b explorer trajectories later; for now we have the **vanilla** qwen3.5-4b explorer trajectories (≤5 tool calls each, paired with gpt-oss-120b in his original run = 14.7%). Main agent pairings:
+**Task 3 — Vanilla qwen3.5-4b explorer × 3 main agents (3 runs):** Hung-Ting will provide the fine-tuned qwen3.5-4b explorer trajectories later; for now we have the **vanilla** qwen3.5-4b explorer trajectories at `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b/budget5_seed0/` (150 trajectories, ≤5 tool calls each — 91% have exactly 5; paired with gpt-oss-120b in Hung-Ting's original run = 14.7%). Main agent pairings:
 
-| Main agent | Trajectories landed at `runs/bcp/.../qwen3.5-4b-explorer/seed0/` | Round-2 run | Eval |
-|---|:---:|:---:|:---:|
-| GLM-4.7-Flash | ⏳ TODO (extract tarball) | ⏳ TODO | ⏳ TODO |
-| Qwen3.5-122B-A10B | ⏳ TODO | ⏳ TODO | ⏳ TODO |
-| MiniMax-M2.5 | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+| Main agent | Round-2 run | Eval |
+|---|:---:|:---:|
+| GLM-4.7-Flash | ⏳ TODO | ⏳ TODO |
+| Qwen3.5-122B-A10B | ⏳ TODO | ⏳ TODO |
+| MiniMax-M2.5 | ⏳ TODO | ⏳ TODO |
 
 **Infrastructure TODOs:**
 - ⏳ Refactor 3 round-1 random_tools SBATCHes (`run_bcp_test150_<slug>_random_tools.SBATCH`) to take `SEED` as env var → `sbatch --export=ALL,SEED=43 ...`
@@ -108,14 +108,14 @@ For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory
 
 ### BCP — Cross-explorer pairings (qwen3.5-4b explorer × different main agents)
 
-Hung-Ting fine-tuned qwen3.5-4b on gpt-oss-120b's random-subset trajectories. The vanilla (un-fine-tuned) qwen3.5-4b explorer trajectories he sent us are paired below with different main agents. The first row (gpt-oss-120b main agent) is from his doc; the rest are TBD on our side.
+Hung-Ting fine-tuned qwen3.5-4b on gpt-oss-120b's random-subset trajectories. The vanilla (un-fine-tuned) qwen3.5-4b explorer trajectories he sent us live at `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b/budget5_seed0/` (150 trajectories with `--search-budget 5`, distribution: 137 with 5 tool calls, 6 with 4, 4 with 3, 2 with 7, 1 with 6). They are paired below with different main agents — the first row (gpt-oss-120b main agent) is from his doc; the rest are TBD on our side.
 
 | Explorer | Main agent | Acc | Recall | # calls | Notes |
 | :---- | :---- | ----: | ----: | ----: | :---- |
-| qwen3.5-4b (vanilla, prompted) | gpt-oss-120b | 14.7 | — | — | Hung-Ting's number from doc |
-| qwen3.5-4b (vanilla, prompted) | GLM-4.7-Flash | TBD | TBD | TBD | round-2 only |
-| qwen3.5-4b (vanilla, prompted) | Qwen3.5-122B-A10B | TBD | TBD | TBD | round-2 only |
-| qwen3.5-4b (vanilla, prompted) | MiniMax-M2.5 | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (vanilla, budget=5) | gpt-oss-120b | 14.7 | — | — | Hung-Ting's number from doc |
+| qwen3.5-4b (vanilla, budget=5) | GLM-4.7-Flash | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (vanilla, budget=5) | Qwen3.5-122B-A10B | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (vanilla, budget=5) | MiniMax-M2.5 | TBD | TBD | TBD | round-2 only |
 | qwen3.5-4b (fine-tuned, Hung-Ting) | gpt-oss-120b | 🚫 BLOCKED | — | — | awaiting Hung-Ting's training |
 | qwen3.5-4b (fine-tuned, Hung-Ting) | GLM-4.7-Flash | 🚫 BLOCKED | — | — | |
 | qwen3.5-4b (fine-tuned, Hung-Ting) | Qwen3.5-122B-A10B | 🚫 BLOCKED | — | — | |
