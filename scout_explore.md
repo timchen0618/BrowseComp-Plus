@@ -18,15 +18,21 @@
 
 ## Pending Work (BCP test150)
 
-**Task 1 — Random k=5 best-of-4 (3 selection seeds × 3 models = 9 runs):**
+**Task 1 — Random k=5 best-of-4 (10 runs total, all eval'd, then aggregated):**
 
-| Model | seed42 | seed43 | seed44 | seed45 | best-of-4 |
+For pass@4 we need clean N=150 across all four selection seeds. GLM and MiniMax seed42 are already at N=150 and stay untouched. Qwen3.5 seed42 is at N=130 (3× TMA crashes) and needs a recovery rerun (same SBATCH, idempotent — only re-processes the 20 missing qids). Plus 3 new selection seeds (43/44/45) for each of the 3 models.
+
+| Model | seed42 (existing) | seed43 (new) | seed44 (new) | seed45 (new) | best-of-4 |
 |---|:---:|:---:|:---:|:---:|:---:|
-| GLM-4.7-Flash | ✅ done (47.3%) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
-| Qwen3.5-122B-A10B | ✅ done (54.6%, N=130) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
-| MiniMax-M2.5 | ✅ done (57.3%) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
+| GLM-4.7-Flash | ✅ N=150 done (47.3%) | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
+| Qwen3.5-122B-A10B | ⚠️ N=130 (54.6%) — **rerun to fill 20 missing** | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
+| MiniMax-M2.5 | ✅ N=150 done (57.3%) | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
 
-**Task 2 — Self prompted explorer + main agent (budget=5, raw prepend, 3 models = 3 runs):**
+**Submission plan:** 10 round-1 runs (1 Qwen3.5 seed42 recovery + 9 new seeds across 3 models). For each as it lands at 150 trajectories: submit eval. After all 12 evals (4 seeds × 3 models) are done: run `scripts/compute_best_of_n.py` to compute pass@4 per model and fill in the best-of-4 column.
+
+**Task 2 — Self prompted explorer + main agent (budget=5, raw prepend, 3 models = 3 round-1 + 3 round-2 + 3 evals):**
+
+For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory), then round-2 prepends that budgeted trajectory raw via `traj_orig_ext`. Round-2 output is what gets evaluated.
 
 | Model | Round-1 (budget=5) | Round-2 (traj_orig_ext) | Eval |
 |---|:---:|:---:|:---:|
