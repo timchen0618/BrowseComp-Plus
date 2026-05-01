@@ -2,13 +2,52 @@
 
 **Setup:** 150-query test slice on each benchmark. LLM-as-judge: Qwen3-32B. All numbers reflect the corrected `evaluate_run.py` (eval bug fix, 2026-04-26) that grades `context_limit` trajectories using their forced final answers; pre-fix numbers undercounted accuracy for verbose models (full diff in NOTABLE_ASSUMPTIONS.md).
 
+**Seed semantics:** The clients (GLM/MiniMax/Qwen35) do **not** pass `temperature` or `seed` to vLLM, so agent generations are non-deterministic by default (vLLM default temperature, random seed per request). Where you see `seed42/43/44/45` in this doc it refers to the **selection seed** used by `random_select_tool_calls.py` to pick 5 random tool calls from the baseline trajectory — *not* an agent-level seed. Re-running the same agent run twice will give different trajectories.
+
 **Conditions tested** (each model is evaluated under all 5):
 
 1. **Baseline** — agent runs with no prepended evidence; standard agentic loop.
 2. **+ full trajectory** — the entire first-run trajectory (all tool calls + observations) is injected into the prompt before the agent starts. Tests the upper bound of "everything we already learned."
 3. **+ trajectory summary** — an LLM-generated summary of the first-run trajectory is injected instead of the raw trajectory. Tests whether a compressed orientation helps.
 4. **+ selected k=5 tool calls** — Gemini selects the 5 most useful tool-call/observation pairs from the first-run trajectory and prepends only those excerpts. Tests whether targeted excerpts beat full or summary.
-5. **+ random k=5 tool calls (ablation)** — 5 tool-call/observation pairs sampled uniformly at random from the first-run trajectory. Controls for whether the *selection* matters or just the *amount* of prepended evidence.
+5. **+ random k=5 tool calls (selection seed N)** — 5 tool-call/observation pairs sampled uniformly at random (with `random_select_tool_calls.py --seed N`) from the first-run trajectory. Controls for whether the *selection* matters or just the *amount* of prepended evidence.
+6. **+ random k=5 tool calls (best of 4)** — pass@4 across selection seeds {42,43,44,45}: a question is counted correct if **any** of the 4 random subsets gets it right. Estimates the variance ceiling of random-subset prepending.
+7. **+ self prompted explorer (budget=5, raw)** — same model runs round-1 with `--search-budget 5` (capped at 5 tool calls), then round-2 prepends that budgeted trajectory raw via `traj_orig_ext`. Tests whether a model planning under a budget upfront picks better evidence than random subsampling of an unconstrained run.
+
+---
+
+## Pending Work (BCP test150)
+
+**Task 1 — Random k=5 best-of-4 (3 selection seeds × 3 models = 9 runs):**
+
+| Model | seed42 | seed43 | seed44 | seed45 | best-of-4 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| GLM-4.7-Flash | ✅ done (47.3%) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
+| Qwen3.5-122B-A10B | ✅ done (54.6%, N=130) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
+| MiniMax-M2.5 | ✅ done (57.3%) | ⏳ TODO | ⏳ TODO | ⏳ TODO | ⏳ pending |
+
+**Task 2 — Self prompted explorer + main agent (budget=5, raw prepend, 3 models = 3 runs):**
+
+| Model | Round-1 (budget=5) | Round-2 (traj_orig_ext) | Eval |
+|---|:---:|:---:|:---:|
+| GLM-4.7-Flash | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+| Qwen3.5-122B-A10B | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+| MiniMax-M2.5 | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+
+**Task 3 — Vanilla qwen3.5-4b explorer × 3 main agents (3 runs):** Hung-Ting will provide the fine-tuned qwen3.5-4b explorer trajectories later; for now we have the **vanilla** qwen3.5-4b explorer trajectories (≤5 tool calls each, paired with gpt-oss-120b in his original run = 14.7%). Main agent pairings:
+
+| Main agent | Trajectories landed at `runs/bcp/.../qwen3.5-4b-explorer/seed0/` | Round-2 run | Eval |
+|---|:---:|:---:|:---:|
+| GLM-4.7-Flash | ⏳ TODO (extract tarball) | ⏳ TODO | ⏳ TODO |
+| Qwen3.5-122B-A10B | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+| MiniMax-M2.5 | ⏳ TODO | ⏳ TODO | ⏳ TODO |
+
+**Infrastructure TODOs:**
+- ⏳ Refactor 3 round-1 random_tools SBATCHes (`run_bcp_test150_<slug>_random_tools.SBATCH`) to take `SEED` as env var → `sbatch --export=ALL,SEED=43 ...`
+- ⏳ Create 3 SBATCHes for self-prompted-explorer: round-1 with `--search-budget 5` + round-2 with `traj_orig_ext` pointing at the budget=5 dir
+- ⏳ Create 3 SBATCHes for vanilla qwen3.5-4b explorer × main-agent pairings (round-2 only)
+- ⏳ Write `scripts/compute_best_of_n.py` aggregating per-query correctness across N eval JSONs (pass@N)
+- 🚫 BLOCKED on Hung-Ting: fine-tuned qwen3.5-4b explorer trajectories (separate Table 2 row group when received)
 
 ---
 
@@ -22,7 +61,12 @@
 | + full trajectory | 47.3 | 20.3 | 4.3 |
 | **+ trajectory summary** | **53.3** | 52.5 | 12.7 |
 | + selected k=5 tool calls | 46.7 | 29.1 | 8.6 |
-| + random k=5 tool calls (ablation) | 47.3 | 34.6 | 9.7 |
+| + random k=5 tool calls (selection seed=42) | 47.3 | 34.6 | 9.7 |
+| + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
+| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + self prompted explorer (budget=5, raw) | TBD | TBD | TBD |
 
 **Model: Qwen3.5-122B-A10B**
 
@@ -32,7 +76,12 @@
 | + full trajectory | 48.4 | 0.0 | 0.1 |
 | + trajectory summary | 48.3 | 56.5 | 14.4 |
 | + selected k=5 tool calls (N=148) | 48.7 | 25.4 | 15.9 |
-| **+ random k=5 tool calls (ablation, N=130)** | **54.6** | 30.7 | 14.3 |
+| **+ random k=5 tool calls (selection seed=42, N=130)** | **54.6** | 30.7 | 14.3 |
+| + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
+| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + self prompted explorer (budget=5, raw) | TBD | TBD | TBD |
 
 **Model: MiniMax-M2.5 (229B)**
 
@@ -42,9 +91,29 @@
 | + full trajectory | 54.0 | 20.0 | 3.2 |
 | + trajectory summary | 56.0 | 56.7 | 10.0 |
 | + selected k=5 tool calls | 55.3 | 45.4 | 8.6 |
-| **+ random k=5 tool calls (ablation)** | **57.3** | 49.8 | 9.1 |
+| **+ random k=5 tool calls (selection seed=42)** | **57.3** | 49.8 | 9.1 |
+| + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
+| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + self prompted explorer (budget=5, raw) | TBD | TBD | TBD |
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed).
+
+### BCP — Cross-explorer pairings (qwen3.5-4b explorer × different main agents)
+
+Hung-Ting fine-tuned qwen3.5-4b on gpt-oss-120b's random-subset trajectories. The vanilla (un-fine-tuned) qwen3.5-4b explorer trajectories he sent us are paired below with different main agents. The first row (gpt-oss-120b main agent) is from his doc; the rest are TBD on our side.
+
+| Explorer | Main agent | Acc | Recall | # calls | Notes |
+| :---- | :---- | ----: | ----: | ----: | :---- |
+| qwen3.5-4b (vanilla, prompted) | gpt-oss-120b | 14.7 | — | — | Hung-Ting's number from doc |
+| qwen3.5-4b (vanilla, prompted) | GLM-4.7-Flash | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (vanilla, prompted) | Qwen3.5-122B-A10B | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (vanilla, prompted) | MiniMax-M2.5 | TBD | TBD | TBD | round-2 only |
+| qwen3.5-4b (fine-tuned, Hung-Ting) | gpt-oss-120b | 🚫 BLOCKED | — | — | awaiting Hung-Ting's training |
+| qwen3.5-4b (fine-tuned, Hung-Ting) | GLM-4.7-Flash | 🚫 BLOCKED | — | — | |
+| qwen3.5-4b (fine-tuned, Hung-Ting) | Qwen3.5-122B-A10B | 🚫 BLOCKED | — | — | |
+| qwen3.5-4b (fine-tuned, Hung-Ting) | MiniMax-M2.5 | 🚫 BLOCKED | — | — | |
 
 ---
 

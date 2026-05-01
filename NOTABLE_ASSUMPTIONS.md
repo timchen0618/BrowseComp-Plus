@@ -639,3 +639,67 @@ Pattern matches BCP recall: traj_orig collapses; traj_summary partially recovers
 - Job 7484898 (Qwen3.5 FRAMES test150 traj_summary_orig) exited "COMPLETED 0:0" after 59:09 min, but vLLM crashed mid-run with the same TMA/cutlass MoE GEMM kernel error on H200. 88/150 trajectories saved.
 - Resubmitting; qwen35_client idempotent skip will only process the 62 missing qids.
 - Cumulative count of this exact crash on Qwen3.5 + H200: 5 (3× BCP random_tools, 1× FRAMES baseline, 1× FRAMES traj_summary).
+
+## 2026-04-30: Truncation budget bug — `--max-chars 500000` is window-blind
+
+The `--max-chars 500000` flag in every traj_orig/traj_summary/random_tools SBATCH is a **global per-trajectory char cap**, not derived from `MAX_MODEL_LEN`. At ~4 chars/token, 500K chars ≈ 125K tokens — which is **2× too large for MiniMax's 65K window** and within ~5K tokens of Qwen3.5/GLM's 131K window. This is *the* reason FRAMES traj_orig dropped 24 (MiniMax) and 19 (Qwen3.5) trajectories: per-block truncation (`--reasoning-max-chars 3000`, `--tool-output-max-chars 5000`) was active and capping individual blocks, but the global cap of 500K never kicked in below the model window, so 25–30 tool calls × 8K chars/block = 200–240K chars passed the global cap unchanged.
+
+Recommended values, derived from `MAX_MODEL_LEN` minus a 15–25K-token reservation for query + new searches + reserved output:
+
+| Model | `MAX_MODEL_LEN` | Reserve | Available for prepend (tokens) | Recommended `--max-chars` |
+|---|---|---|---|---|
+| MiniMax-M2.5 | 65,536 | ~15,000 | ~50,000 | **200,000** |
+| GLM-4.7-Flash | 131,072 | ~25,000 | ~106,000 | **400,000** |
+| Qwen3.5-122B-A10B | 131,072 | ~25,000 | ~106,000 | **400,000** |
+
+**Why MiniMax is at 65K and not 245760 (its real max):** advertised context is 245760 tokens. We capped at 65K in `vllm serve` to leave KV-cache headroom on 2×H200 (model weights ~215 GB; ~67 GB left for KV across all concurrent seqs). Going to 130K+ would require dropping `--max-num-seqs` from 16 to ~8, hurting throughput. For BCP that tradeoff is reasonable; for FRAMES traj_orig it bites because Wikipedia tool outputs are 5–10× larger than BCP's docids.
+
+**Action items deferred until BCP focus is done:**
+- Patch all FRAMES SBATCHes to use window-aware `--max-chars` per the table above
+- Re-run MiniMax + Qwen3.5 FRAMES traj_orig with the corrected cap (would recover the 24 + 19 dropped trajectories)
+- Optionally bump MiniMax `MAX_MODEL_LEN` 65K→100K with `--max-num-seqs 8` if memory permits
+
+## 2026-04-30: Seed semantics clarification (no agent seed, no temperature override)
+
+The BCP/FRAMES clients (`glm_client.py`, `minimax_client.py`, `qwen35_client.py`) **do not pass `temperature` or `seed` to vLLM** — only `gemini_client.py` and `openai_client.py` do. Consequences:
+
+- **Temperature**: vLLM's OpenAI-server default applies (likely 1.0 or whatever the model's chat-template config sets). Generations are *not* greedy.
+- **Seed**: not specified, vLLM picks one randomly per request. Two runs of the same agent on the same input produce **different trajectories**.
+- The `seed0` label in run directory names (e.g. `random_tools_seed0/`) was always a labeling convention — there was no actual seed=0 being passed anywhere.
+- Renamed existing `random_tools_seed0/` → `random_tools_seed42/` (BCP test150, all 3 models, in `runs/` and `evals/`) to match the **selection seed** used by `random_select_tool_calls.py`. The "seed42" now refers unambiguously to the random-subset selection seed, which IS reproducible.
+
+**Implication for Task 1 (best-of-4 random selection seeds):** what we vary is *which 5 tool calls get prepended*, not agent-level RNG. The agent's downstream sampling on top of those 5 prepended calls is non-deterministic and contributes its own variance — so two runs with the same selection seed would also produce different accuracy numbers. Best-of-4 is therefore confounded with run-to-run variance, but since the variance is shared across all 5 prepend strategies, intra-model comparison is still fair.
+
+## 2026-04-30: Qwen3.5 selected_tools N=148 (cancelled, not crashed)
+
+Distinct from the TMA crashes: **Qwen3.5 BCP selected_tools** finished N=148/150 — the run got stuck on the last 2 queries (`completed=148/150`) for ~1.5 hours with vLLM still alive but the agent loop not progressing. Manually `scancel`'d and ran eval on N=148.
+
+Pattern observed 2-3× now with Qwen3.5: a long generation that never hits a stop token. Likely fix would be a per-query timeout in `qwen35_client.py`; not patched yet.
+
+## 2026-04-30: Where FRAMES infrastructure actually lives
+
+| Component | Location |
+|---|---|
+| Adapter glue (BCP-side `BgeM3Searcher`) | `searcher/searchers/bge_m3_searcher.py` (in `afw-scout-first10` branch) |
+| Actual retriever implementation | `~/projects/efficient-search-agents/frames/retrieval/bge_m3_backend.py` (parent project, **not in this repo**) |
+| FRAMES query subsets | `topics-qrels/frames/queries_{first10,test150}.tsv` (in branch) |
+| FAISS index + Wikipedia texts | `/scratch/afw8937/efficient-search-agents/frames/index/` (~47 GB, scratch only) |
+| FRAMES ground truth | `/scratch/afw8937/efficient-search-agents/frames/data/frames-all-gt.jsonl` |
+| URL→row_id map | `/scratch/afw8937/efficient-search-agents/frames/index/frames_wiki_url_to_rowindex.json` |
+| FRAMES SBATCH templates | `sbatch/run_frames_test150_*.SBATCH` (in branch) |
+| Article-level recall computation | `scripts/compute_frames_recall.py` (in branch) |
+| Trajectory output | `runs/frames/...` (symlink → `/scratch/afw8937/temp-upload/runs/frames/`) |
+
+**Implication:** if a coworker checks out `afw-scout-first10` *standalone* without the parent `efficient-search-agents` directory, the FRAMES retriever import will fail at the `sys.path.insert(0, parents[4]/"frames"/"retrieval")` line in `bge_m3_searcher.py`. Either bundle `bge_m3_backend.py` into the BCP repo or document the parent-project dependency in the README.
+
+## 2026-04-30: Best-of-N over partial-N seeds
+
+Two options for computing best-of-4 across {seed42, 43, 44, 45} when individual seeds may be partial-N (e.g., Qwen3.5 random_tools_seed42 = N=130):
+
+1. **Force-resubmit until all 150 land** per seed. Probably needs 3+ retries on Qwen3.5 due to TMA crash. Risky and expensive.
+2. **Compute best-of-4 only on the qid intersection** that succeeded across all 4 seeds. Cleaner, smaller N, but apples-to-apples comparison.
+
+Choosing **option 2** for write-up purity: "best-of-4 over the N qids where all 4 random selection seeds completed." The aggregation script (`scripts/compute_best_of_n.py`, TBD) should output:
+- N_intersection (qids in all 4 evals)
+- pass@4 accuracy on intersection
+- per-seed accuracy on intersection (for honest comparison)
