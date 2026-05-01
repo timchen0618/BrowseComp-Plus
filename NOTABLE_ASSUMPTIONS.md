@@ -722,3 +722,18 @@ Updates applied:
 - Historical logs at `/scratch/afw8937/logs/` left in place (shared with other projects); only future BCP/FRAMES SLURM logs land under the new path
 
 The 10 currently-queued random_tools jobs (job IDs 7741696–7741705) were submitted with the OLD `--output=/scratch/afw8937/logs/...` baked in, so their logs land at the old path. All future submissions land at the new path.
+
+## 2026-05-01: 3 eval SBATCHes refactored for SEED env var
+
+`run_bcp_eval_{glm,minimax,qwen3_5}_test150_random_tools.SBATCH` previously hardcoded `random_tools_seed0` in `INPUT_DIR`. Refactored to take `SEED` env var, defaulting to 42:
+
+```
+INPUT_DIR="runs/bcp/Qwen3-Embedding-8B/test150/${MODEL_NAME}/random_tools_seed${SEED}"
+```
+
+Submission for any seed:
+```
+sbatch --export=ALL,SEED=43 sbatch/run_bcp_eval_glm_test150_random_tools.SBATCH
+```
+
+Eval output dir mirrors the run dir (eval pipeline writes to `evals/bcp/.../random_tools_seed${SEED}/`).
