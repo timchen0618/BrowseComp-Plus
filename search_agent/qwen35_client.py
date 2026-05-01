@@ -413,6 +413,9 @@ def run_conversation_with_tools(
                 }
             )
 
+    # Iter cap reached without final answer — symmetric with context_limit branch:
+    # ask the model for a final answer based on what it has so far so the eval can grade it.
+    messages = _force_final_answer(client, model, messages, max_tokens)
     return messages, tool_usage, "incomplete"
 
 

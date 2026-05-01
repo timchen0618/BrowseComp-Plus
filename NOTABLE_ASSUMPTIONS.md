@@ -36,6 +36,41 @@ vLLM throws this as a non-fatal batch error — the batch is dropped from result
 
 ---
 
+## 2026-04-28 — Qwen3.5 random_tools accepted at N=130 after 3 vLLM crashes
+
+**Context:** Three vLLM crashes in a row on Qwen3.5 random_tools, all `torch.AcceleratorError: CUDA error: misaligned address`:
+- 7391579: ran ~40min → 24/150 trajectories
+- 7408688: ran 3h → 128/150 trajectories
+- 7422866: ran 19min → 130/150 trajectories
+
+After 3 attempts, the trajectory file count is plateauing in the 128-130 range. The remaining ~20 queries appear to consistently trigger the cutlass MoE GEMM kernel issue early in each restart. Continuing retries is unlikely to fully complete the 150.
+
+**Action:** Submitted eval (7424615) on N=130 trajectories. Result will be reported in scout_explore.md with N=130 caveat (similar to Qwen3.5 selected_tools at N=148).
+
+**Pattern (confirmed across multiple Qwen3.5 runs on h200_public + vLLM nightly):**
+- selected_tools: 21 → 148/150 (cancelled after 1.5h hang on last 2)
+- random_tools: 24 → 128 → 130/150 (3 crashes)
+
+**Suggested fix for future runs (not done now):** try `--enforce-eager` to disable cuda graphs (likely the trigger), or pin to a stable vLLM release instead of nightly. Accept ~30% throughput cost.
+
+---
+
+## 2026-04-28 — Qwen3.5 random_tools resubmit after vLLM CUDA misaligned address crash (job 7391579)
+
+**Context:** Qwen3.5 random_tools (job 7391579) ran 39:31, exited COMPLETED 0:0, but only produced 24/150 trajectories. Log shows the same `torch.AcceleratorError: CUDA error: misaligned address` pattern as the earlier Qwen3.5 selected_tools crash. vLLM internal MoE GEMM kernel error on H200 — appears to be a recurring Qwen3.5 + nightly vLLM + h200 issue.
+
+**Action:** Resubmitted as 7408688. Idempotent client will pick up remaining 126 queries.
+
+**Pattern observed across runs:**
+- Qwen3.5 selected_tools (original 7369110): vLLM TMA crash at ~30min → 21/150
+- Qwen3.5 selected_tools (resume 7372606): completed 148/150 (last 2 hung at iter cap)
+- Qwen3.5 random_tools (7391579): vLLM CUDA misaligned crash at ~30min → 24/150
+- → suggests vLLM stack hits this crash early in any Qwen3.5 run on h200; resume from the earlier output dir is the right strategy.
+
+**Revert path:** `scancel 7408688`. Existing 24 trajectories are usable.
+
+---
+
 ## 2026-04-28 — Qwen3.5 BCP selected_tools resubmit after silent vLLM TMA crash (job 7369110)
 
 **Context:** Job 7369110 (Qwen3.5 BCP selected_tools, h200_public 2 GPU) ran for 38min and exited cleanly (`COMPLETED 0:0`), but only produced 21/150 trajectories. Tail of log shows 129 queries failing with `Connection error` after vLLM internal crash at 01:23:01:
@@ -583,3 +618,24 @@ Built `topics-qrels/frames/qrel_evidence.txt` from joining `frames-all-gt.jsonl`
 | traj_summary_orig_ext | 41.2% |
 
 Pattern matches BCP recall: traj_orig collapses; traj_summary partially recovers; baseline is highest.
+
+## 2026-04-29: Qwen3.5 FRAMES baseline TMA/MoE GEMM crash (#4)
+- Job 7431649 (Qwen3.5 FRAMES test150 baseline) exited "COMPLETED 0:0" after 3:02 hours but vLLM crashed mid-run with the recurring `[TensorRT-LLM][ERROR] Failed to initialize cutlass TMA WS grouped gemm` / `torch.AcceleratorError: CUDA error: misaligned address` error on H200 at iter ~1:20:26
+- 117/149 trajectories saved; remaining 32 queries returned "3 consecutive API errors; last: Connection error" because vLLM was dead. No JSON written for those qids.
+- Resubmitted as 7455790 — qwen35_client idempotent skip logic will only process the 32 missing qids.
+- Same kernel crash also hit Qwen3.5 BCP random_tools 3 times before we accepted partial N=130; this is now the 4th time on H200 + Qwen3.5.
+
+## 2026-04-29: MiniMax FRAMES traj_orig N=126 (24 context overflows)
+- Job 7468481 (MiniMax FRAMES test150 traj_orig_ext) completed in 20:35 min, but only 126/150 trajectories saved.
+- 24 queries hit a 65536-token max-context-length error at the FIRST chat completion call: prepended FRAMES baseline trajectory (~55537 input tokens) + 10000 reserved output tokens exceeded the limit. No JSON was written for those qids since the agent loop never started.
+- Same pattern as MiniMax BCP traj_orig (verbose baseline trajectories overflow on prepend). Eval submitted on N=126; results comparable to BCP MiniMax traj_orig where some trajectories were also dropped.
+
+## 2026-04-29: Qwen3.5 FRAMES traj_orig N=131 (19 context overflows)
+- Job 7472945 (Qwen3.5 FRAMES test150 traj_orig_ext) completed in 14:11 min, 131/150 trajectories saved.
+- 19 queries hit a 131072-token max-context-length error at the FIRST chat completion call: prepended FRAMES baseline trajectory (~121073 input tokens) + 10000 reserved output tokens exceeded the limit.
+- Qwen3.5's 131K context is much larger than MiniMax's 65K, but Qwen3.5 baseline trajectories are also much longer (verbose). Net result: similar drop rate (19 vs 24).
+
+## 2026-04-29: Qwen3.5 FRAMES traj_summary TMA crash (#5)
+- Job 7484898 (Qwen3.5 FRAMES test150 traj_summary_orig) exited "COMPLETED 0:0" after 59:09 min, but vLLM crashed mid-run with the same TMA/cutlass MoE GEMM kernel error on H200. 88/150 trajectories saved.
+- Resubmitting; qwen35_client idempotent skip will only process the 62 missing qids.
+- Cumulative count of this exact crash on Qwen3.5 + H200: 5 (3× BCP random_tools, 1× FRAMES baseline, 1× FRAMES traj_summary).

@@ -64,9 +64,9 @@
 
 | Condition | Acc | Recall | # calls |
 | :---- | ----: | ----: | ----: |
-| Baseline | TBD | TBD | TBD |
-| + full trajectory | TBD | TBD | TBD |
-| + trajectory summary | TBD | TBD | TBD |
+| Baseline | 63.3 | 75.4 | 31.3 |
+| + full trajectory (N=131) | 68.7 | 1.5 | 0.1 |
+| + trajectory summary | 64.0 | 63.8 | 17.5 |
 | + selected k=5 tool calls | TBD | TBD | TBD |
 | + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
@@ -74,9 +74,9 @@
 
 | Condition | Acc | Recall | # calls |
 | :---- | ----: | ----: | ----: |
-| Baseline | TBD | TBD | TBD |
-| + full trajectory | TBD | TBD | TBD |
-| + trajectory summary | TBD | TBD | TBD |
+| Baseline | 62.0 | 77.4 | 25.7 |
+| + full trajectory (N=126) | 73.0 | 6.1 | 0.6 |
+| + trajectory summary | 60.0 | 62.8 | 13.1 |
 | + selected k=5 tool calls | TBD | TBD | TBD |
 | + random k=5 tool calls (ablation) | TBD | TBD | TBD |
 
