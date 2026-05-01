@@ -24,7 +24,7 @@ For pass@4 we need clean N=150 across all four selection seeds. GLM and MiniMax 
 
 | Model | seed42 (existing) | seed43 (new) | seed44 (new) | seed45 (new) | best-of-4 |
 |---|:---:|:---:|:---:|:---:|:---:|
-| GLM-4.7-Flash | ✅ N=150 done (47.3%) | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
+| GLM-4.7-Flash | ✅ N=150 (47.3%) | ✅ N=150 (44.0%) | ✅ N=150 (43.3%) | ✅ N=150 (46.0%) | ✅ **52.7% (+5.3pp lift)** |
 | Qwen3.5-122B-A10B | ⚠️ N=130 (54.6%) — **rerun to fill 20 missing** | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
 | MiniMax-M2.5 | ✅ N=150 done (57.3%) | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
 
@@ -68,10 +68,10 @@ For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory
 | **+ trajectory summary** | **53.3** | 52.5 | 12.7 |
 | + selected k=5 tool calls | 46.7 | 29.1 | 8.6 |
 | + random k=5 tool calls (selection seed=42) | 47.3 | 34.6 | 9.7 |
-| + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
-| + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
-| + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
-| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=43) | 44.0 | 31.7 | 10.0 |
+| + random k=5 tool calls (selection seed=44) | 43.3 | 29.4 | 10.0 |
+| + random k=5 tool calls (selection seed=45) | 46.0 | 31.7 | 9.4 |
+| **+ random k=5 tool calls (best of 4)** | **52.7** | — | — |
 | + self prompted explorer (budget=5, raw) | TBD | TBD | TBD |
 
 **Model: Qwen3.5-122B-A10B**
