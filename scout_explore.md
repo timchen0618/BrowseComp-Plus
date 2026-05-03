@@ -38,11 +38,13 @@
 
 | Task | Explorer trajectory source | GLM main | MiniMax main |
 |---|---|:---:|:---:|
-| 2 | self-prompted (main agent itself, budget=5) | ⏳ round-1 + round-2 | ⏳ round-1 + round-2 |
-| 3 | qwen3.5-4b vanilla (`runs/.../qwen3.5-4b/budget5_seed0/`) | ⏳ round-2 only | ⏳ round-2 only |
-| 4 | qwen3.5-4b SFT-best-of-4-random (`runs/.../qwen3.5-4b-sft-best_of_4_random_selection_mode_c/budget5_seed0/`) | ⏳ round-2 only | ⏳ round-2 only |
-| 5 | qwen3.5-4b SFT-Gemini-2.5-pro (`runs/.../qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/`) | ⏳ round-2 only | ⏳ round-2 only |
-| 6 | qwen3.5-4b SFT-random (`runs/.../qwen3.5-4b-sft-random_selection/budget5_seed0/`) | ⏳ round-2 only | ⏳ round-2 only |
+| 2 | self-prompted (main agent itself, budget=5) | DEFERRED | DEFERRED |
+| 3 | qwen3.5-4b vanilla (`runs/.../qwen3.5-4b/budget5_seed0/`) | ⏳ queued (7900979) | ⏳ queued (7900980) |
+| 4 | qwen3.5-4b SFT-best-of-4-random (`runs/.../qwen3.5-4b-sft-best_of_4_random_selection_mode_c/budget5_seed0/`) | ⏳ queued (7900981) | ⏳ queued (7900982) |
+| 5 | qwen3.5-4b SFT-Gemini-2.5-pro (`runs/.../qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/`) | ⏳ queued (7900983) | ⏳ queued (7900984) |
+| 6 | qwen3.5-4b SFT-random (`runs/.../qwen3.5-4b-sft-random_selection/budget5_seed0/`) | ⏳ queued (7900985) | ⏳ queued (7900986) |
+
+**Task 2 deferred** — self-prompted (budget=5) is conceptually adjacent to the existing **+ full trajectory** and **+ trajectory summary** rows (all three use the *same model's own* prior trajectory; they vary only in compression and exploration budget). Cross-explorer rows test the more compelling distillation question and are higher priority. Self-prompted SBATCHes stay in `sbatch/` (`run_bcp_test150_{glm,minimax}_budget5.SBATCH`) ready for future submission.
 
 **Submission plan (parallelizable since GLM→h100_tandon and MiniMax→h200_public don't share quotas):** Tasks 3-6 can all queue immediately since their explorer trajectories are on disk. Task 2 round-1 also queues immediately; Task 2 round-2 has `--dependency=afterok:<round1_jobid>`. Total: 12 round-2 jobs (5 conditions × 2 main agents + 1 round-1 dependency) and 10 evals after the round-2s land.
 
@@ -69,7 +71,7 @@
 | + random k=5 tool calls (selection seed=44) | 43.3 | 29.4 | 10.0 |
 | + random k=5 tool calls (selection seed=45) | 46.0 | 31.7 | 9.4 |
 | **+ random k=5 tool calls (best of 4)** | **52.7** | — | — |
-| + self prompted explorer (budget=5) | TBD | TBD | TBD |
+| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
 | + qwen3.5-4b explorer (budget=5, vanilla) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on best-of-4 random selection) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | TBD | TBD |
@@ -107,7 +109,7 @@
 | + random k=5 tool calls (selection seed=44) | 49.3 | 49.5 | 8.7 |
 | + random k=5 tool calls (selection seed=45) | 51.3 | 45.5 | 8.4 |
 | **+ random k=5 tool calls (best of 4)** | **71.3** | — | — |
-| + self prompted explorer (budget=5) | TBD | TBD | TBD |
+| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
 | + qwen3.5-4b explorer (budget=5, vanilla) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on best-of-4 random selection) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | TBD | TBD |
