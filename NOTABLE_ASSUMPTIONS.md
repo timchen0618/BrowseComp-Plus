@@ -4,6 +4,40 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-05-03 — Pivoting to cross-explorer experiments; Qwen3.5 main agent deferred (resumable)
+
+**Decision:** Pause Qwen3.5-122B-A10B random_tools best-of-4 work and pivot to Tasks 2-6 (self/qwen3.5-4b/3 SFT-explorer pairings) — but only for **GLM and MiniMax main agents**. Qwen3.5 main agent for those tasks is deferred to a follow-up session.
+
+**Why:** Qwen3.5 random_tools seeds 43/44/45 each ended at N≤148 due to the recurring `Qwen3.5+H200 last-2-or-3-queries hang` pattern documented separately for each seed below (and 2026-04-28 selected_tools, 5+ instances total). Each seed needs another idempotent recovery run to reach N=150, and we're currently blocked by h200_public quota saturation (recovery 7811896 PENDING since 12+ ticks). MiniMax all 4 seeds and GLM all 4 seeds are clean at N=150 with computed best-of-4. The cross-explorer experiments (Tasks 2-6) only need explorer-trajectory inputs (now all on disk — see "Explorer trajectories landed" below), so we can run them without touching Qwen3.5 main agent.
+
+**Resumable Qwen3.5 random_tools snapshot:**
+
+| Seed | Status | N | Acc | Recovery cmd |
+|---|---|---|---|---|
+| 42 | ✅ clean | 150 | 49.3% | (already recovered from 130) |
+| 43 | ⚠️ in-flight | 135 | — | `sbatch --export=ALL,SEED=43 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` (job 7811896 already PENDING) |
+| 44 | ⚠️ partial-tail | 148 | — | `sbatch --export=ALL,SEED=44 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` |
+| 45 | ⚠️ partial-tail | 147 | — | `sbatch --export=ALL,SEED=45 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` |
+
+**Resume plan:**
+1. Wait for 7811896 to finish (will recover seed43 from N=135 → N=150)
+2. Submit two more recoveries for seeds 44/45 (commands above; idempotent client picks up only the missing qids)
+3. Submit 3 evals: `sbatch --export=ALL,SEED=43 sbatch/run_bcp_eval_qwen3_5_test150_random_tools.SBATCH` (and 44/45)
+4. Run `python scripts/compute_best_of_n.py --inputs evals/bcp/.../qwen3.5-122b-a10b/random_tools_seed{42,43,44,45}/evaluation_summary.json --label "Qwen3.5"` to compute Qwen3.5 best-of-4
+5. Update scout_explore.md row for Qwen3.5 best-of-4
+
+**Explorer trajectories landed (all 4 sources at N=150, ready for Tasks 3-6):**
+- `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b/budget5_seed0/` — vanilla qwen3.5-4b explorer
+- `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b-sft-best_of_4_random_selection_mode_c/budget5_seed0/` — SFT on best-of-4 random selection
+- `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/` — SFT on Gemini-2.5-pro selection
+- `runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b-sft-random_selection/budget5_seed0/` — SFT on random selection
+
+The 3 SFT tarballs were extracted on 2026-05-03 from `/scratch/afw8937/browsecomp-plus/runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b-sft-{best_of_4_random_selection,gemini_2.5_pro_selection,random_selection}.tar.gz` (sent by Hung-Ting). All 4 inner trajectory JSONs have `metadata.model: "Qwen/Qwen3.5-4B"` (or one of the SFT'd checkpoint names) and `--search-budget 5`.
+
+**Revert path:** to undo the pivot, just keep watching the 7811896 recovery and don't queue Tasks 2-6.
+
+---
+
 ## 2026-05-03 — Qwen3.5 random_tools seed45 ended at 147/150 (last 3 hung)
 
 **Context:** Job 7741702 (Qwen3.5-122B-A10B random_tools_seed45) ran 06:52:38 and SLURM marked COMPLETED — log ended `=== Done ===`. 147/150 trajectories landed; last 3 queries hung in agent loop ~80 minutes before client exit. Same exact pattern as seed44 (148/150) and the 2026-04-28 selected_tools incident — recurring Qwen3.5 issue where a few queries enter unbreakable agent-loop spirals.
