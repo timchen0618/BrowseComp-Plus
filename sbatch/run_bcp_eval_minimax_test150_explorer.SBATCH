@@ -9,11 +9,13 @@
 #SBATCH --mail-user=afw8937@nyu.edu
 #SBATCH --output=/scratch/afw8937/browsecomp-plus/logs/eval_minimax-m2.5_test150_explorer_%j.out
 #SBATCH --account=torch_pr_62_tandon_priority
-#SBATCH --partition=h100_tandon
-#SBATCH --constraint=h100
+#SBATCH --partition=a100_tandon
 #SBATCH --gres=gpu:2
 
 # LLM-as-judge eval for any MiniMax-M2.5 test150 explorer-prepended run.
+# Eval is batch inference (Qwen3-32B judge, ~62GB BF16, fits comfortably on 2x A100).
+# Moved off h100_tandon (overcrowded, 50/60 GPUs) to a100_tandon (43/60) so evals
+# don't compete with cross-explorer round-2 jobs for the h100 pool.
 # Submit with: sbatch --export=ALL,RUN_NAME=qwen3.5-4b_traj_orig_seed0 sbatch/run_bcp_eval_minimax_test150_explorer.SBATCH
 
 set -euo pipefail
