@@ -28,9 +28,9 @@
 |---|:---:|:---:|:---:|:---:|:---:|
 | GLM-4.7-Flash | ✅ 47.3% | ✅ 44.0% | ✅ 43.3% | ✅ 46.0% | ✅ **52.7% (+5.3pp)** |
 | MiniMax-M2.5 | ✅ 57.3% | ✅ 52.7% | ✅ 49.3% | ✅ 51.3% | ✅ **71.3% (+14.0pp)** |
-| Qwen3.5-122B-A10B | ✅ N=150 (49.3%) | ⚠️ N=135 (recovery 7811896 PENDING) | ⚠️ N=148 (last 2 hung, COMPLETED) | ⚠️ N=147 (last 3 hung, COMPLETED) | ⏳ deferred (see status notes) |
+| Qwen3.5-122B-A10B | ✅ N=150 (49.3%) | ⚠️ N=135 | ⚠️ N=148 (last 2 hung) | ⚠️ N=147 (last 3 hung) | 🚫 **incomplete — recovery cancelled 2026-05-03 per user pivot** |
 
-**Qwen3.5 status (resumable):** seed42 cleanly at N=150 after 1 successful recovery from N=130. Seeds 43/44/45 each ended with 2-3 trajectories short of 150 — same `Qwen3.5+H200 unbreakable agent-loop` pattern documented 5+ times in NOTABLE_ASSUMPTIONS.md (last 2-3 queries spiral indefinitely; client exits cleanly). The recovery resub for seed43 (job 7811896) is in-queue but blocked by h200_public quota. **Resume plan:** when h200 frees up, recovery completes seed43; then submit `--export=ALL,SEED=44` and `SEED=45` recoveries for the partial-tail seeds, eval, then compute Qwen3.5 best-of-4. Until then we treat Qwen3.5 best-of-4 as deferred and pivot to GLM/MiniMax for Tasks 2-6 below.
+**Qwen3.5 best-of-4 status: incomplete (cancelled).** seed42 cleanly at N=150 after 1 successful recovery from N=130. Seeds 43/44/45 each ended with 2-3 trajectories short of 150 — same `Qwen3.5+H200 unbreakable agent-loop` pattern documented 5+ times in NOTABLE_ASSUMPTIONS.md (last 2-3 queries spiral indefinitely; client exits cleanly). The recovery resubmit for seed43 (job 7811896) sat blocked by h200_public quota for ~16 ticks before being cancelled when the user pivoted to Tasks 3-6 (cross-explorer pairings). **To resume later:** the 3 recovery commands are still in NOTABLE_ASSUMPTIONS.md (`sbatch --export=ALL,SEED={43,44,45} sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH`); each is idempotent and only re-processes missing qids. After all 4 seeds reach N=150, run `python scripts/compute_best_of_n.py --inputs evals/bcp/.../qwen3.5-122b-a10b/random_tools_seed{42,43,44,45}/evaluation_summary.json --label "Qwen3.5"` to compute pass@4 and update this row. We're treating it as out-of-scope for the current pivot; not blocking anything.
 
 ---
 
