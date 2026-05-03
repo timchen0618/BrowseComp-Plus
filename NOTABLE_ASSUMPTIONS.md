@@ -4,6 +4,36 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-05-03 — Qwen3.5 random_tools seed45 ended at 147/150 (last 3 hung)
+
+**Context:** Job 7741702 (Qwen3.5-122B-A10B random_tools_seed45) ran 06:52:38 and SLURM marked COMPLETED — log ended `=== Done ===`. 147/150 trajectories landed; last 3 queries hung in agent loop ~80 minutes before client exit. Same exact pattern as seed44 (148/150) and the 2026-04-28 selected_tools incident — recurring Qwen3.5 issue where a few queries enter unbreakable agent-loop spirals.
+
+**Action:** No autonomous resubmit yet — same posture as seed44. Eval can run at N=147 once user decides on N=147/148 vs chase-all-150. seed43 recovery (7811896) is next in queue.
+
+**Revert path:** `sbatch --export=ALL,SEED=45 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` to recover the missing 3.
+
+---
+
+## 2026-05-02 — Qwen3.5 random_tools seed44 ended at 148/150 (last 2 hung)
+
+**Context:** Job 7741701 (Qwen3.5-122B-A10B random_tools_seed44) ran 06:05:29 and SLURM marked COMPLETED — log ended with `=== Done ===` cleanly, so the client exited naturally. But only 148/150 trajectories landed; final 2 queries hung in the agent loop for ~70 minutes before the iter cap (or some other terminal state) released them without writing trajectories. Same exact pattern as the 2026-04-28 Qwen3.5 selected_tools incident at 148/150.
+
+**Action:** No autonomous resubmit yet — eval can run at N=148 (state machine condition 1 says "150 trajectories"; this is 148, so technically not yet eligible). Flag to user for decision: (a) eval at N=148 like the prior incident, or (b) resubmit again to chase the last 2.
+
+**Revert path:** `sbatch --export=ALL,SEED=44 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` to recover the missing 2 (idempotent client picks them up).
+
+---
+
+## 2026-05-02 — Qwen3.5 random_tools seed43 vLLM crash at 135/150, resubmitted
+
+**Context:** Job 7741700 (Qwen3.5-122B-A10B random_tools_seed43) ran for 03:21:50 and SLURM marked it COMPLETED, but only 135/150 trajectories landed. Tail of `/scratch/afw8937/logs/qwen3.5-122b-a10b_test150_random_7741700.out` shows 15 qids (275, 149, 81, 747, 309, 962, 1107, 600, 174, 389, 1077, 427, 132, +2 more) all failed with `[iter N] chat.completions error (3 consecutive): Connection error.` — vLLM died mid-run, classic Qwen3.5+H200 instability (same family as the recurring TMA crashes).
+
+**Action:** `sbatch --export=ALL,SEED=43 sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH` → job 7811896. Idempotent client will pick up the 15 missing qids.
+
+**Revert path:** N/A — recovery only adds files; existing 135 trajectories untouched.
+
+---
+
 ## 2026-04-28 — Qwen3.5 selected_tools cancelled at 148/150 (last 2 queries hung)
 
 **Context:** Job 7372606 (Qwen3.5 BCP selected_tools resume after the earlier vLLM TMA crash) ran for 5h14m. After hitting 148/150 trajectories, the last 2 queries cycled in a long agent loop for ~1.5h with no progress. vLLM stayed healthy (240 tok/s gen, 11% KV cache), so the issue was the agent client's iteration loop — likely repetitive search-failure cycles that don't trip the iter cap of 100.

@@ -25,7 +25,7 @@ For pass@4 we need clean N=150 across all four selection seeds. GLM and MiniMax 
 | Model | seed42 (existing) | seed43 (new) | seed44 (new) | seed45 (new) | best-of-4 |
 |---|:---:|:---:|:---:|:---:|:---:|
 | GLM-4.7-Flash | ✅ N=150 (47.3%) | ✅ N=150 (44.0%) | ✅ N=150 (43.3%) | ✅ N=150 (46.0%) | ✅ **52.7% (+5.3pp lift)** |
-| Qwen3.5-122B-A10B | ⚠️ N=130 (54.6%) — **rerun to fill 20 missing** | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
+| Qwen3.5-122B-A10B | ✅ N=150 (49.3%) — recovered from 130 | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
 | MiniMax-M2.5 | ✅ N=150 done (57.3%) | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ TODO run + eval | ⏳ aggregate after evals |
 
 **Submission plan:** 10 round-1 runs (1 Qwen3.5 seed42 recovery + 9 new seeds across 3 models). For each as it lands at 150 trajectories: submit eval. After all 12 evals (4 seeds × 3 models) are done: run `scripts/compute_best_of_n.py` to compute pass@4 per model and fill in the best-of-4 column.
@@ -82,7 +82,7 @@ For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory
 | + full trajectory | 48.4 | 0.0 | 0.1 |
 | + trajectory summary | 48.3 | 56.5 | 14.4 |
 | + selected k=5 tool calls (N=148) | 48.7 | 25.4 | 15.9 |
-| **+ random k=5 tool calls (selection seed=42, N=130)** | **54.6** | 30.7 | 14.3 |
+| **+ random k=5 tool calls (selection seed=42)** | **49.3** | 28.9 | 15.7 |
 | + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
 | + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
 | + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
@@ -98,10 +98,10 @@ For each model, round-1 runs `--search-budget 5` (≤5 tool calls per trajectory
 | + trajectory summary | 56.0 | 56.7 | 10.0 |
 | + selected k=5 tool calls | 55.3 | 45.4 | 8.6 |
 | **+ random k=5 tool calls (selection seed=42)** | **57.3** | 49.8 | 9.1 |
-| + random k=5 tool calls (selection seed=43) | TBD | TBD | TBD |
-| + random k=5 tool calls (selection seed=44) | TBD | TBD | TBD |
-| + random k=5 tool calls (selection seed=45) | TBD | TBD | TBD |
-| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=43) | 52.7 | 50.4 | 8.9 |
+| + random k=5 tool calls (selection seed=44) | 49.3 | 49.5 | 8.7 |
+| + random k=5 tool calls (selection seed=45) | 51.3 | 45.5 | 8.4 |
+| **+ random k=5 tool calls (best of 4)** | **71.3** | — | — |
 | + self prompted explorer (budget=5, raw) | TBD | TBD | TBD |
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed).
