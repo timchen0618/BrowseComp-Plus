@@ -44,3 +44,7 @@ auto_pipeline.pid
 auto_pipeline_heartbeat
 auto_pipeline_state.json
 missing*.txt
+pipeline_summary.md
+preflight_failed.md
+*.log
+*.out
