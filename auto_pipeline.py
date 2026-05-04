@@ -94,9 +94,10 @@ class PipelineState:
     last_check_at: str = ""
     cycle_count: int = 0
     phase: str = "init"         # init | preflight | submitting | monitoring | stuck | eval | done
-    interval_seconds: int = 7200
+    interval_seconds: int = 1800
     stuck_threshold: int = 3
     targets: list[TargetState] = field(default_factory=list)
+    eval_job_id: int | None = None
 
 
 def _setup_logging(log_path: Path = LOG_PATH) -> None:
@@ -602,11 +603,19 @@ def save_state(state: PipelineState, path: Path | None = None) -> None:
 
 def load_state(path: Path | None = None) -> PipelineState:
     """Load PipelineState from JSON, reconstructing nested dataclasses."""
+    import submit_missing as sm
+
     p = path or STATE_PATH
     data = json.loads(p.read_text())
     targets: list[TargetState] = []
     for ts in data.get("targets", []):
         t = Target(**ts["target"])
+        # Re-parse so fixes to parse_run_name take effect without a full restart.
+        try:
+            model, mode, seed, traj_model = sm.parse_run_name(t.run_name)
+            t.model, t.mode, t.seed, t.traj_model = model, mode, seed, traj_model
+        except Exception:
+            pass
         ts_copy = dict(ts)
         ts_copy["target"] = t
         targets.append(TargetState(**ts_copy))
@@ -881,12 +890,21 @@ def run_pipeline(args) -> int:
         state.phase = "done"
         save_state(state)
         return 0
-    result = subprocess.run(["sbatch", str(sbatch_path)], capture_output=True, text=True)
-    if result.returncode != 0:
-        write_eval_failed(PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out")
-        return 3
-    m = re.search(r"Submitted batch job (\d+)", result.stdout)
-    eval_jid = int(m.group(1)) if m else None
+
+    # On resume, an eval job may already be running — reuse it instead of submitting another.
+    eval_jid = state.eval_job_id
+    if eval_jid is not None and poll_jobs([eval_jid]).get(eval_jid, "DONE") != "DONE":
+        log.info("resuming: eval job %d already running, skipping submission", eval_jid)
+    else:
+        result = subprocess.run(["sbatch", str(sbatch_path)], capture_output=True, text=True)
+        if result.returncode != 0:
+            write_eval_failed(PROJECT_ROOT / "sbatch_outputs" / "eval_auto.out")
+            return 3
+        m = re.search(r"Submitted batch job (\d+)", result.stdout)
+        eval_jid = int(m.group(1)) if m else None
+        state.eval_job_id = eval_jid
+        save_state(state)
+
     if eval_jid is not None:
         while poll_jobs([eval_jid]).get(eval_jid, "DONE") != "DONE":
             _sleep_with_heartbeat(state.interval_seconds)
@@ -906,7 +924,7 @@ def run_pipeline(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submit", action="store_true", help="Actually submit (default: dry-run)")
-    parser.add_argument("--interval-seconds", type=int, default=7200)
+    parser.add_argument("--interval-seconds", type=int, default=1800)
     parser.add_argument("--submit-interval", type=int, default=200,
                         help="Seconds to sleep between consecutive sbatch submissions")
     parser.add_argument("--stuck-threshold", type=int, default=3)

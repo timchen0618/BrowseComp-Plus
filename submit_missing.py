@@ -28,10 +28,10 @@ TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed4_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed5_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "tongyi_seed3":                                                                  [2],
@@ -139,7 +139,14 @@ MISSING_TEST150 = {
     
     # "gpt-oss-120b_budget_seed0":                                                    list(range(3)),
     # qwen3.5-4b — budget only
-    # "qwen3.5-4b_budget_seed0":                                                       list(range(3)),
+    # "qwen3.5-4b-sft-best_of_4_random_selection_mode_b_budget_seed0":                    list(range(3)),
+    # "qwen3.5-4b-sft-gemini_2.5_pro_selection_budget_seed0":                           list(range(3)),
+    # "qwen3.5-4b-sft-random_selection_budget_seed0":                                   list(range(3)),
+    # "qwen3.5-4b-sft-best_of_4_random_selection_mode_a_budget_seed0":                    list(range(3)),
+    # "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_budget_seed0":                    list(range(3)),
+    # "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep_budget_seed0":                    list(range(3)),
+    # "qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_budget_seed0":                          list(range(3)),
+    # "qwen3.5-4b-sft-random_selection_10_eps_budget_seed0":                                  list(range(3)),
     # "qwen3.6-35b-a3b_seed0":                                                        list(range(3)),
     # "qwen3.6-35b-a3b_budget_seed0":                                                   list(range(3)),
     # "qwen3.6-35b-a3b_seed0":                                                        [2],  # complete
@@ -157,7 +164,15 @@ MISSING_TEST150 = {
     # Blocked on qwen3.6-35b-a3b_budget_seed0 baseline regen — re-enable once baseline has original_messages
     # "tongyi_traj_budget_orig_ext_qwen3.6-35b-a3b_seed0":                               [0, 1, 2],
     # "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":                            [1],
-    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                              [1, 2],
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_random_selection_mode_a_seed0":                              list(range(3)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_random_selection_mode_b_seed0":                              list(range(3)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_random_selection_mode_c_seed0":                              list(range(3)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep_seed0":                         list(range(3)),
+    
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_seed0":                              list(range(3)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_seed0":                              list(range(3)),
+    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_10_eps_seed0":                              list(range(3)),
+    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_seed0":                              list(range(3)),
     #"tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     # "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
 }
@@ -198,12 +213,42 @@ def parse_run_name(name):
     elif name.startswith("qwen3.6-35b-a3b"):
         model = "qwen3.6-35b-a3b"
         rest = name[len("qwen3.6-35b-a3b_"):]
+    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps"):
+        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps"
+        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_"):]
+    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection"):
+        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection"
+        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_"):]
+    elif name.startswith("qwen3.5-4b-sft-random_selection_10_eps"):
+        model = "qwen3.5-4b-sft-random_selection_10_eps"
+        rest = name[len("qwen3.5-4b-sft-random_selection_10_eps_"):]
+    elif name.startswith("qwen3.5-4b-sft-random_selection"):
+        model = "qwen3.5-4b-sft-random_selection"
+        rest = name[len("qwen3.5-4b-sft-random_selection_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_a"):
+        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_a"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_a_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_b"):
+        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_b"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_b_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep"):
+        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_c"):
+        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_c"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_"):]
     elif name.startswith("qwen3.5-4b-sft"):
         model = "qwen3.5-4b-sft"
         rest = name[len("qwen3.5-4b-sft_"):]
     elif name.startswith("qwen3.5-4b"):
         model = "qwen3.5-4b"
         rest = name[len("qwen3.5-4b_"):]
+    elif name.startswith("qwen3.5-2b"):
+        model = "qwen3.5-2b"
+        rest = name[len("qwen3.5-2b_"):]
+    elif name.startswith("qwen3.5-9b"):
+        model = "qwen3.5-9b"
+        rest = name[len("qwen3.5-9b_"):]
     else:
         raise ValueError(f"Unknown model in: {name}")
 

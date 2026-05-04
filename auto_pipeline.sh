@@ -37,7 +37,7 @@ if [ "${_AUTO_PIPELINE_SLURM:-}" = "1" ]; then
 
     _pipeline_done() {
         local p; p=$(_pipeline_phase)
-        [ "$p" = "done" ] || [ "$p" = "stuck" ]
+        [ "$p" = "done" ] || [ "$p" = "stuck" ] || [ "$p" = "eval" ]
     }
 
     _submit_next() {
@@ -75,8 +75,8 @@ SBATCH_EOF
         rm -f "$tmp"
     }
 
-    # USR1 = SLURM pre-termination warning (300s before time limit)
-    # TERM = SLURM kill at time limit
+    # USR1 = SLURM pre-termination warning (300s before time limit) → chain
+    # TERM = scancel / user cancellation → do NOT chain
     _CHAIN_SUBMITTED=0
 
     _submit_next_once() {
@@ -88,14 +88,23 @@ SBATCH_EOF
         _CHAIN_SUBMITTED=1
     }
 
-    _on_signal() {
-        echo "Signal received at $(date); chaining next job..."
+    _on_usr1() {
+        echo "USR1 (time limit approaching) at $(date); chaining next job..."
         _submit_next_once
         [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null
         wait "$CHILD_PID" 2>/dev/null || true
         exit 0
     }
-    trap '_on_signal' USR1 TERM
+
+    _on_term() {
+        echo "TERM (scancel) at $(date); exiting without chaining."
+        [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null
+        wait "$CHILD_PID" 2>/dev/null || true
+        exit 0
+    }
+
+    trap '_on_usr1' USR1
+    trap '_on_term' TERM
 
     # Run the pipeline (not exec so we can chain after normal exit)
     python3.12 auto_pipeline.py "${PIPELINE_ARGS[@]}" &
