@@ -15,11 +15,12 @@
 
 SINGULARITY_IMAGE=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY_FILE=/scratch/hc3337/envs/bcp.ext3
-VLLM_OVERLAY_FILE=${OVERLAY_FILE}
+VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
 GPU_UTIL="0.85"
 MODEL_NAME="qwen3.6-35b-a3b"
 TENSOR_PARALLEL_SIZE=1
-port=6011
+port=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); p=s.getsockname()[1]; s.close(); print(p)")
+PORT_STR="--model-url http://localhost:${port}/v1"
 
 PLAN_MODEL="gemini_2.5_pro"
 TRAJ_MODEL="${MODEL_NAME}"
@@ -33,33 +34,45 @@ lora_modules=""
 if [ "$MODEL_NAME" == "tongyi" ]; then
     model_path="Alibaba-NLP/Tongyi-DeepResearch-30B-A3B"
     PORT_STR="--port ${port}"
+    VLLM_OVERLAY_FILE=${OVERLAY_FILE}
 elif [ "$MODEL_NAME" == "qwen3.5-35b-a3b" ]; then
     model_path="Qwen/Qwen3.5-35B-A3B"
-    # PORT_STR="--port ${port}"
-    PORT_STR=""
-    VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
 elif [ "$MODEL_NAME" == "qwen3.6-35b-a3b" ]; then
     model_path="Qwen/Qwen3.6-35B-A3B"
-    # PORT_STR="--port ${port}"
-    PORT_STR=""
-    VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
-elif [ "$MODEL_NAME" == "qwen3.5-4b" ]; then
-    model_path="Qwen/Qwen3.5-4B"
-    PORT_STR=""
-    VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
+elif [ "$MODEL_NAME" == "qwen3.5-2b" ] || [ "$MODEL_NAME" == "qwen3.5-4b" ] || [ "$MODEL_NAME" == "qwen3.5-9b" ]; then
+    size="${MODEL_NAME#qwen3.5-}"
+    model_path="Qwen/Qwen3.5-${size^^}"
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft" ]; then
     model_path="Qwen/Qwen3.5-4B"
     lora_modules="qwen3.5-4b-sft=sft/checkpoints/axolotl-qwen3-4b-search-correct-split/checkpoint-100"
-    PORT_STR=""
-    VLLM_OVERLAY_FILE=/scratch/hc3337/envs/vllm_latest.ext3
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection=sft/checkpoints/gemini_2.5_pro_selection/checkpoint-107/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-random_selection=sft/checkpoints/random_selection/checkpoint-107/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_a" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_a=sft/checkpoints/best_of_4_random_selection_mode_a/checkpoint-213/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_b" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_b=sft/checkpoints/best_of_4_random_selection_mode_b/checkpoint-450/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_c" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_c=sft/checkpoints/best_of_4_random_selection_mode_c/checkpoint-213/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep=sft/checkpoints/best_of_4_random_selection_mode_c_5_eps/checkpoint-107/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps=sft/checkpoints/gemini_2.5_pro_selection_10_eps/checkpoint-213/"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_10_eps" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-random_selection_10_eps=sft/checkpoints/random_selection_10_eps/checkpoint-213/"
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
     model_path="openai/gpt-oss-120b"
-    TENSOR_PARALLEL_SIZE=1
-    GPU_UTIL="0.85"
-    PORT_STR=""
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
     model_path="openai/gpt-oss-20b"
-    PORT_STR=""
 else
     echo "Invalid retriever name"
     exit 1
@@ -69,13 +82,16 @@ client_model="${model_path}"
 
 
 if [ "$MODEL_NAME" == "gpt-oss-120b" ] || [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
-    singularity exec --nv --overlay ${OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL}" &
-elif [ "$MODEL_NAME" == "qwen3.5-35b-a3b" ] || [ "$MODEL_NAME" == "qwen3.6-35b-a3b" ] || [ "$MODEL_NAME" == "qwen3.5-4b" ]; then
-    singularity exec --nv --overlay ${VLLM_OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL} --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder" &
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft" ]; then
-    singularity exec --nv --overlay ${VLLM_OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL} --enable-lora --lora-modules ${lora_modules} --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder" &
-else
+    singularity exec --nv --overlay ${OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --port ${port} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL}" &
+elif [ "$MODEL_NAME" == "tongyi" ]; then
     singularity exec --nv --overlay ${VLLM_OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} VLLM_FLASH_ATTN_VERSION=2 CUDA_LAUNCH_BLOCKING=1 vllm serve ${model_path} --port ${port} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL}" &
+else
+    lora_args=""
+    [ -n "${lora_modules}" ] && lora_args="--enable-lora --lora-modules ${lora_modules}"
+    qwen3_args=""
+    [[ "${model_path}" == Qwen/Qwen3.5* || "${model_path}" == Qwen/Qwen3.6* ]] && \
+        qwen3_args="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder"
+    singularity exec --nv --overlay ${VLLM_OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --port ${port} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL} ${lora_args} ${qwen3_args}" &
 fi
 
 sleep 300
