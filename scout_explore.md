@@ -86,10 +86,10 @@
 | + trajectory summary | 48.3 | 56.5 | 14.4 |
 | + Gemini-2.5-pro selected k=5 tool calls (N=148) | 48.7 | 25.4 | 15.9 |
 | **+ random k=5 tool calls (selection seed=42)** | **49.3** | 28.9 | 15.7 |
-| + random k=5 tool calls (selection seed=43) | TBD (N≤135) | TBD | TBD |
-| + random k=5 tool calls (selection seed=44) | TBD (N≤148) | TBD | TBD |
-| + random k=5 tool calls (selection seed=45) | TBD (N≤147) | TBD | TBD |
-| + random k=5 tool calls (best of 4) | TBD | TBD | TBD |
+| + random k=5 tool calls (selection seed=43) | 🚫 incomplete (N=135, recovery cancelled) | — | — |
+| + random k=5 tool calls (selection seed=44) | 🚫 incomplete (N=148, recovery cancelled) | — | — |
+| + random k=5 tool calls (selection seed=45) | 🚫 incomplete (N=147, recovery cancelled) | — | — |
+| + random k=5 tool calls (best of 4) | 🚫 incomplete — depends on seeds 43/44/45 above | — | — |
 | + self prompted explorer (budget=5) | DEFERRED | — | — |
 | + qwen3.5-4b explorer (budget=5, vanilla) | DEFERRED | — | — |
 | + qwen3.5-4b explorer (SFT on best-of-4 random selection) | DEFERRED | — | — |
