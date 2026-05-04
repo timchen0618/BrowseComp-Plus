@@ -7,8 +7,16 @@ For each directory passed via --dirs, this script reads the file
 takes the max score per query_id across all provided dirs, and reports
 the average of those per-query maxima.
 
+With --metric correct (default), each directory is one sampled run: the
+per-query max is 1 if any run answered correctly, so the reported
+"Average of per-query maxima" is best-of-N accuracy (oracle picks the
+best run per query). This matches pass@k style aggregation for binary
+correctness.
+
 Typical usage:
-    python compute_pass_k.py --dirs run1 run2 run3 --metric correct
+    python scripts_evaluation/compute_pass_k.py --dirs run_seed0 run_seed1 run_seed2 --metric correct
+
+Optional: restrict to a query list via --ground_truth path/to.jsonl (uses query_id from each line).
 """
 
 import argparse

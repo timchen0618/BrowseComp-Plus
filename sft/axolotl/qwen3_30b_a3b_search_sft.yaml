@@ -5,7 +5,7 @@
 #   python sft/axolotl/prepare_dataset.py \
 #       --input selected_tool_calls/<file>.jsonl \
 #       --trajectory-folder runs/bcp/.../<seed> \
-#       --output-dir sft/axolotl/data
+#       --output-dir sft/axolotl/data/raw/data_qwen
 #   axolotl preprocess sft/axolotl/qwen3_30b_a3b_search_sft.yaml
 #   accelerate launch -m axolotl.cli.train sft/axolotl/qwen3_30b_a3b_search_sft.yaml
 
@@ -19,7 +19,7 @@ trust_remote_code: true
 chat_template: qwen3
 
 datasets:
-  - path: sft/axolotl/data/train.jsonl
+  - path: ${DATA_DIR}/train.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -32,7 +32,7 @@ datasets:
     train_on_eos: turn
 
 test_datasets:
-  - path: sft/axolotl/data/val.jsonl
+  - path: ${DATA_DIR}/val.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -42,10 +42,13 @@ test_datasets:
     train_on_eos: turn
     split: train
 
-dataset_prepared_path: sft/axolotl/prepared
-output_dir: sft/checkpoints/axolotl-qwen3-30b-a3b
+dataset_prepared_path: ${PREPARED_DIR}
+output_dir: sft/checkpoints/${RUN_NAME}
 
-sequence_len: 8192
+sequence_len: 4096
+# Shorter eval sequences reduce VRAM during the first eval (Axolotl sets
+# eval_on_start when eval_steps is set). Training still uses sequence_len.
+eval_sequence_len: 4096
 # Packing concatenates unrelated trajectories into one sequence; that
 # leaks supervision across tool-call boundaries. Keep it off.
 sample_packing: false
@@ -72,28 +75,33 @@ optimizer: adamw_torch_fused
 
 bf16: true
 tf32: true
-gradient_checkpointing: true
-gradient_checkpointing_kwargs:
-  use_reentrant: false
+# With FSDP full shard, use activation_checkpointing in fsdp_config only (HF
+# TrainingArguments.gradient_checkpointing conflicts with FSDP activation
+# checkpointing). See https://github.com/huggingface/transformers/issues/30404
+gradient_checkpointing: false
 flash_attention: true
 
 logging_steps: 10
 save_steps: 100
 eval_steps: 100
 save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
 
 # ----- Multi-GPU FSDP -----
 fsdp:
   - full_shard
   - auto_wrap
 fsdp_config:
+  activation_checkpointing: true
   fsdp_transformer_layer_cls_to_wrap: Qwen3MoeDecoderLayer
   fsdp_state_dict_type: FULL_STATE_DICT
-  fsdp_offload_params: false
+  fsdp_offload_params: true
   # LoRA + FSDP requires use_orig_params=false.
   fsdp_use_orig_params: false
 
 wandb_project: sft-trajectory
-wandb_name: axolotl-qwen3-30b-a3b
+wandb_name: ${RUN_NAME}
 
 seed: 42

@@ -38,7 +38,12 @@ BrowseComp-Plus/
 ├── qampari_experiments/    # QAMPARI benchmark scripts
 ├── topics-qrels/           # Relevance judgments
 ├── figures/                # Generated charts
-├── select_useful_tool_calls.py  # Select k useful tool calls from trajectories via Gemini
+├── src_select_tool_calls/      # Tool call selection scripts
+│   ├── tool_call_utils.py           # Shared utilities (I/O, Gemini parsing, result-based helpers, generic OM driver)
+│   ├── select_useful_tool_calls.py  # Gemini selection — gpt-oss-120b (OpenAI function_call OM format)
+│   ├── select_useful_tool_calls_glm.py    # Gemini selection — GLM (role/tool_calls OM format)
+│   ├── select_useful_tool_calls_tongyi.py # Gemini selection — Tongyi (<tool_call> XML OM format)
+│   └── random_select_tool_calls.py  # Random baseline tool call selection
 ├── summarize_trajectories.py    # Summarize agent trajectories via vLLM
 ├── shard_monitor.py        # Shard completeness checker and resubmission generator
 ├── monitor_and_eval.sh     # Monitor run completion and auto-submit eval SBATCH
@@ -81,6 +86,27 @@ BaseSearcher (BM25/FAISS/Custom) → Results → LLM → ... → Final Answer �
 Trajectory JSON → Evaluation (Qwen3-32B judge)
 ```
 
+### Prompt Template Architecture
+
+**Two separate prompt modules exist — they are NOT interchangeable:**
+
+| Client | Prompt module | Template style |
+|--------|---------------|----------------|
+| `oss_client.py` | `search_agent/prompts.py` | Full instructions embedded in user message |
+| `tongyi_client.py` / `react_agent.py` | `search_agent/tongyi_utils/prompts.py` | Minimal user message; instructions live in system prompt |
+
+**`--query-template` argument** — only `oss_client.py` supports this. `tongyi_client.py` does NOT have it (its `react_agent.py` uses hardcoded templates from `tongyi_utils/prompts.py`).
+
+SBATCH scripts set `--query-template` in `extra_args` for trajectory modes, then strip it for `tongyi_client.py` via this block (placed after `esac`, before the final `singularity exec`):
+```bash
+if [ "$execution_script" != "oss_client.py" ]; then
+    extra_args="${extra_args/ --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY/}"
+    extra_args="${extra_args/ --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY/}"
+fi
+```
+
+**Rule: any new CLI argument added to `oss_client.py` that `tongyi_client.py` doesn't support must be stripped in SBATCH scripts using the same pattern.**
+
 ### Search Tool Architecture
 
 ```
@@ -106,6 +132,8 @@ All runs live under `runs/`, organized as `runs/{dataset}/{retriever}/{split}/{a
 | `full/` | All queries |
 | `first_50/` | First 50 queries |
 | `first_100/` | First 100 queries |
+| `test150/` | Test split — 150 queries (fixed seed 42) |
+| `train680/` | Train split — 680 queries (fixed seed 42) |
 
 | Agent model folder | Examples |
 |--------------------|---------|
@@ -117,7 +145,7 @@ All runs live under `runs/`, organized as `runs/{dataset}/{retriever}/{split}/{a
 runs/
 └── {dataset}/              # e.g., bcp, frames
     └── {retriever}/        # e.g., Qwen3-Embedding-8B
-        └── {split}/        # e.g., full, first_50, first_100
+        └── {split}/        # e.g., full, first_50, first_100, test150, train680
             └── {agent_model}/  # e.g., tongyi, gpt-oss-120b
                 └── {run_name}/ # e.g., planning_v8_prompt_seed0
                     └── {query_id}.json
@@ -125,7 +153,7 @@ runs/
 evals/
 └── {dataset}/              # e.g., bcp, frames
     └── {retriever}/        # e.g., Qwen3-Embedding-8B
-        └── {split}/        # e.g., full, first_50, first_100
+        └── {split}/        # e.g., full, first_50, first_100, test150, train680
             └── {agent_model}/  # mirrors runs/ structure
                 └── {run_name}/
                     └── eval results
@@ -168,7 +196,8 @@ evals/
 |------|---------|
 | `evaluate_run.py` | Main grader — Qwen3-32B as judge, batch vLLM inference |
 | `deduplicate_trajectories.py` | Remove duplicate query_id entries |
-| `compute_pass_k.py` | pass@k metrics |
+| `compute_pass_k.py` | pass@k oracle: best-of-N accuracy across multiple eval dirs |
+| `merge_oracle_summary.py` | Merge N eval dirs into a single oracle summary (per-query max); required before `paired_bootstrap_eval_summaries.py` when comparing groups |
 | `aggregate_score.py` | Aggregate scores across runs |
 
 ### src_utils/
@@ -197,10 +226,13 @@ See `scripts/README.md` for full documentation.
 | `compute_selected_tool_calls_stats.py` | Summary stats (validity %, avg indices) for selected_tool_calls |
 | `plot_search_call_distribution.py` | Multi-panel histogram of search-call counts per trajectory folder |
 | `plot_selected_position_histogram.py` | Distribution of selected candidate positions |
+| `split_bcp_test150.py` | Sample reproducible test150/train680 split of BCP queries + ground-truth JSONL; optional qid-list output |
+| `shard_queries_tsv.py` | Split any queries TSV into N contiguous `q_{i}.tsv` shards (matches `bcp_10_shards/` layout) |
 | `update_submit_missing.py` | Parse `find_missing_ids.py` output into MISSING dict for resubmission |
 | `filter_empty_runs_gpt_oss_120b_seeds4_7.sh` | Shell wrapper for filter_empty_runs on gpt-oss-120b seeds |
 | `filter_empty_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for filtering empty selected tool calls |
 | `repair_selected_tool_calls_gpt_oss_120b.sh` | Shell wrapper for repairing gpt-oss-120b selected tool calls |
+| `plot_tool_call_overlap.py` | Pairwise Jaccard heatmap of selected_indices across JSONL runs → `figures/tool_call_overlap_heatmap.png` |
 
 ### sft/axolotl/ — Axolotl SFT Pipeline
 
@@ -216,10 +248,17 @@ See `sft/axolotl/README.md` for full documentation.
 
 | File | Purpose |
 |------|---------|
-| `select_useful_tool_calls.py` | Select k useful tool calls from trajectories via Gemini; produces verbatim excerpts |
+| `src_select_tool_calls/tool_call_utils.py` | Shared I/O, Gemini parsing, result-based helpers, generic `run_one_om` driver |
+| `src_select_tool_calls/select_useful_tool_calls.py` | Gemini selection for gpt-oss-120b; uses OpenAI `function_call` OM format; `--use-original-messages` flag |
+| `src_select_tool_calls/select_useful_tool_calls_glm.py` | Gemini selection for GLM; reads `tool_calls` array + `role=tool` OM messages |
+| `src_select_tool_calls/select_useful_tool_calls_tongyi.py` | Gemini selection for Tongyi; parses `<tool_call>` XML + `<tool_response>` OM messages |
+| `src_select_tool_calls/random_select_tool_calls.py` | Random baseline: same candidate indices as select_useful, random subset |
 | `summarize_trajectories.py` | Summarize agent trajectories using vLLM; outputs JSONL with resumable progress |
 | `shard_monitor.py` | Autonomous shard completeness checker with SLURM resubmission generation |
 | `monitor_and_eval.sh` | Polling loop that monitors run completion and auto-submits eval SBATCH |
+| `auto_pipeline.py` | Automated submit → monitor → resubmit → eval → summary pipeline over submit_missing.py targets |
+| `auto_pipeline.sh` | nohup-friendly wrapper for auto_pipeline.py |
+| `paired_bootstrap_eval_summaries.py` | Paired bootstrap significance test between two `evaluation_summary.json` files; use `merge_oracle_summary.py` first when comparing multi-seed groups |
 
 ---
 
@@ -253,9 +292,14 @@ topics-qrels/
 │   ├── queries_first50.tsv
 │   ├── queries_first100.tsv
 │   ├── queries_last730.tsv
+│   ├── queries_test150.tsv       # Test split (150 queries, seed 42)
+│   ├── queries_test150_qids.txt  # Test split query IDs, one per line
+│   ├── queries_train680.tsv      # Train split (680 queries, seed 42)
 │   ├── qrel_golds.txt            # Gold relevance judgments (TREC format)
 │   ├── qrel_evidence.txt         # Evidence relevance judgments (TREC format)
-│   └── bcp_10_shards/q_{0-9}.tsv
+│   ├── bcp_10_shards/q_{0-9}.tsv
+│   ├── bcp_test150_3_shards/q_{0-2}.tsv  # 50 rows each
+│   └── bcp_train680_8_shards/q_{0-7}.tsv # ~85 rows each
 ├── frames/
 │   ├── queries.tsv               # Full query set
 │   ├── queries_first50.tsv
@@ -272,8 +316,10 @@ topics-qrels/
 
 ```
 data/
-├── browsecomp_plus_decrypted.jsonl  # BCP ground truth (answers + gold docs)
-└── frames_ground_truth.jsonl        # FRAMES ground truth (answers + wiki links)
+├── browsecomp_plus_decrypted.jsonl        # BCP ground truth (answers + gold docs)
+├── browsecomp_plus_decrypted_test150.jsonl  # Test split ground truth (150 records)
+├── browsecomp_plus_decrypted_train680.jsonl # Train split ground truth (680 records)
+└── frames_ground_truth.jsonl              # FRAMES ground truth (answers + wiki links)
 ```
 
 ```json

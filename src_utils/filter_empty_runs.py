@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
+
+_TRAJ_TAGS = ("trajectory", "trajectory_summary")
 
 
 @dataclass(frozen=True)
 class ScanResult:
     empty_paths: list[Path]
     nonempty_paths: list[Path]
+    empty_traj_content_paths: list[Path] = field(default_factory=list)
 
 
 def _is_empty_run_payload(payload: dict[str, Any]) -> bool:
@@ -40,6 +44,53 @@ def _is_empty_run_payload(payload: dict[str, Any]) -> bool:
     return True
 
 
+def _has_empty_trajectory_content(payload: dict[str, Any]) -> bool:
+    """
+    Returns True when the first user prompt contains a <trajectory> or
+    <trajectory_summary> tag pair but the *second* occurrence of that pair
+    (the actual injected content, not the template placeholder) is empty.
+
+    The first pair is always the empty template reference in the instructions;
+    the second pair should hold the real trajectory/summary text.
+    """
+    result = payload.get("result", None)
+    if not isinstance(result, list) or not result:
+        return False
+
+    first_user_output: str | None = None
+    for entry in result:
+        if isinstance(entry, dict) and entry.get("type") == "user":
+            out = entry.get("output", "")
+            if isinstance(out, str):
+                first_user_output = out
+            break
+
+    if first_user_output is None:
+        return False
+
+    for tag in _TRAJ_TAGS:
+        pattern = re.compile(rf"<{tag}>(.*?)</{tag}>", re.DOTALL)
+        matches = pattern.findall(first_user_output)
+        if len(matches) < 2:
+            continue
+        # matches[0] is the empty template placeholder; matches[1] is the content.
+        if not matches[1].strip():
+            return True
+
+    return False
+
+
+def _get_leaf_dirs_with_json(root: Path) -> list[Path]:
+    """Return dirs that directly contain *.json files; stop descending once found."""
+    import os
+    results = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if any(f.endswith(".json") for f in filenames):
+            results.append(Path(dirpath))
+            dirnames.clear()
+    return sorted(results)
+
+
 def _iter_json_files(input_dir: Path) -> Iterable[Path]:
     # Most runs are named run_*.json; we accept all *.json to be safe.
     for p in sorted(input_dir.glob("*.json")):
@@ -50,6 +101,7 @@ def _iter_json_files(input_dir: Path) -> Iterable[Path]:
 def scan_empty_runs(input_dir: Path) -> ScanResult:
     empty_paths: list[Path] = []
     nonempty_paths: list[Path] = []
+    empty_traj_content_paths: list[Path] = []
 
     for path in _iter_json_files(input_dir):
         try:
@@ -63,9 +115,15 @@ def scan_empty_runs(input_dir: Path) -> ScanResult:
         if isinstance(payload, dict) and _is_empty_run_payload(payload):
             empty_paths.append(path)
         else:
+            if isinstance(payload, dict) and _has_empty_trajectory_content(payload):
+                empty_traj_content_paths.append(path)
             nonempty_paths.append(path)
 
-    return ScanResult(empty_paths=empty_paths, nonempty_paths=nonempty_paths)
+    return ScanResult(
+        empty_paths=empty_paths,
+        nonempty_paths=nonempty_paths,
+        empty_traj_content_paths=empty_traj_content_paths,
+    )
 
 
 def _write_list(paths: list[Path], out_path: Path) -> None:
@@ -128,22 +186,49 @@ def main() -> int:
         action="store_true",
         help="Write empty/non-empty path lists under --output-root (or next to each input dir if output-root omitted).",
     )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Treat each --input-dirs entry as a root to walk recursively; scans every leaf dir containing JSON files.",
+    )
 
     args = parser.parse_args()
 
     if args.mode in {"copy-nonempty", "move-empty"} and args.output_root is None:
         parser.error("--output-root is required for mode copy-nonempty or move-empty")
 
+    # Expand input dirs to leaf dirs when -r is set.
+    input_dirs: list[Path] = []
+    for d in args.input_dirs:
+        if args.recursive:
+            leaves = _get_leaf_dirs_with_json(d)
+            if not leaves:
+                print(f"WARNING: no JSON-containing subdirs found under {d}")
+            input_dirs.extend(leaves)
+        else:
+            input_dirs.append(d)
+
+    if args.recursive:
+        print(f"Found {len(input_dirs)} leaf directories with JSON files")
+
     total_empty = 0
     total_nonempty = 0
+    total_empty_traj = 0
 
-    for input_dir in args.input_dirs:
+    for input_dir in input_dirs:
         scan = scan_empty_runs(input_dir)
         total_empty += len(scan.empty_paths)
         total_nonempty += len(scan.nonempty_paths)
+        total_empty_traj += len(scan.empty_traj_content_paths)
 
         seed_name = input_dir.name
-        print(f"{input_dir}: empty={len(scan.empty_paths)} nonempty={len(scan.nonempty_paths)}")
+        print(
+            f"{input_dir}: empty={len(scan.empty_paths)}"
+            f" nonempty={len(scan.nonempty_paths)}"
+            f" empty_traj_content={len(scan.empty_traj_content_paths)}"
+        )
+        for p in scan.empty_traj_content_paths:
+            print(f"  [empty traj content] {p}")
 
         if args.write_lists:
             if args.output_root is not None:
@@ -152,6 +237,10 @@ def main() -> int:
                 lists_dir = input_dir
             _write_list(scan.empty_paths, lists_dir / f"{seed_name}.empty.txt")
             _write_list(scan.nonempty_paths, lists_dir / f"{seed_name}.nonempty.txt")
+            _write_list(
+                scan.empty_traj_content_paths,
+                lists_dir / f"{seed_name}.empty_traj_content.txt",
+            )
 
         if args.mode == "copy-nonempty":
             assert args.output_root is not None
@@ -162,7 +251,7 @@ def main() -> int:
         elif args.mode == "delete-empty":
             _delete_paths(scan.empty_paths)
 
-    print(f"TOTAL: empty={total_empty} nonempty={total_nonempty}")
+    print(f"TOTAL: empty={total_empty} nonempty={total_nonempty} empty_traj_content={total_empty_traj}")
     return 0
 
 

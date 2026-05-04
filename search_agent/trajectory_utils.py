@@ -6,6 +6,7 @@ the same plumbing.
 """
 
 import json
+import re
 import random
 import time
 from pathlib import Path
@@ -194,23 +195,7 @@ def _format_tongyi_trajectory_for_prompt(
     return result
 
 
-def _format_original_messages_for_prompt(
-    trajectory: dict,
-    max_chars: int = 0,
-) -> str:
-    """Serialize a trajectory's original_messages into a plain string.
-
-    Dumps the entire original_messages list as a JSON string, preserving the
-    original structure without any reformatting.
-    """
-    msgs = trajectory.get("original_messages", [])
-    result = json.dumps(msgs, ensure_ascii=False) if msgs else "(no original messages)"
-    if max_chars > 0 and len(result) > max_chars:
-        result = result[:max_chars] + "\n\n... (messages truncated)"
-    return result
-
-
-def _format_original_messages_for_prompt_truncated(
+def _format_original_messages_for_prompt_oss(
     trajectory: dict,
     max_chars: int = 0,
     reasoning_max_chars: int = 3000,
@@ -218,7 +203,7 @@ def _format_original_messages_for_prompt_truncated(
 ) -> str:
     """Serialize ``original_messages`` into a JSON string, with light truncation.
 
-    This keeps the same I/O shape as ``_format_original_messages_for_prompt``:
+    This keeps the same I/O shape as ``_format_original_messages_for_prompt_tongyi``:
     input trajectory dict → output string (JSON-serialized list).
 
     Compared to the raw dump, it attempts to truncate very long reasoning/tool
@@ -253,6 +238,54 @@ def _format_original_messages_for_prompt_truncated(
             out = m.get("output")
             if isinstance(out, str) and tool_output_max_chars > 0 and len(out) > tool_output_max_chars:
                 m["output"] = out[:tool_output_max_chars] + "..."
+
+    result = json.dumps(msgs_clone, ensure_ascii=False)
+    if max_chars > 0 and len(result) > max_chars:
+        result = result[:max_chars] + "\n\n... (messages truncated)"
+    return result
+
+
+def _format_original_messages_for_prompt_tongyi(
+    trajectory: dict,
+    max_chars: int = 0,
+    reasoning_max_chars: int = 3000,
+    tool_output_max_chars: int = 5000,
+) -> str:
+    msgs = trajectory.get("original_messages", [])
+    if not msgs:
+        return "(no original messages)"
+
+    try:
+        msgs_clone = json.loads(json.dumps(msgs, ensure_ascii=False))
+    except Exception:
+        result = json.dumps(msgs, ensure_ascii=False)
+        if max_chars > 0 and len(result) > max_chars:
+            result = result[:max_chars] + "\n\n... (messages truncated)"
+        return result
+
+    def _truncate_think(content: str) -> str:
+        def replacer(m: re.Match) -> str:
+            inner = m.group(1)
+            if reasoning_max_chars > 0 and len(inner) > reasoning_max_chars:
+                inner = inner[:reasoning_max_chars] + "..."
+            return f"<think>{inner}</think>"
+        return re.sub(r"<think>(.*?)</think>", replacer, content, flags=re.DOTALL)
+
+    def _truncate_tool_response(content: str) -> str:
+        def replacer(m: re.Match) -> str:
+            inner = m.group(1)
+            if tool_output_max_chars > 0 and len(inner) > tool_output_max_chars:
+                inner = inner[:tool_output_max_chars] + "..."
+            return f"<tool_response>{inner}</tool_response>"
+        return re.sub(r"<tool_response>(.*?)</tool_response>", replacer, content, flags=re.DOTALL)
+
+    for m in msgs_clone if isinstance(msgs_clone, list) else []:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), str):
+            continue
+        if m.get("role") == "assistant":
+            m["content"] = _truncate_think(m["content"])
+        elif m.get("role") == "user":
+            m["content"] = _truncate_tool_response(m["content"])
 
     result = json.dumps(msgs_clone, ensure_ascii=False)
     if max_chars > 0 and len(result) > max_chars:

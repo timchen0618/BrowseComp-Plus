@@ -89,6 +89,61 @@ python scripts/plot_selected_position_histogram.py
 
 ---
 
+## Dataset Splitting & Sharding
+
+### `split_bcp_test150.py`
+
+Samples a reproducible `test150` / `train680` split of the 830-query BrowseComp-Plus dataset. Uses a fixed random seed (default `42`) and writes matching query TSVs under `topics-qrels/bcp/` plus JSONL ground-truth subsets under `data/`. Streams the 2 GB source JSONL once and copies each line verbatim, so the split is both memory-safe and byte-identical to the original records.
+
+Outputs (default names):
+- `topics-qrels/bcp/queries_test150.tsv` — 150 rows
+- `topics-qrels/bcp/queries_train680.tsv` — 680 rows
+- `data/browsecomp_plus_decrypted_test150.jsonl` — 150 records
+- `data/browsecomp_plus_decrypted_train680.jsonl` — 680 records
+- `topics-qrels/bcp/queries_test150_qids.txt` — 150 query IDs, one per line (only when `--test-qids-out` is passed)
+
+```bash
+python scripts/split_bcp_test150.py \
+    --test-size 150 \
+    --seed 42 \
+    --test-name test150 \
+    --train-name train680 \
+    --test-qids-out auto
+```
+
+Key flags:
+- `--test-size N`: number of test examples to sample (default `150`).
+- `--seed N`: RNG seed for the shuffle (default `42`; rerunning with the same seed is idempotent).
+- `--test-name NAME` / `--train-name NAME`: label appended to output filenames (e.g. `queries_{NAME}.tsv`, `browsecomp_plus_decrypted_{NAME}.jsonl`).
+- `--queries-tsv PATH` / `--data-jsonl PATH`: override the source queries TSV and ground-truth JSONL.
+- `--test-qids-out PATH | auto | -`: optional path to write the sampled test query IDs (one per line, in the order they appear in the source TSV). `auto` or `-` defaults to `topics-qrels/bcp/queries_{test_name}_qids.txt`. `--test-indices-out` is accepted as a legacy alias.
+
+### `shard_queries_tsv.py`
+
+Splits any queries TSV into `N` contiguous shards `q_0.tsv` .. `q_{N-1}.tsv` in a target directory, matching the existing `topics-qrels/bcp/bcp_10_shards/` layout. Row order is preserved; when the row count doesn't divide evenly, the first `N % num_shards` shards get one extra row.
+
+```bash
+# Shard the test split into 3 (50 rows each)
+python scripts/shard_queries_tsv.py \
+    --input topics-qrels/bcp/queries_test150.tsv \
+    --out-dir topics-qrels/bcp/bcp_test150_3_shards \
+    --num-shards 3
+
+# Shard the train split into 8 (~85 rows each)
+python scripts/shard_queries_tsv.py \
+    --input topics-qrels/bcp/queries_train680.tsv \
+    --out-dir topics-qrels/bcp/bcp_train680_8_shards \
+    --num-shards 8
+```
+
+Typical companion to `split_bcp_test150.py`. Produces:
+- `topics-qrels/bcp/bcp_test150_3_shards/q_{0,1,2}.tsv` (50 rows each)
+- `topics-qrels/bcp/bcp_train680_8_shards/q_{0..7}.tsv` (~85 rows each)
+
+Use as `--reference_file "topics-qrels/bcp/bcp_test150_3_shards/*"` (or `bcp_train680_8_shards/*`) with the shard-aware tools.
+
+---
+
 ## Run Monitoring
 
 ### `update_submit_missing.py`
@@ -96,8 +151,21 @@ python scripts/plot_selected_position_histogram.py
 Parses `find_missing_ids.py` output (piped or from a file) and generates a formatted `MISSING` dict for pasting into `submit_missing.py`. Supports both recursive mode (auto-detects run names from `--- Checking` headers) and single-directory mode (requires `--run-name`).
 
 ```bash
+# Full split (10 shards)
 python src_utils/find_missing_ids.py --recursive \
     --input_dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b \
     --reference_file "topics-qrels/bcp/bcp_10_shards/*" \
+    | python scripts/update_submit_missing.py
+
+# Test split (3 shards)
+python src_utils/find_missing_ids.py --recursive \
+    --input_dir runs/bcp/Qwen3-Embedding-8B/test150/gpt-oss-120b \
+    --reference_file "topics-qrels/bcp/bcp_test150_3_shards/*" \
+    | python scripts/update_submit_missing.py
+
+# Train split (8 shards)
+python src_utils/find_missing_ids.py --recursive \
+    --input_dir runs/bcp/Qwen3-Embedding-8B/train680/gpt-oss-120b \
+    --reference_file "topics-qrels/bcp/bcp_train680_8_shards/*" \
     | python scripts/update_submit_missing.py
 ```
