@@ -9,10 +9,10 @@ CONTEXT_MAX_CHARS=280000
 #   --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
 #   --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
 #   --context-max-chars ${CONTEXT_MAX_CHARS} \
-#   --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini_3.1-pro-preview.jsonl \
+#   --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_selection1.jsonl \
 #   --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ \
-#   --num-threads 8 \
-#   --model @vertexai-gemini-ec5413/gemini-3.1-pro-preview
+#   --num-threads 8 
+#   # --model @vertexai-gemini-ec5413/gemini-3.1-pro-preview
 
 # # tongyi (830 files in seed4)
 # python src_select_tool_calls/select_useful_tool_calls_tongyi.py --k 5  \
@@ -76,3 +76,19 @@ CONTEXT_MAX_CHARS=280000
 #       --input-jsonl selected_tool_calls/all/qwen3.5-122b-a10b/seed0/selected_tool_calls_qwen3.5-122b-a10b_use_original_messages.jsonl \                                                           
 #       --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/qwen3.5-122b-a10b/seed0 \                                                      
 #       --format glm 
+
+
+# Random selection for gpt-oss-120b
+# for seed in {7..15}
+# do
+#   python src_select_tool_calls/random_select_tool_calls.py \
+#         --input-jsonl selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_less_chars.jsonl \
+#         --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ \
+#         --format gpt-oss-120b  --seed $seed
+# done
+
+
+for seed in {7..15}
+do
+  mv selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_less_chars_random_seed${seed}.jsonl selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_random_seed${seed}.jsonl
+done

@@ -16,6 +16,13 @@ The system + user prompt is pulled from the source trajectory at
 (a single merged `user` message containing both the system prompt and
 the "User: <question>" line).
 
+Single-input mode requires --eval-folder pointing to a directory of
+*_eval.json files (same format as multi-input subsequent_eval_folder).
+By default only successful trajectories (judge_result.correct == True)
+are kept. Pass --keep-failed to include unsuccessful ones as well.
+A hard error is raised if any record's query_id is absent from the eval
+folder, regardless of --keep-failed.
+
 Output line shape (one JSON object per line):
     {"messages": [
         {"role": "user",      "content": "<system+question merged>"},
@@ -46,6 +53,12 @@ Multi-input mode (--multi-input):
       mode b: include ALL successful candidates per query_id; if none succeed,
               include exactly one chosen at random.
 
+      mode c: pick one candidate per query_id — the shortest successful run;
+              if none succeed, include exactly one chosen at random.
+
+      mode d: pick one candidate per query_id — the shortest successful run;
+              if none succeed, skip that query entirely (no fallback).
+
     Config file format (list of objects):
       [
         {
@@ -74,6 +87,7 @@ import argparse
 import dataclasses
 import json
 import random
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -90,7 +104,9 @@ SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150)
 
 MODE_A = "a"
 MODE_B = "b"
-MODE_CHOICES = (MODE_A, MODE_B)
+MODE_C = "c"
+MODE_D = "d"
+MODE_CHOICES = (MODE_A, MODE_B, MODE_C, MODE_D)
 
 _INF_LENGTH: float = float("inf")
 
@@ -466,6 +482,26 @@ def _select_mode_b(candidates: List[_Candidate], rng: random.Random) -> List[_Ca
     return [rng.choice(candidates)]
 
 
+def _select_mode_c(candidates: List[_Candidate], rng: random.Random) -> Optional[_Candidate]:
+    """Setting C: shortest successful run; if none succeed, exactly one at random."""
+    if not candidates:
+        return None
+    successful = [c for c in candidates if c.success]
+    if successful:
+        return min(successful, key=lambda c: c.subsequent_length)
+    return rng.choice(candidates)
+
+
+def _select_mode_d(candidates: List[_Candidate]) -> Optional[_Candidate]:
+    """Setting D: shortest successful run; if none succeed, skip entirely (no fallback)."""
+    if not candidates:
+        return None
+    successful = [c for c in candidates if c.success]
+    if not successful:
+        return None
+    return min(successful, key=lambda c: c.subsequent_length)
+
+
 def _build_candidates_per_query(specs: List[_MultiInputSpec]) -> Dict[str, List[_Candidate]]:
     """Load all input specs and group candidates by query_id."""
     grouped: Dict[str, List[_Candidate]] = {}
@@ -517,6 +553,73 @@ def _build_candidates_per_query(specs: List[_MultiInputSpec]) -> Dict[str, List[
 
 
 # ---------------------------------------------------------------------------
+# Multi-input statistics
+# ---------------------------------------------------------------------------
+
+def _print_multi_input_stats(grouped: Dict[str, List[_Candidate]], mode: str) -> None:
+    """Report success-count distribution and average trajectory lengths.
+
+    Length averages reflect the actual selection logic for the given mode:
+      mode a — shortest successful (>=1 success) / shortest overall (0 success)
+      mode b — avg of ALL successful (>=1 success) / avg of ALL candidates (0 success,
+               since the random pick has expected length = mean of the pool)
+      mode c — shortest successful (>=1 success) / avg of all candidates (0 success)
+      mode d — shortest successful (>=1 success) / skipped entirely (0 success)
+    """
+    success_counts: Counter = Counter()
+    lengths_with_success: List[float] = []
+    lengths_without_success: List[float] = []
+
+    for candidates in grouped.values():
+        n_success = sum(1 for c in candidates if c.success)
+        success_counts[n_success] += 1
+
+        finite = [c for c in candidates if c.subsequent_length != _INF_LENGTH]
+        successful = [c for c in finite if c.success]
+        if successful:
+            if mode == MODE_B:  # all successful are included
+                lengths_with_success.extend(c.subsequent_length for c in successful)
+            else:  # mode a/c/d: shortest successful
+                lengths_with_success.append(min(c.subsequent_length for c in successful))
+        elif finite and mode != MODE_D:  # mode d skips queries with 0 success
+            if mode == MODE_A:  # shortest overall
+                lengths_without_success.append(min(c.subsequent_length for c in finite))
+            else:  # mode b/c: random pick → expected length = mean of pool
+                lengths_without_success.extend(c.subsequent_length for c in finite)
+
+    max_n = max(success_counts) if success_counts else 0
+    print("\n--- Multi-input statistics ---")
+    print("Success count distribution (per query_id):")
+    for n in range(max_n + 1):
+        count = success_counts.get(n, 0)
+        print(f"  {n} success: {count} queries")
+
+    success_label = "avg of all successful" if mode == MODE_B else "shortest successful"
+    if lengths_with_success:
+        avg = sum(lengths_with_success) / len(lengths_with_success)
+        print(
+            f"\nQueries with >=1 success ({sum(1 for cs in grouped.values() if any(c.success for c in cs))} queries):\n"
+            f"  avg trajectory length ({success_label}): {avg:.1f}"
+        )
+    else:
+        print("\nQueries with >=1 success: none")
+
+    n_fail = sum(1 for cs in grouped.values() if not any(c.success for c in cs))
+    if mode == MODE_D:
+        print(f"\nQueries with 0 success ({n_fail} queries): skipped (mode d)")
+    elif lengths_without_success:
+        avg = sum(lengths_without_success) / len(lengths_without_success)
+        fail_label = "shortest overall" if mode == MODE_A else "expected (avg of all candidates)"
+        print(
+            f"\nQueries with 0 success ({n_fail} queries):\n"
+            f"  avg trajectory length ({fail_label}): {avg:.1f}"
+        )
+    else:
+        print("\nQueries with 0 success: none")
+    print("---\n")
+
+
+# ---------------------------------------------------------------------------
 # I/O helpers & driver
 # ---------------------------------------------------------------------------
 
@@ -558,6 +661,28 @@ def main() -> None:
             "by each record's `source_file` field."
         ),
     )
+    parser.add_argument(
+        "--eval-folder",
+        type=Path,
+        default=None,
+        help=(
+            "Required with --input. Directory of *_eval.json files "
+            "(judge_result.correct) used to determine trajectory success. "
+            "By default only successful trajectories are kept; pass "
+            "--keep-failed to include unsuccessful ones. A hard error is "
+            "raised if any record's query_id is absent from this folder."
+        ),
+    )
+    parser.add_argument(
+        "--keep-failed",
+        action="store_true",
+        default=False,
+        help=(
+            "With --input: keep trajectories that are not successful "
+            "(judge_result.correct == False). Missing query_ids still raise "
+            "an error even with this flag."
+        ),
+    )
 
     # ---- multi-input mode args (new) ----
     parser.add_argument(
@@ -578,7 +703,9 @@ def main() -> None:
         help=(
             "Candidate selection mode for --multi-input. "
             "'a': one per query_id — shortest successful run, else shortest overall. "
-            "'b': all successful runs per query_id, else one at random."
+            "'b': all successful runs per query_id, else one at random. "
+            "'c': one per query_id — shortest successful run, else one at random. "
+            "'d': one per query_id — shortest successful run; skip if none succeed."
         ),
     )
 
@@ -654,9 +781,15 @@ def main() -> None:
         parser.error("Provide either --input (single-input mode) or --multi-input (multi-input mode).")
 
     if multi_mode and args.mode is None:
-        parser.error("--mode {a,b} is required with --multi-input.")
+        parser.error("--mode {a,b,c,d} is required with --multi-input.")
     if single_mode and args.trajectory_folder is None:
         parser.error("--trajectory-folder is required with --input.")
+    if single_mode and args.eval_folder is None:
+        parser.error("--eval-folder is required with --input.")
+    if multi_mode and args.eval_folder is not None:
+        parser.error("--eval-folder is only valid with --input, not --multi-input.")
+    if multi_mode and args.keep_failed:
+        parser.error("--keep-failed is only valid with --input, not --multi-input.")
 
     if args.split == SPLIT_BCP_TRAIN680_TEST150:
         if not args.queries_train_tsv.is_file():
@@ -673,19 +806,47 @@ def main() -> None:
     dropped_bad_excerpt = 0
 
     if single_mode:
-        # ---- original single-input path ----
+        # ---- single-input path ----
         if not args.input.is_file():
             parser.error(f"--input not found: {args.input}")
         if not args.trajectory_folder.is_dir():
             parser.error(
                 f"--trajectory-folder not found or not a dir: {args.trajectory_folder}"
             )
+        if not args.eval_folder.is_dir():
+            parser.error(f"--eval-folder not found or not a dir: {args.eval_folder}")
 
+        eval_map = _load_subsequent_eval_folder(args.eval_folder)
         source_cache = _SourceTrajectoryCache(args.trajectory_folder)
         raw_total = 0
+        dropped_not_success = 0
 
         for record in _iter_jsonl(args.input):
             raw_total += 1
+
+            # Resolve query_id early — needed for eval lookup.
+            qid = record.get("query_id")
+            if qid is None or not str(qid).strip():
+                src = record.get("source_file")
+                if src:
+                    traj = source_cache.load(str(src))
+                    if traj:
+                        qid = traj.get("query_id")
+            if not qid or not str(qid).strip():
+                dropped_schema += 1
+                continue
+            qid = str(qid).strip()
+
+            if qid not in eval_map:
+                raise SystemExit(
+                    f"[error] query_id {qid!r} not found in --eval-folder {args.eval_folder}. "
+                    "Ensure the eval folder contains a matching *_eval.json for every record."
+                )
+
+            if not args.keep_failed and not eval_map[qid]:
+                dropped_not_success += 1
+                continue
+
             messages, reason = _coerce_excerpt(record, source_cache, args.template)
             if messages is None:
                 if reason == "schema":
@@ -697,15 +858,12 @@ def main() -> None:
                 continue
             row: Dict[str, Any] = {"messages": messages}
             if args.split == SPLIT_BCP_TRAIN680_TEST150:
-                qid = _query_id_from_record(record, source_cache)
-                if qid is None:
-                    dropped_bad_excerpt += 1
-                    continue
                 row["_query_id"] = qid
             kept.append(row)
 
         print(
             f"single-input: read={raw_total} kept={len(kept)} "
+            f"dropped_not_success={dropped_not_success} "
             f"dropped_schema={dropped_schema} "
             f"dropped_missing_source={dropped_missing_source} "
             f"dropped_bad_excerpt={dropped_bad_excerpt}"
@@ -718,6 +876,7 @@ def main() -> None:
 
         specs = _load_multi_input_specs(args.multi_input)
         grouped = _build_candidates_per_query(specs)
+        _print_multi_input_stats(grouped, args.mode)
 
         total_qids = len(grouped)
         selected_count = 0
@@ -725,6 +884,12 @@ def main() -> None:
         for qid, candidates in grouped.items():
             if args.mode == MODE_A:
                 chosen = _select_mode_a(candidates)
+                chosen_list = [chosen] if chosen is not None else []
+            elif args.mode == MODE_C:
+                chosen = _select_mode_c(candidates, rng)
+                chosen_list = [chosen] if chosen is not None else []
+            elif args.mode == MODE_D:
+                chosen = _select_mode_d(candidates)
                 chosen_list = [chosen] if chosen is not None else []
             else:
                 chosen_list = _select_mode_b(candidates, rng)
@@ -750,11 +915,16 @@ def main() -> None:
         n_success = sum(
             1 for candidates in grouped.values() if any(c.success for c in candidates)
         )
+        n_skipped_no_success = (
+            sum(1 for candidates in grouped.values() if not any(c.success for c in candidates))
+            if args.mode == MODE_D else 0
+        )
         print(
             f"multi-input (mode={args.mode}): "
             f"total_query_ids={total_qids} "
             f"query_ids_with_success={n_success} "
-            f"selected_examples={selected_count} "
+            + (f"query_ids_skipped_no_success={n_skipped_no_success} " if args.mode == MODE_D else "")
+            + f"selected_examples={selected_count} "
             f"dropped_schema={dropped_schema} "
             f"dropped_missing_source={dropped_missing_source} "
             f"dropped_bad_excerpt={dropped_bad_excerpt}"

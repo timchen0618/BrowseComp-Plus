@@ -12,8 +12,10 @@
 #                      referenced by each record's `source_file` field.
 #
 # Optional env vars:
+#   RUN_NAME   identifier used to derive DATA_DIR, PREPARED_DIR, output_dir,
+#              and wandb_name (default: data_qwen)
 #   DATA_DIR   where prepare_dataset.py writes train.jsonl / val.jsonl
-#              (default: sft/axolotl/data/raw/data_qwen)
+#              (default: sft/axolotl/data/raw/${RUN_NAME})
 #   CONFIG     Axolotl YAML config
 #              (default: sft/axolotl/qwen3.5_4b_search_sft.yaml)
 #   SPLIT      prepare_dataset --split (default: bcp-train680-test150)
@@ -23,12 +25,14 @@
 # Example:
 #   INPUT=selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl \
 #   TRAJECTORY_FOLDER=runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
+#   RUN_NAME=my_run \
 #       bash sft/axolotl/run_axolotl.sh
 
 set -euo pipefail
 
 export AXOLOTL_DO_NOT_TRACK=1
-export FSDP_TRANSFORMER_CLS_TO_WRAP=Qwen3_5DecoderLayer
+export TOKENIZERS_PARALLELISM=false
+export ACCELERATE_USE_FSDP=true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -37,12 +41,26 @@ cd "${REPO_ROOT}"
 : "${INPUT:?set INPUT to a selected-tool-calls JSONL}"
 : "${TRAJECTORY_FOLDER:?set TRAJECTORY_FOLDER to the folder holding source_file trajectories}"
 
-DATA_DIR="${DATA_DIR:-sft/axolotl/data/raw/data_qwen}"
+RUN_NAME="${RUN_NAME:-data_qwen}"
+DATA_DIR="${DATA_DIR:-sft/axolotl/data/raw/${RUN_NAME}}"
+PREPARED_DIR="${DATA_DIR/\/raw\//\/prepared\/}"
 # CONFIG="${CONFIG:-sft/axolotl/qwen3_30b_a3b_search_sft.yaml}"
 CONFIG="${CONFIG:-sft/axolotl/qwen3.5_4b_search_sft.yaml}"
 SPLIT="${SPLIT:-bcp-train680-test150}"
 VAL_SIZE="${VAL_SIZE:-0.1}"
 SEED="${SEED:-42}"
+
+if [[ "${CONFIG}" == *30b* ]]; then
+    export FSDP_TRANSFORMER_CLS_TO_WRAP=Qwen3MoeDecoderLayer
+else
+    export FSDP_TRANSFORMER_CLS_TO_WRAP=Qwen3_5DecoderLayer
+fi
+
+export RUN_NAME DATA_DIR PREPARED_DIR
+
+RENDERED_CONFIG="/scratch/hc3337/tmp/axolotl_config_$$.yaml"
+envsubst '${DATA_DIR} ${PREPARED_DIR} ${RUN_NAME}' < "${CONFIG}" > "${RENDERED_CONFIG}"
+trap "rm -f ${RENDERED_CONFIG}" EXIT
 
 echo "[1/3] Converting excerpts: ${INPUT} -> ${DATA_DIR}"
 python sft/axolotl/prepare_dataset.py \
@@ -55,30 +73,14 @@ python sft/axolotl/prepare_dataset.py \
     --template "qwen"
 
 echo "[2/3] Axolotl preprocess (tokenize + cache)"
-axolotl preprocess "${CONFIG}"
+axolotl preprocess "${RENDERED_CONFIG}"
 
 echo "[3/3] Axolotl train"
 # Debug: PEFT FSDP wrap class resolution (NDJSON -> .cursor/debug-3e9a99.log). No-op overhead: meta load only.
-python sft/axolotl/debug_peft_fsdp_wrap_probe.py "${CONFIG}"
+python sft/axolotl/debug_peft_fsdp_wrap_probe.py "${RENDERED_CONFIG}"
 # Pass through any extra CLI args (e.g. --num_epochs=5) to axolotl.cli.train
-accelerate launch -m axolotl.cli.train "${CONFIG}" "$@"
+accelerate launch -m axolotl.cli.train "${RENDERED_CONFIG}" "$@"
 
 
 
-# [2026-04-18 15:22:47,226] [WARNING] [axolotl.prompt_strategies.chat_template] Last turn is not trainable, skipping having to find the turn indices. This may cause         
-#   incorrect last EOT/EOS token to be unmasked.This is likely a dataset design issue. Please ensure last turn is trainable.                                                                        
-                                                                                                                                                                                                  
-# ● This warning means the last message in some training examples has its loss masked out (not trained on), when it should be trainable.                                                            
-                                                                                                                                                                                                
-#   In chat-template SFT, axolotl only computes loss on "trainable" turns — typically assistant turns. The warning fires when the final turn in a conversation is a user/tool turn or otherwise     
-#   excluded from training.
-                                                                                                                                                                                                  
-#   Why it matters: The model needs to learn to produce the final response (including the EOT/EOS token). If the last turn is masked, the model never learns when to stop — and the EOS token       
-#   masking may be incorrect.
-                                                                                                                                                                                                  
-#   Likely cause in your case: Some examples in your train.jsonl/val.jsonl end with a tool result or user message rather than an assistant message. Check prepare_dataset.py — the last message in  
-#   each messages list should always be role: assistant.
-
-
-
-# INPUT=selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl TRAJECTORY_FOLDER=runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4  bash sft/axolotl/run_axolotl.sh 
+# RUN_NAME=my_run INPUT=selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl TRAJECTORY_FOLDER=runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 bash sft/axolotl/run_axolotl.sh 

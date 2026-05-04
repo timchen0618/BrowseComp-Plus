@@ -19,7 +19,7 @@ trust_remote_code: true
 chat_template: qwen3
 
 datasets:
-  - path: sft/axolotl/data/raw/data_qwen/train.jsonl
+  - path: ${DATA_DIR}/train.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -32,7 +32,7 @@ datasets:
     train_on_eos: turn
 
 test_datasets:
-  - path: sft/axolotl/data/raw/data_qwen/val.jsonl
+  - path: ${DATA_DIR}/val.jsonl
     type: chat_template
     field_messages: messages
     message_property_mappings:
@@ -42,8 +42,8 @@ test_datasets:
     train_on_eos: turn
     split: train
 
-dataset_prepared_path: sft/axolotl/data/prepared/data_qwen
-output_dir: sft/checkpoints/axolotl-qwen3-30b-a3b
+dataset_prepared_path: ${PREPARED_DIR}
+output_dir: sft/checkpoints/${RUN_NAME}
 
 sequence_len: 4096
 # Shorter eval sequences reduce VRAM during the first eval (Axolotl sets
@@ -85,6 +85,9 @@ logging_steps: 10
 save_steps: 100
 eval_steps: 100
 save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
 
 # ----- Multi-GPU FSDP -----
 fsdp:
@@ -99,6 +102,6 @@ fsdp_config:
   fsdp_use_orig_params: false
 
 wandb_project: sft-trajectory
-wandb_name: axolotl-qwen3-30b-a3b
+wandb_name: ${RUN_NAME}
 
 seed: 42
