@@ -26,7 +26,10 @@ if [[ -z "${RUN_NAME:-}" ]]; then echo "FATAL: must set RUN_NAME env var"; exit 
 MODEL_NAME="minimax-m2.5"
 model_path="MiniMaxAI/MiniMax-M2.5"
 TENSOR_PARALLEL_SIZE=2
-EMBED_RESERVE_GB=5
+# EMBED_RESERVE_GB bumped 5 → 20 (2026-05-04): job 7900980 OOM'd because
+# Qwen3-Embedding-8B (~16 GB BF16) couldn't fit in 5 GiB reserved on GPU 0
+# alongside vLLM's 135 GiB KV cache. 20 GB gives ~4 GB headroom over weights.
+EMBED_RESERVE_GB=20
 MAX_MODEL_LEN=65536
 MAX_NUM_SEQS=16
 

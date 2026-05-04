@@ -4,6 +4,24 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-05-04 — MiniMax cross-explorer OOM (job 7900980); SBATCH EMBED_RESERVE_GB 5 → 20
+
+**Context:** Job 7900980 (MiniMax vanilla cross-explorer with qwen3.5-4b explorer trajectories prepended) FAILED at 5:18 elapsed during searcher initialization with `torch.OutOfMemoryError: CUDA out of memory`. vLLM (MiniMax-M2.5, TP=2, max_model_len=65536, max_num_seqs=16) consumed 136.47 GiB / 139.8 GiB on GPU 0. The FAISS searcher's Qwen3-Embedding-8B model (~16 GiB BF16) tried to load and only had ~5 GiB available (leaving 15 MiB free at point of failure).
+
+**Why random_tools worked but cross-explorer failed:** Suspected difference in host node baseline memory state. The MiniMax random_tools jobs (also EMBED_RESERVE_GB=5) all ran successfully on the same partition. The vLLM allocation appears to be at the edge of OOM and dependent on prior job memory release on the assigned node.
+
+**Action:** Edited `sbatch/run_bcp_test150_minimax_explorer_traj_orig.SBATCH`: `EMBED_RESERVE_GB=5` → `EMBED_RESERVE_GB=20`. New GPU_UTIL = (140-20)/140 = 0.857 (down from 0.965). This gives the embedder ~16 GiB weights + ~4 GiB activation buffer = 20 GiB total. **NOT auto-resubmitting per rule** ("FAILED — do NOT auto-resubmit"). User decides whether to resubmit.
+
+**Resubmit cmd (when authorized):**
+```bash
+sbatch --export=ALL,EXPLORER_DIR=runs/bcp/Qwen3-Embedding-8B/test150/qwen3.5-4b/budget5_seed0,RUN_NAME=qwen3.5-4b_vanilla_traj_orig_seed0 \
+    sbatch/run_bcp_test150_minimax_explorer_traj_orig.SBATCH
+```
+
+**Revert path:** Set `EMBED_RESERVE_GB=5` back if h200 throughput is hurt; but realistically the 11pp KV-cache cut from 0.965 → 0.857 GPU_UTIL is harmless given MAX_NUM_SEQS=16 isn't the bottleneck.
+
+---
+
 ## 2026-05-03 — Pivoting to cross-explorer experiments; Qwen3.5 main agent deferred (resumable)
 
 **Decision:** Pause Qwen3.5-122B-A10B random_tools best-of-4 work and pivot to Tasks 2-6 (self/qwen3.5-4b/3 SFT-explorer pairings) — but only for **GLM and MiniMax main agents**. Qwen3.5 main agent for those tasks is deferred to a follow-up session.
