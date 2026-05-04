@@ -41,8 +41,8 @@
 | 2 | self-prompted (main agent itself, budget=5) | DEFERRED | DEFERRED |
 | 3 | qwen3.5-4b vanilla (`runs/.../qwen3.5-4b/budget5_seed0/`) | ✅ 42.7% | ⏳ queued (7900980) |
 | 4 | qwen3.5-4b SFT-best-of-4-random (`runs/.../qwen3.5-4b-sft-best_of_4_random_selection_mode_c/budget5_seed0/`) | ✅ 42.7% | ⏳ queued (7900982) |
-| 5 | qwen3.5-4b SFT-Gemini-2.5-pro (`runs/.../qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/`) | ⏳ queued (7900983) | ⏳ queued (7900984) |
-| 6 | qwen3.5-4b SFT-random (`runs/.../qwen3.5-4b-sft-random_selection/budget5_seed0/`) | ⏳ queued (7900985) | ⏳ queued (7900986) |
+| 5 | qwen3.5-4b SFT-Gemini-2.5-pro (`runs/.../qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/`) | ✅ 47.3% | ⏳ queued (7900984) |
+| 6 | qwen3.5-4b SFT-random (`runs/.../qwen3.5-4b-sft-random_selection/budget5_seed0/`) | ✅ 42.7% | ⏳ queued (7900986) |
 
 **Task 2 deferred** — self-prompted (budget=5) is conceptually adjacent to the existing **+ full trajectory** and **+ trajectory summary** rows (all three use the *same model's own* prior trajectory; they vary only in compression and exploration budget). Cross-explorer rows test the more compelling distillation question and are higher priority. Self-prompted SBATCHes stay in `sbatch/` (`run_bcp_test150_{glm,minimax}_budget5.SBATCH`) ready for future submission.
 
@@ -74,8 +74,8 @@
 | + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
 | + qwen3.5-4b explorer (budget=5, vanilla) | 42.7 | 43.6 | 13.1 |
 | + qwen3.5-4b explorer (SFT on best-of-4 random selection) | 42.7 | 43.4 | 18.1 |
-| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | TBD | TBD |
-| + qwen3.5-4b explorer (SFT on random selection) | TBD | TBD | TBD |
+| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | 47.3 | 45.7 | 18.7 |
+| + qwen3.5-4b explorer (SFT on random selection) | 42.7 | 43.5 | 19.7 |
 
 **Model: Qwen3.5-122B-A10B**
 
