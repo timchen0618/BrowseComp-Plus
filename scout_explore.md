@@ -60,62 +60,70 @@
 
 **Model: GLM-4.7-Flash (30B)**
 
-| Condition | Acc | Recall | # calls |
-| :---- | ----: | ----: | ----: |
-| Baseline | 48.0 | 55.4 | 22.0 |
-| + full trajectory | 47.3 | 20.3 | 4.3 |
-| **+ trajectory summary** | **53.3** | 52.5 | 12.7 |
-| + Gemini-2.5-pro selected k=5 tool calls | 46.7 | 29.1 | 8.6 |
-| + random k=5 tool calls (selection seed=42) | 47.3 | 34.6 | 9.7 |
-| + random k=5 tool calls (selection seed=43) | 44.0 | 31.7 | 10.0 |
-| + random k=5 tool calls (selection seed=44) | 43.3 | 29.4 | 10.0 |
-| + random k=5 tool calls (selection seed=45) | 46.0 | 31.7 | 9.4 |
-| **+ random k=5 tool calls (best of 4)** | **52.7** | — | — |
-| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
-| + qwen3.5-4b explorer (budget=5, vanilla) | 42.7 | 43.6 | 13.1 |
-| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | 42.7 | 43.4 | 18.1 |
-| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | 47.3 | 45.7 | 18.7 |
-| + qwen3.5-4b explorer (SFT on random selection) | 42.7 | 43.5 | 19.7 |
+| Condition | Acc | Δ vs base | Recall | # calls |
+| :---- | ----: | :---- | ----: | ----: |
+| Baseline | 48.0 | — | 55.4 | 21.6 |
+| + full trajectory | 47.3 | -0.7 [-3.6, +2.3] | 20.3 | 4.3 |
+| **+ trajectory summary** | **53.3** | +5.3 [+0.8, +9.9] * | 52.5 | 12.7 |
+| + Gemini-2.5-pro selected k=5 tool calls | 46.7 | -1.3 [-5.0, +2.4] | 29.1 | 8.6 |
+| + random k=5 tool calls (selection seed=42) | 47.3 | -0.7 [-5.7, +4.4] | 34.6 | 9.7 |
+| + random k=5 tool calls (selection seed=43) | 44.0 | -4.0 [-8.5, +0.5] | 31.7 | 10.0 |
+| + random k=5 tool calls (selection seed=44) | 43.3 | -4.7 [-9.0, -0.3] | 29.4 | 9.9 |
+| + random k=5 tool calls (selection seed=45) | 46.0 | -2.0 [-6.3, +2.3] | 31.7 | 9.4 |
+| **+ random k=5 tool calls (best of 4)** | **52.7** | † | — | — |
+| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — | — |
+| + qwen3.5-4b explorer (budget=5, vanilla) | 42.7 | -5.3 [-12.5, +1.8] | 43.6 | 13.1 |
+| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | 42.7 | -5.3 [-11.7, +1.1] | 43.4 | 18.1 |
+| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | 47.3 | -0.7 [-7.7, +6.4] | 45.7 | 18.7 |
+| + qwen3.5-4b explorer (SFT on random selection) | 42.7 | -5.3 [-12.0, +1.3] | 43.5 | 19.7 |
+
+* p<0.05 (McNemar exact); ** BH-significant at q=0.05; † best-of-N variance differs (see compute_best_of_n.py)
 
 **Model: Qwen3.5-122B-A10B**
 
-| Condition | Acc | Recall | # calls |
-| :---- | ----: | ----: | ----: |
-| Baseline | 45.3 | 54.3 | 21.8 |
-| + full trajectory | 48.4 | 0.0 | 0.1 |
-| + trajectory summary | 48.3 | 56.5 | 14.4 |
-| + Gemini-2.5-pro selected k=5 tool calls (N=148) | 48.7 | 25.4 | 15.9 |
-| **+ random k=5 tool calls (selection seed=42)** | **49.3** | 28.9 | 15.7 |
-| + random k=5 tool calls (selection seed=43) | 🚫 incomplete (N=135, recovery cancelled) | — | — |
-| + random k=5 tool calls (selection seed=44) | 🚫 incomplete (N=148, recovery cancelled) | — | — |
-| + random k=5 tool calls (selection seed=45) | 🚫 incomplete (N=147, recovery cancelled) | — | — |
-| + random k=5 tool calls (best of 4) | 🚫 incomplete — depends on seeds 43/44/45 above | — | — |
-| + self prompted explorer (budget=5) | DEFERRED | — | — |
-| + qwen3.5-4b explorer (budget=5, vanilla) | DEFERRED | — | — |
-| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | DEFERRED | — | — |
-| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | DEFERRED | — | — |
-| + qwen3.5-4b explorer (SFT on random selection) | DEFERRED | — | — |
+| Condition | Acc | Δ vs base | Recall | # calls |
+| :---- | ----: | :---- | ----: | ----: |
+| Baseline | 45.3 | — | 54.3 | 21.8 |
+| + full trajectory | 48.4 | -0.8 [-2.3, +0.8] | 0.0 | 0.1 |
+| + trajectory summary | 48.3 | +2.7 [-0.5, +5.9] | 56.5 | 14.4 |
+| + Gemini-2.5-pro selected k=5 tool calls | 48.6 | +2.7 [-1.0, +6.4] | 25.4 | 15.9 |
+| **+ random k=5 tool calls (selection seed=42)** | **49.3** | +4.0 [-0.5, +8.5] | 28.9 | 15.7 |
+| + random k=5 tool calls (selection seed=43) | 🚫 incomplete (N=135, recovery cancelled) | — | — | — |
+| + random k=5 tool calls (selection seed=44) | 🚫 incomplete (N=148, recovery cancelled) | — | — | — |
+| + random k=5 tool calls (selection seed=45) | 🚫 incomplete (N=147, recovery cancelled) | — | — | — |
+| + random k=5 tool calls (best of 4) | 🚫 incomplete — depends on seeds 43/44/45 above | — | — | — |
+| + self prompted explorer (budget=5) | DEFERRED | — | — | — |
+| + qwen3.5-4b explorer (budget=5, vanilla) | DEFERRED | — | — | — |
+| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | DEFERRED | — | — | — |
+| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | DEFERRED | — | — | — |
+| + qwen3.5-4b explorer (SFT on random selection) | DEFERRED | — | — | — |
+
+* p<0.05 (McNemar exact); ** BH-significant at q=0.05; † best-of-N variance differs (see compute_best_of_n.py)
 
 **Model: MiniMax-M2.5 (229B)**
 
-| Condition | Acc | Recall | # calls |
-| :---- | ----: | ----: | ----: |
-| Baseline | 48.7 | 56.9 | 15.3 |
-| + full trajectory | 54.0 | 20.0 | 3.2 |
-| + trajectory summary | 56.0 | 56.7 | 10.0 |
-| + Gemini-2.5-pro selected k=5 tool calls | 55.3 | 45.4 | 8.6 |
-| **+ random k=5 tool calls (selection seed=42)** | **57.3** | 49.8 | 9.1 |
-| + random k=5 tool calls (selection seed=43) | 52.7 | 50.4 | 8.9 |
-| + random k=5 tool calls (selection seed=44) | 49.3 | 49.5 | 8.7 |
-| + random k=5 tool calls (selection seed=45) | 51.3 | 45.5 | 8.4 |
-| **+ random k=5 tool calls (best of 4)** | **71.3** | — | — |
-| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
-| + qwen3.5-4b explorer (budget=5, vanilla) | 48.0 | 47.4 | 9.8 |
-| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | TBD | TBD | TBD |
-| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | TBD | TBD |
-| + qwen3.5-4b explorer (SFT on random selection) | TBD | TBD | TBD |
+| Condition | Acc | Δ vs base | Recall | # calls |
+| :---- | ----: | :---- | ----: | ----: |
+| Baseline | 48.7 | — | 56.9 | 15.3 |
+| + full trajectory | 54.0 | +5.3 [-0.5, +11.2] | 20.0 | 3.2 |
+| **+ trajectory summary** | **56.0** | +7.3 [+1.3, +13.3] * | 56.7 | 10.0 |
+| + Gemini-2.5-pro selected k=5 tool calls | 55.3 | +6.7 [-0.5, +13.8] | 45.4 | 8.6 |
+| **+ random k=5 tool calls (selection seed=42)** | **57.3** | +8.7 [+1.6, +15.7] * | 49.8 | 9.1 |
+| + random k=5 tool calls (selection seed=43) | 52.7 | +4.0 [-2.1, +10.1] | 50.4 | 8.9 |
+| + random k=5 tool calls (selection seed=44) | 49.3 | +0.7 [-5.9, +7.2] | 49.5 | 8.7 |
+| + random k=5 tool calls (selection seed=45) | 51.3 | +2.7 [-3.5, +8.8] | 45.5 | 8.4 |
+| **+ random k=5 tool calls (best of 4)** | **71.3** | † | — | — |
+| + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — | — |
+| + qwen3.5-4b explorer (budget=5, vanilla) | 48.0 | -0.7 [-7.5, +6.1] | 47.4 | 9.8 |
+| + qwen3.5-4b explorer (SFT on best-of-4 random selection) | TBD | — | TBD | TBD |
+| + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | — | TBD | TBD |
+| + qwen3.5-4b explorer (SFT on random selection) | TBD | — | TBD | TBD |
+
+* p<0.05 (McNemar exact); ** BH-significant at q=0.05; † best-of-N variance differs (see compute_best_of_n.py)
 
 *Caveats:* Qwen3.5 traj_orig N=134, traj_summary N=149 — a few qids missing from the eval pool (one hit a hard 121K-token context overflow on the summary prompt). GLM baseline filtered from 830-query full run eval to test150 qids. Context_limit rates: GLM 9% / Qwen3.5 42% / MiniMax 71% baseline (the 65536-token cap drives MiniMax's tail; eval fix forces these to be graded rather than auto-failed). The Qwen3.5 main-agent rows for explorer-prepended conditions are **deferred** (see Pending Work) — Qwen3.5+H200 has a recurring agent-loop hang on the last 2-3 queries that costs ~1h per 150-query run; we'll resume after GLM/MiniMax are clean.
+
+*Δ vs base convention:* Δ is computed on the **paired intersection** of qids that both the row and the baseline answered, then McNemar exact + Newcombe paired CI on that intersection. For rows with N<150 (Qwen3.5 traj_orig N=134, traj_summary N=149, gemini-selected N=148), this means `Δ ≠ row_Acc − baseline_Acc` because the baseline restricted to those qids has a different Acc than the headline 45.3%. The headline Acc shown is still the eval JSON's full-set Accuracy. CI half-width at n=150, p=0.5 is ≈±8pp on the cell-level Wilson interval, so paired delta is the more informative measure.
 
 **Explorer trajectories used in the explorer-prepended rows (all `--search-budget 5` runs from Hung-Ting):**
 - `qwen3.5-4b explorer (vanilla)` → `runs/bcp/.../qwen3.5-4b/budget5_seed0/` (150 trajectories; tool-call distribution: 137 at 5 calls, 6 at 4, 4 at 3, 2 at 7, 1 at 6). Paired with gpt-oss-120b main agent in Hung-Ting's original run = **14.7%**.
