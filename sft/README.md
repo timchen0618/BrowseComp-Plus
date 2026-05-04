@@ -61,9 +61,51 @@ selected_tool_calls/*.jsonl    runs/.../<source_file>.json
 
 ## Quick start
 
+### Running via SBATCH (cluster)
+
+`sft_train.SBATCH` at the repo root wraps the full three-stage pipeline in a single SLURM job (2× H200 GPU, 5 h wall time). It picks single-input or multi-input mode based on whether `MULTI_INPUT` is set, then runs data preparation → Axolotl preprocess → training in sequence.
+
+**Key variables** (all overridable via `sbatch --export=ALL,...`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RUN_NAME` | `random_selection` | Names the data and checkpoint subdirectories |
+| `CONFIG` | `sft/axolotl/qwen3.5_4b_search_sft.yaml` | Axolotl YAML; swap to the `…30b…yaml` for 30B |
+| `INPUT` | `selected_tool_calls/all/gpt-oss-120b/seed0/…random_seed42.jsonl` | Selected-tool-calls JSONL (single-input mode only) |
+| `TRAJECTORY_FOLDER` | `runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4` | Source trajectory dir (single-input mode only) |
+| `EVAL_FOLDER` | `evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4` | Eval results dir for success filtering (single-input mode only) |
+| `MULTI_INPUT` | *(empty)* | Path to multi-input JSON config; non-empty activates multi-input mode |
+| `MODE` | `a` | Multi-input selection mode (`a`/`b`/`c`/`d`) |
+| `SPLIT` | `bcp-train680-test150` | Train/val split strategy |
+| `SEED` | `42` | Random seed for splitting and selection |
+
+`DATA_DIR` and `PREPARED_DIR` are auto-derived from `RUN_NAME` (`sft/axolotl/data/raw/${RUN_NAME}` and `…/prepared/${RUN_NAME}`). Checkpoints land in `sft/checkpoints/${RUN_NAME}/`.
+
+**Submit commands:**
+
+```bash
+# Single-input mode (uses all defaults above)
+sbatch sft_train.SBATCH
+
+# Single-input mode — override paths without editing the file
+sbatch --export=ALL,INPUT=path/to/selected.jsonl,TRAJECTORY_FOLDER=runs/...,EVAL_FOLDER=evals/...,RUN_NAME=my_run \
+    sft_train.SBATCH
+
+# Multi-input mode (mode d — skip query_ids with no successful run)
+sbatch -J sft_mode_d \
+    --export=ALL,MULTI_INPUT=sft/axolotl/multi_input_config_best_of_random_selection.json,MODE=d,RUN_NAME=best_of_4_random_selection_mode_d \
+    sft_train.SBATCH
+```
+
+Inside the job, three stages run in sequence — described in the subsections below.
+
+---
+
 ### Single-input mode
 
-Requires `--eval-folder` to filter by per-trajectory success.
+Takes one selected-tool-calls JSONL, filters by per-trajectory success via `--eval-folder`, and trains.
+
+**Stage 1 — Data preparation:** Convert selected tool calls to `messages` JSONL.
 
 ```bash
 python sft/axolotl/prepare_dataset.py \
@@ -74,24 +116,38 @@ python sft/axolotl/prepare_dataset.py \
     --template qwen \
     --split bcp-train680-test150 \
     --seed 42
+```
 
+Reads each record from `--input`, loads the corresponding trajectory from `--trajectory-folder`, and filters to successful trajectories using eval results from `--eval-folder`. Writes `train.jsonl` and `val.jsonl` to `--output-dir`. Pass `--keep-failed` to also include unsuccessful trajectories.
+
+**Stage 2 — Axolotl preprocess:** Tokenize and cache the dataset.
+
+```bash
 DATA_DIR=sft/axolotl/data/raw/gemini_2.5_pro_selection \
 PREPARED_DIR=sft/axolotl/data/prepared/gemini_2.5_pro_selection \
 RUN_NAME=qwen3.5-4b-sft-gemini-selection \
     axolotl preprocess sft/axolotl/qwen3.5_4b_search_sft.yaml
+```
 
+Reads from `DATA_DIR`, tokenizes using the chat template and sequence length defined in the YAML, and writes the binary cache to `PREPARED_DIR`. Re-run this if you change `chat_template`, `sequence_len`, or dataset contents.
+
+**Stage 3 — SFT training:** Launch multi-GPU FSDP training via Accelerate.
+
+```bash
 DATA_DIR=sft/axolotl/data/raw/gemini_2.5_pro_selection \
 PREPARED_DIR=sft/axolotl/data/prepared/gemini_2.5_pro_selection \
 RUN_NAME=qwen3.5-4b-sft-gemini-selection \
     accelerate launch -m axolotl.cli.train sft/axolotl/qwen3.5_4b_search_sft.yaml
 ```
 
-Pass `--keep-failed` to include unsuccessful trajectories (skipped by default).
+Loads the tokenized cache from `PREPARED_DIR` and runs LoRA fine-tuning. The adapter and tokenizer are saved to `sft/checkpoints/${RUN_NAME}/`.
 
 ### Multi-input mode
 
 Aggregates candidates from multiple tool-call runs and selects one per `query_id`
 according to `--mode`. Provide a JSON config listing input specs (see below).
+
+**Stage 1 — Data preparation:** Aggregate and select across multiple input runs.
 
 ```bash
 # data_process.sh wraps the most common call (mode c, qwen template, bcp split)
@@ -103,11 +159,31 @@ Or manually:
 ```bash
 python sft/axolotl/prepare_dataset.py \
     --multi-input sft/axolotl/multi_input_config_best_of_random_selection.json \
-    --mode c \
-    --output-dir sft/axolotl/data/raw/best_of_4_random_selection_mode_c \
+    --mode d \
+    --output-dir sft/axolotl/data/raw/best_of_4_random_selection_mode_d \
     --template qwen \
     --split bcp-train680-test150 \
     --seed 42
+```
+
+Reads each entry in the config JSON, pools candidates across all listed runs, applies the selection strategy for the chosen mode (e.g. mode d picks the shortest successful run per `query_id`, skipping query IDs with no successful run), and writes `train.jsonl` and `val.jsonl` to `--output-dir`.
+
+**Stage 2 — Axolotl preprocess:** Tokenize and cache (same as single-input mode).
+
+```bash
+DATA_DIR=sft/axolotl/data/raw/best_of_4_random_selection_mode_d \
+PREPARED_DIR=sft/axolotl/data/prepared/best_of_4_random_selection_mode_d \
+RUN_NAME=best_of_4_random_selection_mode_d \
+    axolotl preprocess sft/axolotl/qwen3.5_4b_search_sft.yaml
+```
+
+**Stage 3 — SFT training:** Launch multi-GPU FSDP training (same as single-input mode).
+
+```bash
+DATA_DIR=sft/axolotl/data/raw/best_of_4_random_selection_mode_d \
+PREPARED_DIR=sft/axolotl/data/prepared/best_of_4_random_selection_mode_d \
+RUN_NAME=best_of_4_random_selection_mode_d \
+    accelerate launch -m axolotl.cli.train sft/axolotl/qwen3.5_4b_search_sft.yaml
 ```
 
 ---
