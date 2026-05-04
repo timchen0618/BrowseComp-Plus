@@ -171,9 +171,9 @@ MISSING_TEST150 = {
     
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_seed0":                              list(range(3)),
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_seed0":                              list(range(3)),
-    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_10_eps_seed0":                              list(range(3)),
-    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_seed0":                              list(range(3)),
-    #"tongyi_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
+    #"gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_10_eps_seed0":                              list(range(3)),
+    #"gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_seed0":                              list(range(3)),
+    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     # "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
 }
 # Missing shards for bcp/train680 split (8 shards: 0-7).
