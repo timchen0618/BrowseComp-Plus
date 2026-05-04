@@ -4,6 +4,24 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-05-04 — Qwen3.5 random_tools recovery resumed (jobs 7986378/7986380/7986381)
+
+**Context:** Cross-explorer Tasks 3-6 fully closed out (all 8 GLM/MiniMax cells filled, no condition shows a gain over baseline). Per user request, resuming the deferred Qwen3.5-122B-A10B random_tools best-of-4 recovery work that was paused 2026-05-03.
+
+**State at resume:**
+- seed42: ✅ 150 (already evaluated at 49.3%)
+- seed43: 135 (15 missing — recovery 7986378)
+- seed44: 148 (2 missing — recovery 7986380)
+- seed45: 147 (3 missing — recovery 7986381)
+
+**Action:** Submitted 3 idempotent recovery jobs via `sbatch --export=ALL,SEED={43,44,45} sbatch/run_bcp_test150_qwen3_5_random_tools.SBATCH`. Each job's client picks up only missing qids — already-saved trajectories are skipped.
+
+**Risk:** The Qwen3.5+H200 last-2-3-queries hang pattern (5+ documented instances) may recur. If recovery jobs end with N still <150, log and decide whether to re-recover or accept partial-tail. seed43 needs 15 trajectories — most likely to succeed cleanly. seeds 44/45 need 2-3 each — most exposed to the tail-hang pattern.
+
+**Once all 3 reach N=150:** run `python scripts/compute_best_of_n.py --inputs evals/bcp/.../qwen3.5-122b-a10b/random_tools_seed{42,43,44,45}/evaluation_summary.json --label "Qwen3.5"` and update the Task 1 best-of-4 row in scout_explore.md.
+
+---
+
 ## 2026-05-04 — MiniMax cross-explorer OOM resubmits (jobs 7946325-7946328)
 
 **Context:** After the SBATCH fix below, jobs 7900980, 7900982, and 7900984 all FAILED with the same OOM (3/3 with old config). 7900986 was still PENDING with the bad config so was guaranteed to OOM as well.
