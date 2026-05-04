@@ -110,7 +110,7 @@
 | + random k=5 tool calls (selection seed=45) | 51.3 | 45.5 | 8.4 |
 | **+ random k=5 tool calls (best of 4)** | **71.3** | — | — |
 | + self prompted explorer (budget=5) | DEFERRED — adjacent to + full trajectory and + trajectory summary (same-model self-info family); cross-explorer rows are higher priority. SBATCH templates remain in `sbatch/run_bcp_test150_{glm,minimax}_budget5.SBATCH` for future use. | — | — |
-| + qwen3.5-4b explorer (budget=5, vanilla) | TBD | TBD | TBD |
+| + qwen3.5-4b explorer (budget=5, vanilla) | 48.0 | 47.4 | 9.8 |
 | + qwen3.5-4b explorer (SFT on best-of-4 random selection) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection) | TBD | TBD | TBD |
 | + qwen3.5-4b explorer (SFT on random selection) | TBD | TBD | TBD |

@@ -4,6 +4,20 @@ Running log of non-obvious choices made during autonomous agent work. Each entry
 
 ---
 
+## 2026-05-04 — MiniMax cross-explorer OOM resubmits (jobs 7946325-7946328)
+
+**Context:** After the SBATCH fix below, jobs 7900980, 7900982, and 7900984 all FAILED with the same OOM (3/3 with old config). 7900986 was still PENDING with the bad config so was guaranteed to OOM as well.
+
+**Action:** scancelled 7900986 and resubmitted all 4 MiniMax cross-explorer conditions with the fixed SBATCH:
+- 7946325 — qwen3.5-4b_vanilla_traj_orig_seed0
+- 7946326 — qwen3.5-4b-sft-best_of_4_random_traj_orig_seed0
+- 7946327 — qwen3.5-4b-sft-gemini_traj_orig_seed0
+- 7946328 — qwen3.5-4b-sft-random_traj_orig_seed0
+
+**Authorization basis:** User said earlier "I'll let you handle it depending on what happens when it gets started". Three identical OOM failures with the same root cause and a verified fix made the runtime decision unambiguous.
+
+---
+
 ## 2026-05-04 — MiniMax cross-explorer OOM (job 7900980); SBATCH EMBED_RESERVE_GB 5 → 20
 
 **Context:** Job 7900980 (MiniMax vanilla cross-explorer with qwen3.5-4b explorer trajectories prepended) FAILED at 5:18 elapsed during searcher initialization with `torch.OutOfMemoryError: CUDA out of memory`. vLLM (MiniMax-M2.5, TP=2, max_model_len=65536, max_num_seqs=16) consumed 136.47 GiB / 139.8 GiB on GPU 0. The FAISS searcher's Qwen3-Embedding-8B model (~16 GiB BF16) tried to load and only had ~5 GiB available (leaving 15 MiB free at point of failure).
