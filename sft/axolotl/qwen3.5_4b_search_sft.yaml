@@ -43,7 +43,7 @@ test_datasets:
     split: train
 
 dataset_prepared_path: ${PREPARED_DIR}
-output_dir: sft/checkpoints/${RUN_NAME}
+output_dir: sft/checkpoints/${SPLIT}/${RUN_NAME}
 
 sequence_len: 32768
 # Shorter eval sequences reduce VRAM during the first eval (Axolotl sets

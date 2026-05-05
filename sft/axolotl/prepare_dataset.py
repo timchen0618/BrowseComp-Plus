@@ -34,12 +34,12 @@ Output line shape (one JSON object per line):
 Loss masking happens in Axolotl (`roles_to_train: ["assistant"]`); this
 script only reshapes data.
 
-Train/val split: by default (`--split bcp-train680-test150`) examples are
-assigned using the BrowseComp-Plus fixed split in
-`topics-qrels/bcp/queries_train680.tsv` and `queries_test150.tsv` (see
-`scripts/split_bcp_test150.py`). Each input row needs a `query_id` field or a
-resolvable `source_file` trajectory containing `query_id`. Use `--split random`
-for the previous fractional holdout behavior.
+Train/val split: by default (`--split bcp-train530-test300`) examples are
+assigned using `topics-qrels/bcp/queries_train530.tsv` and `queries_test300.tsv`.
+Use `--split bcp-train680-test150` for the alternative 680/150 split using
+`queries_train680.tsv` and `queries_test150.tsv`. Each input row needs a
+`query_id` field or a resolvable `source_file` trajectory containing `query_id`.
+Use `--split random` for the previous fractional holdout behavior.
 
 Multi-input mode (--multi-input):
     Instead of a single --input + --trajectory-folder pair, provide a JSON
@@ -94,13 +94,20 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# BrowseComp-Plus fixed split (830 = 680 train + 150 test); see scripts/split_bcp_test150.py.
-DEFAULT_BCP_QUERIES_TRAIN_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_train680.tsv"
-DEFAULT_BCP_QUERIES_TEST_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_test150.tsv"
+# BrowseComp-Plus fixed splits; see scripts/split_bcp_test150.py.
+DEFAULT_BCP_QUERIES_TRAIN680_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_train680.tsv"
+DEFAULT_BCP_QUERIES_TEST150_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_test150.tsv"
+DEFAULT_BCP_QUERIES_TRAIN530_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_train530.tsv"
+DEFAULT_BCP_QUERIES_TEST300_TSV = REPO_ROOT / "topics-qrels" / "bcp" / "queries_test300.tsv"
+
+# Keep legacy alias for backward compatibility.
+DEFAULT_BCP_QUERIES_TRAIN_TSV = DEFAULT_BCP_QUERIES_TRAIN680_TSV
+DEFAULT_BCP_QUERIES_TEST_TSV = DEFAULT_BCP_QUERIES_TEST150_TSV
 
 SPLIT_RANDOM = "random"
 SPLIT_BCP_TRAIN680_TEST150 = "bcp-train680-test150"
-SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150)
+SPLIT_BCP_TRAIN530_TEST300 = "bcp-train530-test300"
+SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150, SPLIT_BCP_TRAIN530_TEST300)
 
 MODE_A = "a"
 MODE_B = "b"
@@ -719,30 +726,32 @@ def main() -> None:
     parser.add_argument(
         "--split",
         choices=SPLIT_CHOICES,
-        default=SPLIT_BCP_TRAIN680_TEST150,
+        default=SPLIT_BCP_TRAIN530_TEST300,
         help=(
             "How to form train vs val. "
-            f"'{SPLIT_BCP_TRAIN680_TEST150}' uses topics-qrels/bcp queries_train680.tsv "
-            "for train and queries_test150.tsv for val (BrowseComp-Plus fixed split). "
+            f"'{SPLIT_BCP_TRAIN680_TEST150}' uses queries_train680.tsv / queries_test150.tsv. "
+            f"'{SPLIT_BCP_TRAIN530_TEST300}' uses queries_train530.tsv / queries_test300.tsv. "
             f"'{SPLIT_RANDOM}' shuffles with --seed and holds out --val-size fraction."
         ),
     )
     parser.add_argument(
         "--queries-train-tsv",
         type=Path,
-        default=DEFAULT_BCP_QUERIES_TRAIN_TSV,
+        default=None,
         help=(
-            f"With --split {SPLIT_BCP_TRAIN680_TEST150}: TSV whose first column lists "
-            "training query_ids (default: repo topics-qrels/bcp/queries_train680.tsv)."
+            "TSV whose first column lists training query_ids. "
+            f"Defaults to queries_train680.tsv for '{SPLIT_BCP_TRAIN680_TEST150}' and "
+            f"queries_train530.tsv for '{SPLIT_BCP_TRAIN530_TEST300}'."
         ),
     )
     parser.add_argument(
         "--queries-test-tsv",
         type=Path,
-        default=DEFAULT_BCP_QUERIES_TEST_TSV,
+        default=None,
         help=(
-            f"With --split {SPLIT_BCP_TRAIN680_TEST150}: TSV whose first column lists "
-            "held-out query_ids written to val.jsonl (default: queries_test150.tsv)."
+            "TSV whose first column lists held-out query_ids written to val.jsonl. "
+            f"Defaults to queries_test150.tsv for '{SPLIT_BCP_TRAIN680_TEST150}' and "
+            f"queries_test300.tsv for '{SPLIT_BCP_TRAIN530_TEST300}'."
         ),
     )
     parser.add_argument(
@@ -791,7 +800,17 @@ def main() -> None:
     if multi_mode and args.keep_failed:
         parser.error("--keep-failed is only valid with --input, not --multi-input.")
 
-    if args.split == SPLIT_BCP_TRAIN680_TEST150:
+    if args.split != SPLIT_RANDOM:
+        if args.queries_train_tsv is None:
+            if args.split == SPLIT_BCP_TRAIN530_TEST300:
+                args.queries_train_tsv = DEFAULT_BCP_QUERIES_TRAIN530_TSV
+            else:
+                args.queries_train_tsv = DEFAULT_BCP_QUERIES_TRAIN680_TSV
+        if args.queries_test_tsv is None:
+            if args.split == SPLIT_BCP_TRAIN530_TEST300:
+                args.queries_test_tsv = DEFAULT_BCP_QUERIES_TEST300_TSV
+            else:
+                args.queries_test_tsv = DEFAULT_BCP_QUERIES_TEST150_TSV
         if not args.queries_train_tsv.is_file():
             parser.error(f"--queries-train-tsv not found: {args.queries_train_tsv}")
         if not args.queries_test_tsv.is_file():
@@ -857,7 +876,7 @@ def main() -> None:
                     dropped_bad_excerpt += 1
                 continue
             row: Dict[str, Any] = {"messages": messages}
-            if args.split == SPLIT_BCP_TRAIN680_TEST150:
+            if args.split != SPLIT_RANDOM:
                 row["_query_id"] = qid
             kept.append(row)
 
