@@ -206,7 +206,7 @@ def _find_split_shard_dir(dataset: str, split: str) -> str | None:
         if e.startswith(split_prefix) and e.endswith("_shards"):
             return os.path.join(base, e)
     # Default (full split): a *_shards dir without any split tag in the name
-    known_split_tokens = ("first50", "first100", "test150", "train680")
+    known_split_tokens = ("first50", "first100", "test150", "test300", "train530", "train680")
     for e in entries:
         if e.endswith("_shards") and not any(tok in e for tok in known_split_tokens):
             return os.path.join(base, e)
@@ -463,6 +463,8 @@ GROUND_TRUTH_BY_SPLIT = {
     "first50":   "data/browsecomp_plus_decrypted_first50.jsonl",
     "first100":  "data/browsecomp_plus_decrypted_first100.jsonl",
     "test150":   "data/browsecomp_plus_decrypted_test150.jsonl",
+    "test300":   "data/browsecomp_plus_decrypted_test300.jsonl",
+    "train530":  "data/browsecomp_plus_decrypted_train530.jsonl",
     "train680":  "data/browsecomp_plus_decrypted_train680.jsonl",
 }
 

@@ -205,12 +205,12 @@ case "$inner_mode" in
         extra_args="--planning-trigger traj_summary_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_orig_ext_selected_tools)
-        output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools_${TRAJ_MODEL}_gemini_3.1-pro-preview_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/full/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini_3.1-pro-preview_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools_${TRAJ_MODEL}_gemini-2.5-pro_1_seed${seed}"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/full/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini-2.5-pro_1_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_orig_ext_selected_tools_random_seed*)
         output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools${RANDOM_FILE_SUFFIX}_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/full/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages${RANDOM_FILE_SUFFIX}_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/full/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages${RANDOM_FILE_SUFFIX}_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     planning_v*)
         if [ "$trigger" = "start_ext" ]; then

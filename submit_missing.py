@@ -23,17 +23,37 @@ import os
 TEMPLATE_PATH = "run_qwen3_planning.SBATCH"
 TEMPLATE_PATH_FIRST50 = "run_qwen3_first50.SBATCH"
 TEMPLATE_PATH_TEST150 = "run_qwen3_test150.SBATCH"
+TEMPLATE_PATH_TEST300 = "run_qwen3_test300.SBATCH"
+TEMPLATE_PATH_TRAIN530 = "run_qwen3_train530.SBATCH"
 TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
+    "gpt-oss-120b_budget_seed0":                                                    list(range(10)),
+    "qwen3.5-4b_budget_seed0":                                  list(range(10)),
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed4_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
-    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed5_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed1":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed1":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed1":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed1":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed2":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed2":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed2":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed2":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed3":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed1_gpt-oss-120b_seed3":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed2_gpt-oss-120b_seed3":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed3_gpt-oss-120b_seed3":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed8_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed9_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed10_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
+    # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed11_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "tongyi_seed3":                                                                  [2],
     # "tongyi_seed4":                                                                  list(range(10)),
     # "tongyi_seed5":                                                                  list(range(10)),
@@ -173,8 +193,14 @@ MISSING_TEST150 = {
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_seed0":                              list(range(3)),
     #"gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_10_eps_seed0":                              list(range(3)),
     #"gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_seed0":                              list(range(3)),
-    "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":                               list(range(3)),  # complete
     # "tongyi_traj_budget_orig_ext_qwen3.5-4b-sft_seed0":                               list(range(3)),  # complete
+}
+# Missing shards for bcp/test300 split (4 shards: 0-3).
+MISSING_TEST300 = {
+}
+# Missing shards for bcp/train530 split (6 shards: 0-5).
+MISSING_TRAIN530 = {
 }
 # Missing shards for bcp/train680 split (8 shards: 0-7).
 MISSING_TRAIN680 = {
@@ -340,6 +366,10 @@ def main():
         template_first50 = f.read()
     with open(TEMPLATE_PATH_TEST150) as f:
         template_test150 = f.read()
+    with open(TEMPLATE_PATH_TEST300) as f:
+        template_test300 = f.read()
+    with open(TEMPLATE_PATH_TRAIN530) as f:
+        template_train530 = f.read()
     with open(TEMPLATE_PATH_TRAIN680) as f:
         template_train680 = f.read()
 
@@ -347,9 +377,11 @@ def main():
 
     jobs = (
         [(run_name, shards, template_test150, "test150", "bcp")    for run_name, shards in MISSING_TEST150.items()] +
+        [(run_name, shards, template_test300, "test300", "bcp")    for run_name, shards in MISSING_TEST300.items()] +
         [(run_name, value,  template_first50, "first50", "bcp")    for run_name, value  in MISSING_FIRST50.items()] +
         [(run_name, shards, template_full,    "full",    "bcp")    for run_name, shards in MISSING.items()] +
-        [(run_name, shards, template_train680,"train680","bcp")    for run_name, shards in MISSING_TRAIN680.items()] + 
+        [(run_name, shards, template_train530,"train530","bcp")    for run_name, shards in MISSING_TRAIN530.items()] +
+        [(run_name, shards, template_train680,"train680","bcp")    for run_name, shards in MISSING_TRAIN680.items()] +
         [(run_name, value,  template_first50, "first50", "frames") for run_name, value  in MISSING_FRAMES_FIRST50.items()] +
         [(run_name, value,  template_first50, "first50", "musique") for run_name, value  in MISSING_MUSIQUE_FIRST50.items()]
     )
