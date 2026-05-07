@@ -88,8 +88,8 @@
 | + trajectory summary | 48.3 | +2.7 [-0.5, +5.9] | 56.5 | 14.4 |
 | + Gemini-2.5-pro selected k=5 tool calls | 48.6 | +2.7 [-1.0, +6.4] | 25.4 | 15.9 |
 | **+ random k=5 tool calls (selection seed=42)** | **49.3** | +4.0 [-0.5, +8.5] | 28.9 | 15.7 |
-| + random k=5 tool calls (selection seed=43) | 🚫 incomplete (N=135, recovery cancelled) | — | — | — |
-| + random k=5 tool calls (selection seed=44) | 🚫 incomplete (N=148, recovery cancelled) | — | — | — |
+| + random k=5 tool calls (selection seed=43) | 44.0 | -1.3 [-5.5, +2.8] | 27.5 | 16.5 |
+| + random k=5 tool calls (selection seed=44) | 47.3 | +2.0 [-0.9, +4.9] | 25.4 | 17.6 |
 | + random k=5 tool calls (selection seed=45) | 🚫 incomplete (N=147, recovery cancelled) | — | — | — |
 | + random k=5 tool calls (best of 4) | 🚫 incomplete — depends on seeds 43/44/45 above | — | — | — |
 | + self prompted explorer (budget=5) | DEFERRED | — | — | — |
@@ -131,6 +131,43 @@
 - `qwen3.5-4b explorer (SFT on Gemini-2.5-pro selection)` → `runs/bcp/.../qwen3.5-4b-sft-gemini_2.5_pro_selection/budget5_seed0/` (150 trajectories).
 - `qwen3.5-4b explorer (SFT on random selection)` → `runs/bcp/.../qwen3.5-4b-sft-random_selection/budget5_seed0/` (150 trajectories).
 - `self prompted explorer (budget=5)` → main agent itself runs round-1 with `--search-budget 5`; round-2 prepends that round-1 trajectory raw.
+
+---
+
+## BCP test300 (n=300) — GLM-4.7-Flash only
+
+300-qid random sample drawn fresh from BCP-830 (independent of test150). MiniMax / Qwen3.5 paused 2026-05-06 to focus on GLM training data.
+
+**Model: GLM-4.7-Flash (30B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 40.00 | 52.26 | — |
+| + full trajectory (`traj_orig_ext`) | 40.00 | 19.47 | — |
+| **+ trajectory summary (`traj_summary_orig_ext`)** | **46.33** | 48.89 | — |
+| + Gemini-2.5-pro selected k=5 tool calls | 48.33 | 27.78 | — |
+| + random k=5 tool calls (selection seed=42) | 46.67 | 35.91 | — |
+| + random k=5 tool calls (selection seed=43) | 46.33 | 33.17 | — |
+| + random k=5 tool calls (selection seed=44) | 47.67 | 34.58 | — |
+| + random k=5 tool calls (selection seed=45) | 47.00 | 33.30 | — |
+| **+ random k=5 tool calls (best of 4)** | **57.67** † | — | — |
+| + budget-5 round-1 (no extras, just truncate to 5 calls) | 28.67 | 33.71 | — |
+| + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 37.33 | 26.41 | — |
+
+† best-of-4 lift over best single seed: +10.00pp (143/300 → 173/300). Per-seed unique solves: 6/6/9/5.
+
+**Comparison to test150 GLM Δs:**
+
+| Condition | test150 Δ vs base | test300 Δ vs base |
+| :---- | ----: | ----: |
+| traj_summary_orig_ext | +5.3 * | +6.33 |
+| Gemini-selected k=5 | -1.3 | +8.33 |
+| random k=5 best single | -0.7 | +7.67 |
+| random k=5 best-of-4 | (52.7) | (57.67) |
+
+The +8pp gain from `traj_summary_orig_ext` reproduces (test150 was statistically significant; test300 has more headroom since baseline is lower at 40% vs test150's 48%). Random/Gemini selected-tools deltas now look positive at n=300 — opposite sign from test150 — suggesting the test150 negative deltas may have been noise.
+
+**Pause decision (2026-05-06):** MiniMax test300 paused (h200_public partition GPU-starved) to focus throughput on GLM. MiniMax test300 baseline + budget5 evals retained on disk for future continuation.
 
 ---
 

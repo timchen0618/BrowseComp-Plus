@@ -851,3 +851,21 @@ sbatch --export=ALL,SEED=43 sbatch/run_bcp_eval_glm_test150_random_tools.SBATCH
 ```
 
 Eval output dir mirrors the run dir (eval pipeline writes to `evals/bcp/.../random_tools_seed${SEED}/`).
+
+## 2026-05-06: Bug in test300 MiniMax SBATCHes — `--max-num-seqs` placed in client (not vLLM serve)
+- 8085871 FAILED in 3:52 with: `minimax_client.py: error: unrecognized arguments: --max-num-seqs 16`
+- Affected: random_tools, budget5_round2, gemini_selected, traj_orig, traj_summary minimax SBATCHes
+- Fix: removed stray `--max-num-seqs $MAX_NUM_SEQS` from python client invocations (kept in vLLM serve)
+- Resubmitted 8086000 (random seed42 shard A)
+
+
+## 2026-05-06: Pause MiniMax data gathering, focus only on GLM
+- User decision: stop all MiniMax-M2.5 trajectory work; full focus on GLM-4.7-Flash for training data
+- Cancelled pending: 8087354 (minimax random_tools seed42 shard B)
+- Updated cron to skip MiniMax entirely (cron f96e124e replaces 81734cd1)
+- MiniMax test300 progress at pause time:
+  - seed0: 300 ✓ (eval ✓)
+  - budget5_seed0: 300 ✓ (eval ✓)
+  - random_tools_seed42: 150 (only shard A, partial)
+  - All other MiniMax conditions: not started
+- These partial MiniMax outputs are kept on disk (not deleted) in case we resume later
