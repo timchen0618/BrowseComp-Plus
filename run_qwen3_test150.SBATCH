@@ -42,33 +42,30 @@ elif [ "$MODEL_NAME" == "qwen3.6-35b-a3b" ]; then
 elif [ "$MODEL_NAME" == "qwen3.5-2b" ] || [ "$MODEL_NAME" == "qwen3.5-4b" ] || [ "$MODEL_NAME" == "qwen3.5-9b" ]; then
     size="${MODEL_NAME#qwen3.5-}"
     model_path="Qwen/Qwen3.5-${size^^}"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft" ]; then
-    model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft=sft/checkpoints/axolotl-qwen3-4b-search-correct-split/checkpoint-100"
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection=sft/checkpoints/gemini_2.5_pro_selection/checkpoint-107/"
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection=sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0/checkpoint-73"
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-random_selection=sft/checkpoints/random_selection/checkpoint-107/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_a" ]; then
+    lora_modules="qwen3.5-4b-sft-random_selection=sft/checkpoints/bcp-train530-test300/random_selection_seed2/checkpoint-73"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_a=sft/checkpoints/best_of_4_random_selection_mode_a/checkpoint-213/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_b" ]; then
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d=sft/checkpoints/bcp-train530-test300/best_of_8_random_selection_mode_d/checkpoint-107"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_b=sft/checkpoints/best_of_4_random_selection_mode_b/checkpoint-450/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_c" ]; then
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_d/checkpoint-100"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_c=sft/checkpoints/best_of_4_random_selection_mode_c/checkpoint-213/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep" ]; then
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred=sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0_unfiltered/checkpoint-50"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_unfilterred" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep=sft/checkpoints/best_of_4_random_selection_mode_c_5_eps/checkpoint-107/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps" ]; then
+    lora_modules="qwen3.5-4b-sft-random_selection_unfilterred=sft/checkpoints/bcp-train530-test300/random_selection_seed2_unfiltered/checkpoint-166"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps=sft/checkpoints/gemini_2.5_pro_selection_10_eps/checkpoint-213/"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_10_eps" ]; then
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred=sft/checkpoints/bcp-train530-test300/best_of_8_random_selection_mode_d_unfiltered/checkpoint-107"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-random_selection_10_eps=sft/checkpoints/random_selection_10_eps/checkpoint-213/"
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_d_unfiltered/checkpoint-50"
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
     model_path="openai/gpt-oss-120b"
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then

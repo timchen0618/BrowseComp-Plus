@@ -29,8 +29,10 @@ TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
-    "gpt-oss-120b_budget_seed0":                                                    list(range(10)),
-    "qwen3.5-4b_budget_seed0":                                  list(range(10)),
+    # "gpt-oss-120b_budget_seed0":                                list(range(10)),
+    # "qwen3.5-4b_budget_seed0":                                  list(range(10)),
+    # "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":     list(range(10)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":     list(range(10)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0":      list(range(10)),  # complete
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed42_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
     # "gpt-oss-120b_traj_summary_orig_ext_selected_tools_random_seed0_gpt-oss-120b_seed0":  list(range(10)),  # SBATCH mode traj_summary_orig_ext_selected_tools_random_seed42; same random k as --seed 42
@@ -198,6 +200,18 @@ MISSING_TEST150 = {
 }
 # Missing shards for bcp/test300 split (4 shards: 0-3).
 MISSING_TEST300 = {
+    "qwen3.5-4b-sft-gemini_2.5_pro_selection_budget_seed0":              list(range(4)),
+    "qwen3.5-4b-sft-random_selection_budget_seed0":                      list(range(4)),
+    "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_budget_seed0":     list(range(4)),
+    "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_budget_seed0": list(range(4)),
+    "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred_budget_seed0":              list(range(4)),
+    "qwen3.5-4b-sft-random_selection_unfilterred_budget_seed0":                      list(range(4)),
+    "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred_budget_seed0":     list(range(4)),
+    "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred_budget_seed0": list(range(4)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_8_random_selection_mode_d_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_seed0":  list(range(4)),  # complete
 }
 # Missing shards for bcp/train530 split (6 shards: 0-5).
 MISSING_TRAIN530 = {
@@ -239,33 +253,30 @@ def parse_run_name(name):
     elif name.startswith("qwen3.6-35b-a3b"):
         model = "qwen3.6-35b-a3b"
         rest = name[len("qwen3.6-35b-a3b_"):]
-    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps"):
-        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps"
-        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_10_eps_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred"):
+        model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred"
+        rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_d"):
+        model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_d"
+        rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred"):
+        model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d"):
+        model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_"):]
+    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred"):
+        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred"
+        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred_"):]
     elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection"):
         model = "qwen3.5-4b-sft-gemini_2.5_pro_selection"
         rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_"):]
-    elif name.startswith("qwen3.5-4b-sft-random_selection_10_eps"):
-        model = "qwen3.5-4b-sft-random_selection_10_eps"
-        rest = name[len("qwen3.5-4b-sft-random_selection_10_eps_"):]
+    elif name.startswith("qwen3.5-4b-sft-random_selection_unfilterred"):
+        model = "qwen3.5-4b-sft-random_selection_unfilterred"
+        rest = name[len("qwen3.5-4b-sft-random_selection_unfilterred_"):]
     elif name.startswith("qwen3.5-4b-sft-random_selection"):
         model = "qwen3.5-4b-sft-random_selection"
         rest = name[len("qwen3.5-4b-sft-random_selection_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_a"):
-        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_a"
-        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_a_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_b"):
-        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_b"
-        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_b_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep"):
-        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep"
-        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_5_ep_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_4_random_selection_mode_c"):
-        model = "qwen3.5-4b-sft-best_of_4_random_selection_mode_c"
-        rest = name[len("qwen3.5-4b-sft-best_of_4_random_selection_mode_c_"):]
-    elif name.startswith("qwen3.5-4b-sft"):
-        model = "qwen3.5-4b-sft"
-        rest = name[len("qwen3.5-4b-sft_"):]
     elif name.startswith("qwen3.5-4b"):
         model = "qwen3.5-4b"
         rest = name[len("qwen3.5-4b_"):]

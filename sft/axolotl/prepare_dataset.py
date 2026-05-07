@@ -374,6 +374,12 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
         # Unknown item types are ignored intentionally.
 
     flush_assistant()
+
+    # Axolotl trains only on assistant turns; a trailing tool-result turn
+    # causes the "Last turn is not trainable" warning and incorrect EOS masking.
+    while messages and messages[-1]["role"] != "assistant":
+        messages.pop()
+
     return messages
 
 
