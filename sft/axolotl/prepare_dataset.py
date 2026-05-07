@@ -926,7 +926,7 @@ def main() -> None:
                         dropped_bad_excerpt += 1
                     continue
                 row = {"messages": messages}
-                if args.split == SPLIT_BCP_TRAIN680_TEST150:
+                if args.split != SPLIT_RANDOM:
                     row["_query_id"] = qid
                 kept.append(row)
                 selected_count += 1
@@ -981,7 +981,7 @@ def main() -> None:
                 dropped_split += 1
         if dropped_split:
             print(
-                f"[warn] --split {SPLIT_BCP_TRAIN680_TEST150}: "
+                f"[warn] --split {args.split}: "
                 f"dropped {dropped_split} examples whose query_id is not in "
                 f"{args.queries_train_tsv.name} or {args.queries_test_tsv.name}"
             )
