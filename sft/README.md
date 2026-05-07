@@ -40,7 +40,7 @@ selected_tool_calls/*.jsonl    runs/.../<source_file>.json
                \                    /
                 v                  v
        sft/axolotl/prepare_dataset.py
-         (--template gpt-oss | qwen)
+         (--template gpt-oss | qwen | qwen-oss)
          (--split bcp-train680-test150 | random)
          (--multi-input <config.json> --mode {a,b,c,d})
                        |
@@ -113,7 +113,7 @@ python sft/axolotl/prepare_dataset.py \
     --trajectory-folder runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
     --eval-folder evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
     --output-dir sft/axolotl/data/raw/gemini_2.5_pro_selection \
-    --template qwen \
+    --template qwen-oss \
     --split bcp-train680-test150 \
     --seed 42
 ```
@@ -150,7 +150,7 @@ according to `--mode`. Provide a JSON config listing input specs (see below).
 **Stage 1 — Data preparation:** Aggregate and select across multiple input runs.
 
 ```bash
-# data_process.sh wraps the most common call (mode c, qwen template, bcp split)
+# data_process.sh wraps the most common call (mode c, qwen-oss template, bcp split)
 bash sft/axolotl/data_process.sh
 ```
 
@@ -161,7 +161,7 @@ python sft/axolotl/prepare_dataset.py \
     --multi-input sft/axolotl/multi_input_config_best_of_random_selection.json \
     --mode d \
     --output-dir sft/axolotl/data/raw/best_of_4_random_selection_mode_d \
-    --template qwen \
+    --template qwen-oss \
     --split bcp-train680-test150 \
     --seed 42
 ```
@@ -226,12 +226,13 @@ RUN_NAME=best_of_4_random_selection_mode_d \
 
 ### Output templates
 
-| `--template` | Tool name | Arg key | Reasoning format |
-|---|---|---|---|
-| `gpt-oss` | `local_knowledge_base_retrieval` | `user_query` | plain text |
-| `qwen` (default) | `search` | `query` | `<think>...</think>` wrapping |
+| `--template` | Tool name | Arg key | Reasoning format | Tool response role |
+|---|---|---|---|---|
+| `qwen-oss` (default) | `local_knowledge_base_retrieval` | `user_query` | `<think>...</think>` wrapping | `tool` (raw content; chat template adds `<tool_response>`) |
+| `gpt-oss` | `local_knowledge_base_retrieval` | `user_query` | plain text | `user` + `<tool_response>` wrapper |
+| `qwen` | `search` | `query` | `<think>...</think>` wrapping | `user` + `<tool_response>` wrapper |
 
-Use `--template qwen` (`gpt-oss` is legacy).
+Use `--template qwen-oss` for Qwen3.5 models run via `oss_client.py`. `qwen` is the legacy Tongyi/react_agent format; `gpt-oss` is the raw source format.
 
 ### Train/val split
 
@@ -341,11 +342,12 @@ Where `excerpt` is a sequence of OpenAI Responses-API items
    `original_messages[0]` verbatim as a single merged `user` turn
    (contains both system prompt and the `User: <question>` line).
 2. Walks the excerpt items:
-   - `reasoning` → accumulated into the current assistant buffer (wrapped in `<think>...</think>` for `--template qwen`).
+   - `reasoning` → accumulated into the current assistant buffer (wrapped in `<think>...</think>` for `--template qwen` and `qwen-oss`).
    - `function_call` → rendered as `<tool_call>\n{"name": ..., "arguments": {...}}\n</tool_call>`,
-     then the assistant buffer is flushed. Tool name/arg key are rewritten for `--template qwen`.
-   - `function_call_output` → flushes any pending assistant, then emits
-     a user turn wrapped in `<tool_response>...</tool_response>`.
+     then the assistant buffer is flushed. Tool name/arg key are rewritten only for `--template qwen` (legacy).
+   - `function_call_output` → flushes any pending assistant, then emits a tool response:
+     `qwen-oss`: `role=tool` with raw content (Qwen3 chat template adds `<tool_response>` wrapper during tokenisation);
+     `qwen`/`gpt-oss`: `role=user` wrapped in `<tool_response>...</tool_response>`.
 3. Keeps the example iff at least one assistant turn contains `<tool_call>`.
 
 Source trajectories are cached after first load.

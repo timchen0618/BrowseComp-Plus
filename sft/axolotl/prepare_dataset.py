@@ -221,19 +221,27 @@ def _parse_excerpt_items(excerpt: str) -> List[Dict[str, Any]]:
 
 
 # Template presets govern how reasoning text is emitted and how tool-call
-# name/arguments are rewritten. `gpt-oss` keeps the source trajectory format
-# (produced by gpt-oss-120b: name=local_knowledge_base_retrieval, arg=user_query,
-# reasoning as plain text). `qwen` rewrites to the Tongyi/Qwen format consumed
-# by `search_agent/tongyi_utils/react_agent.py`: name=search, arg=query, with
-# reasoning wrapped in <think>...</think> so the assistant turn looks like
-# "<think>...</think>\n<tool_call>{...}</tool_call>".
+# name/arguments are rendered.
+#
+#   gpt-oss   — keeps source trajectory format as-is (name=local_knowledge_base_retrieval,
+#               arg=user_query, reasoning as plain text).
+#
+#   qwen      — legacy Tongyi/react_agent format: rewrites name→search, arg→query,
+#               wraps reasoning in <think>...</think>, tool responses in role=user
+#               with <tool_response> wrapper.
+#
+#   qwen-oss  — oss_client.py / Responses-API format for Qwen3.5 models:
+#               keeps name=local_knowledge_base_retrieval / arg=user_query,
+#               wraps reasoning in <think>...</think>, tool responses emitted as
+#               role=tool with raw content (the Qwen3 chat template adds the
+#               <tool_response> wrapper itself when tokenising).
 TEMPLATE_GPT_OSS = "gpt-oss"
 TEMPLATE_QWEN = "qwen"
-TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN)
+TEMPLATE_QWEN_OSS = "qwen-oss"
+TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN, TEMPLATE_QWEN_OSS)
 
 # Map (source_name, source_arg_key) -> (target_name, target_arg_key) for the
-# qwen template. Source trajectories from gpt-oss-120b use
-# local_knowledge_base_retrieval/user_query; Tongyi/Qwen expects search/query.
+# legacy `qwen` (Tongyi) template only.
 _QWEN_TOOL_NAME_MAP = {
     "local_knowledge_base_retrieval": "search",
     "search": "search",
@@ -247,9 +255,9 @@ _QWEN_ARG_KEY_MAP = {
 def _reasoning_text(item: Dict[str, Any], template: str) -> str:
     """Extract text from a Responses-API reasoning item.
 
-    For the `qwen` template the extracted text is wrapped in
-    <think>...</think> so the downstream assistant turn matches the Tongyi
-    format ("<think>...</think>\\n<tool_call>...</tool_call>").
+    For the `qwen` and `qwen-oss` templates the text is wrapped in
+    <think>...</think> so the assistant turn looks like
+    "<think>...</think>\\n<tool_call>...</tool_call>".
     """
     content = item.get("content")
     if not isinstance(content, list):
@@ -263,7 +271,7 @@ def _reasoning_text(item: Dict[str, Any], template: str) -> str:
     text = "\n".join(parts).strip()
     if not text:
         return ""
-    if template == TEMPLATE_QWEN:
+    if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS):
         return f"<think>\n{text}\n</think>"
     return text
 
@@ -292,7 +300,10 @@ def _fmt_tool_call(item: Dict[str, Any], template: str) -> str:
         parsed_args = raw_args
 
     if template == TEMPLATE_QWEN:
+        # Legacy Tongyi format: rewrite to search/query.
         name, parsed_args = _rewrite_qwen_tool_call(name, parsed_args)
+    # qwen-oss: keep name/args exactly as they appear in the source trajectory
+    # (local_knowledge_base_retrieval / user_query), matching oss_client.py.
 
     payload = {"name": name, "arguments": parsed_args}
     return "<tool_call>\n" + json.dumps(payload, ensure_ascii=False) + "\n</tool_call>"
@@ -312,12 +323,16 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
 
     Rules:
       - `reasoning`           -> append text (optionally wrapped in
-                                 <think>...</think> for the qwen template)
+                                 <think>...</think> for qwen/qwen-oss)
                                  to the current assistant buffer
       - `function_call`       -> append <tool_call>...</tool_call>, flush
                                  buffer as one assistant message
-      - `function_call_output`-> flush any pending assistant buffer, then
-                                 emit a user <tool_response>...</tool_response>
+      - `function_call_output`-> flush any pending assistant buffer, then:
+                                   qwen-oss: role=tool, content=raw output
+                                             (Qwen3 chat template adds the
+                                             <tool_response> wrapper itself)
+                                   qwen:     role=user, content=<tool_response>
+                                   gpt-oss:  role=user, content=<tool_response>
     """
     items = _parse_excerpt_items(excerpt)
     if not items:
@@ -325,10 +340,10 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
 
     messages: List[Dict[str, str]] = []
     buf: List[str] = []
-    # Qwen/Tongyi expects "<think>...</think>\n<tool_call>...</tool_call>"
-    # on the same assistant turn, so use a single newline separator. The
-    # gpt-oss template keeps the original blank-line separator for readability.
-    sep = "\n" if template == TEMPLATE_QWEN else "\n\n"
+    # qwen / qwen-oss: compact single-newline separator so the assistant turn
+    # looks like "<think>...</think>\n<tool_call>...</tool_call>".
+    # gpt-oss: blank-line separator for readability.
+    sep = "\n" if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS) else "\n\n"
 
     def flush_assistant() -> None:
         if not buf:
@@ -349,7 +364,13 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
             flush_assistant()
         elif kind == "function_call_output":
             flush_assistant()
-            messages.append({"role": "user", "content": _fmt_tool_response(it)})
+            if template == TEMPLATE_QWEN_OSS:
+                out = it.get("output", "")
+                if not isinstance(out, str):
+                    out = json.dumps(out, ensure_ascii=False)
+                messages.append({"role": "tool", "content": out})
+            else:
+                messages.append({"role": "user", "content": _fmt_tool_response(it)})
         # Unknown item types are ignored intentionally.
 
     flush_assistant()
@@ -769,13 +790,17 @@ def main() -> None:
     parser.add_argument(
         "--template",
         choices=TEMPLATE_CHOICES,
-        default=TEMPLATE_GPT_OSS,
+        default=TEMPLATE_QWEN_OSS,
         help=(
-            "Output template. 'gpt-oss' preserves the source trajectory format "
-            "(name=local_knowledge_base_retrieval, arg=user_query, reasoning as "
-            "plain text). 'qwen' rewrites tool calls to name=search, arg=query "
-            "and wraps reasoning in <think>...</think> to match the Tongyi/Qwen "
-            "ReAct format expected by search_agent/tongyi_client.py."
+            "Output template. "
+            "'qwen-oss' (default) targets Qwen3.5 models run via oss_client.py: "
+            "keeps name=local_knowledge_base_retrieval / arg=user_query, wraps "
+            "reasoning in <think>...</think>, tool responses as role=tool with raw "
+            "content (the Qwen3 chat template adds <tool_response> itself). "
+            "'gpt-oss' preserves the source trajectory format as-is with no "
+            "reasoning wrapping. "
+            "'qwen' is the legacy Tongyi/react_agent format: rewrites tool calls "
+            "to name=search / arg=query with role=user <tool_response> wrapper."
         ),
     )
     args = parser.parse_args()
@@ -1004,15 +1029,15 @@ if __name__ == "__main__":
     # python sft/axolotl/prepare_dataset.py \
     # --input selected_tool_calls/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl \
     # --trajectory-folder runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4 \
-    # --output-dir sft/axolotl/data/raw/data_qwen \
-    # --template "qwen"
+    # --output-dir sft/axolotl/data/raw/data_qwen_oss \
+    # --template "qwen-oss"
 
     # Multi-input example (mode a):
     # python sft/axolotl/prepare_dataset.py \
     # --multi-input sft/axolotl/multi_input_config.json \
     # --mode a \
-    # --output-dir sft/axolotl/data/raw/data_qwen \
-    # --template "qwen"
+    # --output-dir sft/axolotl/data/raw/data_qwen_oss \
+    # --template "qwen-oss"
     #
     # multi_input_config.json:
     # [

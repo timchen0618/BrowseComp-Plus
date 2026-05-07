@@ -16,7 +16,7 @@
 #   SPLIT      prepare_dataset --split (default: bcp-train680-test150)
 #   VAL_SIZE   only for --split random (default: 0.1)
 #   SEED       only for --split random (default: 42)
-#   TEMPLATE   prepare_dataset --template (default: qwen)
+#   TEMPLATE   prepare_dataset --template (default: qwen-oss)
 #
 # Any additional arguments are forwarded to train_sft.py (after --).
 #
@@ -38,7 +38,7 @@ DATA_DIR="${DATA_DIR:-sft/hf_trainer/data}"
 SPLIT="${SPLIT:-bcp-train680-test150}"
 VAL_SIZE="${VAL_SIZE:-0.1}"
 SEED="${SEED:-42}"
-TEMPLATE="${TEMPLATE:-qwen}"
+TEMPLATE="${TEMPLATE:-qwen-oss}"
 
 echo "[1/2] Converting excerpts: ${INPUT} -> ${DATA_DIR}"
 python sft/axolotl/prepare_dataset.py \
