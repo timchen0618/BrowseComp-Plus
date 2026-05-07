@@ -1,0 +1,41 @@
+# GRPO training config for Qwen3.5-4B explorer.
+# All paths are relative to the BrowseComp-Plus project root.
+# Pass to any script with --config rl/trl/config.yaml.
+
+# === Paths ===
+sft_checkpoint: sft/checkpoints/PLACEHOLDER
+index_path: "indexes/Qwen3-Embedding-8B/*"
+index_model_name: Qwen/Qwen3-Embedding-8B
+train_queries: topics-qrels/bcp/queries_train680.tsv
+ground_truth: data/browsecomp_plus_decrypted_train680.jsonl
+output_dir: rl/trl/runs/grpo_run1
+
+# === GPU / Server ports ===
+main_agent_port: 8010    # GPU 2: GPT-OSS-120B, always loaded
+rollout_port: 8011       # GPU 3: Qwen3.5-4B explorer / Qwen3-32B judge (time-muxed)
+
+# === Models ===
+explorer_model: Qwen/Qwen3.5-4B
+main_agent_model: openai/gpt-oss-120b
+judge_model: Qwen/Qwen3-32B
+
+# === GRPO hyperparameters ===
+group_size: 4             # G — independent trajectories per query
+batch_queries: 32         # queries per rollout iteration  -> 128 samples/iter
+kl_beta: 0.01             # KL penalty coefficient beta
+learning_rate: 1.0e-5
+max_steps: 500
+checkpoint_every: 20      # learner steps between weight-sync checkpoints
+min_buffer_size: 64       # learner blocks until buffer holds this many samples
+
+# === Rollout settings ===
+max_turns: 15             # max search turns per trajectory
+max_new_tokens: 2048      # max tokens per LLM call
+temperature: 0.6
+top_p: 0.95
+k: 5                      # search results returned per query
+
+# === Buffer / checkpoint paths ===
+buffer_dir: rl/trl/tmp/rl_buffer
+ckpt_dir: rl/trl/tmp/rl_buffer/ckpt_latest
+ckpt_flag: rl/trl/tmp/rl_buffer/ckpt_ready.flag

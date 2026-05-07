@@ -117,8 +117,10 @@ def collect_targets() -> list[Target]:
 
     groups = [
         (sm.MISSING_TEST150,          sm.TEMPLATE_PATH_TEST150,   "test150",  "bcp"),
+        (sm.MISSING_TEST300,          sm.TEMPLATE_PATH_TEST300,   "test300",  "bcp"),
         (sm.MISSING_FIRST50,          sm.TEMPLATE_PATH_FIRST50,   "first50",  "bcp"),
         (sm.MISSING,                  sm.TEMPLATE_PATH,           "full",     "bcp"),
+        (sm.MISSING_TRAIN530,         sm.TEMPLATE_PATH_TRAIN530,  "train530", "bcp"),
         (sm.MISSING_TRAIN680,         sm.TEMPLATE_PATH_TRAIN680,  "train680", "bcp"),
         (sm.MISSING_FRAMES_FIRST50,   sm.TEMPLATE_PATH_FIRST50,   "first50",  "frames"),
         (sm.MISSING_MUSIQUE_FIRST50,  sm.TEMPLATE_PATH_FIRST50,   "first50",  "musique"),

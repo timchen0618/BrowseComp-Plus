@@ -1,0 +1,41 @@
+# 2-GPU validation config — DO NOT use for production training.
+# Overrides model names and batch sizes to run on 2 GPUs with tiny models.
+# All paths are identical to config.yaml.
+
+# === Paths (same as production) ===
+sft_checkpoint: sft/checkpoints/PLACEHOLDER
+index_path: "indexes/Qwen3-Embedding-8B/*"
+index_model_name: Qwen/Qwen3-Embedding-8B
+train_queries: topics-qrels/bcp/queries_train680.tsv
+ground_truth: data/browsecomp_plus_decrypted_train680.jsonl
+output_dir: rl/trl/runs/val_2gpu
+
+# === GPU / Server ports (same as production) ===
+main_agent_port: 8010
+rollout_port: 8011
+
+# === Tiny models (0.5B fits ~1 GB — main agent and learner share GPU 0) ===
+explorer_model: Qwen/Qwen3.5-0.8B
+main_agent_model: Qwen/Qwen3.5-0.8B
+judge_model: Qwen/Qwen3.5-0.8B
+
+# === Minimal batch — completes in ~5 minutes ===
+group_size: 2
+batch_queries: 2         # 2 queries × G=2 → 4 samples/iter
+kl_beta: 0.01
+learning_rate: 1.0e-5
+max_steps: 3             # 3 training steps then exit
+checkpoint_every: 2
+min_buffer_size: 4       # learner unblocks as soon as 4 samples arrive
+
+# === Rollout settings ===
+max_turns: 5
+max_new_tokens: 256
+temperature: 0.6
+top_p: 0.95
+k: 5
+
+# === Buffer / checkpoint paths (isolated from production buffer) ===
+buffer_dir: rl/trl/tmp/val_2gpu_buffer
+ckpt_dir: rl/trl/tmp/val_2gpu_buffer/ckpt_latest
+ckpt_flag: rl/trl/tmp/val_2gpu_buffer/ckpt_ready.flag
