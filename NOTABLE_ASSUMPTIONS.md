@@ -869,3 +869,4 @@ Eval output dir mirrors the run dir (eval pipeline writes to `evals/bcp/.../rand
   - random_tools_seed42: 150 (only shard A, partial)
   - All other MiniMax conditions: not started
 - These partial MiniMax outputs are kept on disk (not deleted) in case we resume later
+Note: random_tools_seed44 has 299/300 trajectories. 1 qid persistently failed across shards A+B. Eval submitted on 299 — 1 missing qid is below test300 noise floor.

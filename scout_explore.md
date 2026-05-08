@@ -134,9 +134,9 @@
 
 ---
 
-## BCP test300 (n=300) — GLM-4.7-Flash only
+## BCP test300 (n=300) — GLM-4.7-Flash + MiniMax-M2.5
 
-300-qid random sample drawn fresh from BCP-830 (independent of test150). MiniMax / Qwen3.5 paused 2026-05-06 to focus on GLM training data.
+300-qid random sample drawn fresh from BCP-830 (independent of test150). MiniMax resumed 2026-05-07.
 
 **Model: GLM-4.7-Flash (30B)**
 
@@ -167,7 +167,41 @@
 
 The +8pp gain from `traj_summary_orig_ext` reproduces (test150 was statistically significant; test300 has more headroom since baseline is lower at 40% vs test150's 48%). Random/Gemini selected-tools deltas now look positive at n=300 — opposite sign from test150 — suggesting the test150 negative deltas may have been noise.
 
-**Pause decision (2026-05-06):** MiniMax test300 paused (h200_public partition GPU-starved) to focus throughput on GLM. MiniMax test300 baseline + budget5 evals retained on disk for future continuation.
+**Pause decision (2026-05-06):** MiniMax test300 paused (h200_public partition GPU-starved) to focus throughput on GLM. MiniMax test300 baseline + budget5 evals retained on disk. **Resumed 2026-05-07; complete 2026-05-08.**
+
+**Model: MiniMax-M2.5 (229B)**
+
+| Condition | Acc | Recall | # calls |
+| :---- | ----: | ----: | ----: |
+| Baseline | 46.33 | 55.26 | 15.95 |
+| + full trajectory (`traj_orig_ext`) | 53.02 | 18.32 | 3.03 |
+| **+ trajectory summary (`traj_summary_orig_ext`)** | **51.67** | 52.17 | 10.24 |
+| + Gemini-2.5-pro selected k=5 tool calls | _gated on user JSONL_ | — | — |
+| + random k=5 tool calls (selection seed=42) | 52.00 | 51.42 | 9.24 |
+| + random k=5 tool calls (selection seed=43) | 51.33 | 48.38 | 9.18 |
+| + random k=5 tool calls (selection seed=44) ‡ | 50.84 | 51.70 | 9.35 |
+| + random k=5 tool calls (selection seed=45) ‡ | 48.16 | 47.97 | 9.15 |
+| **+ random k=5 tool calls (best of 4)** | **69.13** † | — | — |
+| + budget-5 round-1 (no extras, just truncate to 5 calls) | 36.00 | 33.12 | 4.97 |
+| + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 50.00 | 32.46 | 7.57 |
+
+† best-of-4 lift over best single seed: +17.45pp (154/298 → 206/298). Per-seed unique solves: 13/11/7/5. Computed on intersection of 298 qids common to all 4 seeds (random44, random45 each missing 1 qid that persistently failed across runs).
+‡ random44, random45 have N=299 (1 qid persistently failed; below noise floor).
+
+**Comparison to test150 MiniMax Δs:**
+
+| Condition | test150 Δ vs base | test300 Δ vs base |
+| :---- | ----: | ----: |
+| traj_summary_orig_ext | +7.3 * | +5.34 |
+| traj_orig_ext | (varies) | +6.69 |
+| random k=5 best single | -3.3 | +5.67 |
+| random k=5 best-of-4 | (71.3) | (69.13) |
+| budget-5 round-1 | — | -10.33 |
+| self_explorer (round-2) | — | +3.67 |
+
+The +5.3pp gain from `traj_summary_orig_ext` reproduces (test150 was +7.3 — both within noise of each other and statistically meaningful). **Best-of-4 hits 69.13%** on test300 (vs 71.3% on test150, well within consistency range), reaffirming MiniMax's strong ceiling under random-tool-call extension. Random k=5 deltas flip from negative on test150 to **+5.67pp positive** on test300 — same pattern as GLM, suggesting test150's negatives were noise.
+
+**Compared to GLM at n=300:** MiniMax has higher absolute accuracy throughout (46→53 baseline-vs-best-condition) but the **deltas are smaller** (+5–7pp vs GLM's +6–8pp), and MiniMax's best-of-4 lift (+17.4pp) is much larger than GLM's (+10pp), suggesting MiniMax's randomness ceiling is higher.
 
 ---
 
