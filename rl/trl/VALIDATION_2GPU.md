@@ -75,6 +75,9 @@ python rl/trl/rollout_daemon.py \
 
 **Expected log lines (in order):**
 ```
+[daemon] loading FAISS index + embedding model (may take several minutes) ...
+[daemon] searcher ready
+[daemon] 680 queries | 680 ground-truth entries
 [daemon] starting explorer vLLM (port 8011) ...
 [daemon] explorer server ready
 [daemon] iter=0: generating 4 trajectories
@@ -86,6 +89,8 @@ python rl/trl/rollout_daemon.py \
 [daemon] iter=0: pushed 4 samples (N/4 correct)
 ```
 
+**Note:** The FAISS index + 8B embedding model load takes 2–5 minutes before any `[daemon]` line appears. This is normal — the process is not stuck.
+
 **Do not proceed to Step 3 until you see** `pushed 4 samples`.
 
 ---
@@ -93,10 +98,7 @@ python rl/trl/rollout_daemon.py \
 ## Step 3 — Start the learner (Terminal 3)
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 accelerate launch \
-    --num_processes 1 \
-    --mixed_precision bf16 \
-    rl/trl/grpo_train.py --config rl/trl/config_2gpu_val.yaml
+CUDA_VISIBLE_DEVICES=0 accelerate launch --config_file rl/trl/accelerate_1gpu.yaml rl/trl/grpo_train.py --config rl/trl/config_2gpu_val.yaml     
 ```
 
 **`--num_processes 1` disables FSDP** — the learner runs as a single process,

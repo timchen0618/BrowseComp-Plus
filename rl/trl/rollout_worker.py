@@ -23,7 +23,7 @@ import aiohttp
 import json5
 
 
-EXPLORER_SYSTEM_PROMPT = (
+_EXPLORER_SYSTEM_PROMPT_TEMPLATE = (
     "You are a deep research assistant. Your core function is to conduct "
     "thorough, multi-source investigations into any topic. When you have "
     "gathered sufficient information, enclose the final answer within "
@@ -41,8 +41,12 @@ EXPLORER_SYSTEM_PROMPT = (
     "<tool_call>\n"
     '{"name": "search", "arguments": {"query": "your query here"}}\n'
     "</tool_call>\n\n"
-    f"Current date: {date.today().isoformat()}"
+    "Current date: {today}"
 )
+
+
+def _explorer_system_prompt() -> str:
+    return _EXPLORER_SYSTEM_PROMPT_TEMPLATE.format(today=date.today().isoformat())
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +70,7 @@ async def generate_trajectory(
     k = cfg.get("k", 5)
 
     messages = [
-        {"role": "system", "content": EXPLORER_SYSTEM_PROMPT},
+        {"role": "system", "content": _explorer_system_prompt()},
         {"role": "user", "content": query},
     ]
     terminated = False

@@ -26,6 +26,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+
 import aiohttp
 import yaml
 
@@ -71,6 +72,7 @@ def start_vllm_server(
     model_path: str,
     port: int,
     gpu_id: int,
+    gpu_memory_utilization: float = 0.90,
     extra_args: list[str] | None = None,
     lora_modules: str | None = None,
 ) -> subprocess.Popen:
@@ -79,7 +81,7 @@ def start_vllm_server(
         "--model", model_path,
         "--port", str(port),
         "--tensor-parallel-size", "1",
-        "--gpu-memory-utilization", "0.90",
+        "--gpu-memory-utilization", str(gpu_memory_utilization),
     ]
     if lora_modules:
         cmd += ["--enable-lora", "--lora-modules", lora_modules]
@@ -91,7 +93,7 @@ def start_vllm_server(
     return subprocess.Popen(cmd, env=env)
 
 
-def wait_for_server(port: int, timeout: float = 180.0) -> None:
+def wait_for_server(port: int, timeout: float = 600.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -198,6 +200,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--gpu-id", type=int, default=3)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -224,7 +227,9 @@ def main() -> None:
         max_length = 8192
         attn_implementation = "flash_attention_2"
 
+    print("[daemon] loading FAISS index + embedding model (may take several minutes) ...", flush=True)
     searcher = FaissSearcher(_SearcherArgs())
+    print("[daemon] searcher ready", flush=True)
 
     queries = load_queries(cfg["train_queries"])
     ground_truth = load_ground_truth(cfg["ground_truth"])
@@ -247,6 +252,7 @@ def main() -> None:
         cfg["explorer_model"],
         cfg["rollout_port"],
         gpu_id,
+        gpu_memory_utilization=args.gpu_memory_utilization,
     )
     print(f"[daemon] starting explorer vLLM (port {cfg['rollout_port']}) ...", flush=True)
     wait_for_server(cfg["rollout_port"])
@@ -264,7 +270,8 @@ def main() -> None:
                 kill_server(explorer_proc)
                 # TODO: pass updated LoRA via --lora-modules once weight format is set
                 explorer_proc = start_vllm_server(
-                    cfg["explorer_model"], cfg["rollout_port"], gpu_id
+                    cfg["explorer_model"], cfg["rollout_port"], gpu_id,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
                 )
                 wait_for_server(cfg["rollout_port"])
                 print("[daemon] explorer reloaded", flush=True)
@@ -296,6 +303,7 @@ def main() -> None:
                         for qid, query in batch
                     ])
                 flat = [t for g in groups for t in g]
+                print(f"[daemon] iter={iteration}: calling main agent ...", flush=True)
                 async with aiohttp.ClientSession() as session:
                     answers = await asyncio.gather(*[
                         call_main_agent(
@@ -308,19 +316,21 @@ def main() -> None:
 
             groups, flat_trajs, answers = asyncio.run(_gen_and_main())
 
-            # Swap GPU 3 to judge
-            print("[daemon] swapping GPU 3 to judge mode ...", flush=True)
+            # Swap GPU to judge
+            print(f"[daemon] swapping GPU {gpu_id} to judge mode ...", flush=True)
             kill_server(explorer_proc)
             judge_proc = start_vllm_server(
                 cfg["judge_model"],
                 cfg["rollout_port"],
                 gpu_id,
+                gpu_memory_utilization=args.gpu_memory_utilization,
                 extra_args=["--quantization", "int8"],
             )
             wait_for_server(cfg["rollout_port"])
             print("[daemon] judge server ready", flush=True)
 
             # Score answers
+            print(f"[daemon] iter={iteration}: scoring {len(flat_trajs)} answers ...", flush=True)
             async def _score():
                 async with aiohttp.ClientSession() as session:
                     return await asyncio.gather(*[
@@ -336,12 +346,13 @@ def main() -> None:
 
             rewards = asyncio.run(_score())
 
-            # Swap GPU 3 back to explorer
-            print("[daemon] swapping GPU 3 back to explorer ...", flush=True)
+            # Swap GPU back to explorer
+            print(f"[daemon] swapping GPU {gpu_id} back to explorer ...", flush=True)
             kill_server(judge_proc)
             judge_proc = None
             explorer_proc = start_vllm_server(
-                cfg["explorer_model"], cfg["rollout_port"], gpu_id
+                cfg["explorer_model"], cfg["rollout_port"], gpu_id,
+                gpu_memory_utilization=args.gpu_memory_utilization,
             )
             wait_for_server(cfg["rollout_port"])
 

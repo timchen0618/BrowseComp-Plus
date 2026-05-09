@@ -182,9 +182,10 @@ def compute_log_probs(model, input_ids: torch.Tensor, mask: torch.Tensor) -> tor
         dim=-1, index=shift_labels.unsqueeze(-1)
     ).squeeze(-1)                                      # [B, T-1]
 
-    # Pad back to T so shapes match the mask
-    token_lp_padded = F.pad(token_lp, (1, 0), value=0.0)  # [B, T]
-    return token_lp_padded * shift_mask.float().roll(1, dims=1)  # zero non-assistant
+    # Pad both to T so shapes match; position 0 is always 0 (no prediction target)
+    token_lp_padded = F.pad(token_lp, (1, 0), value=0.0)          # [B, T]
+    mask_padded     = F.pad(shift_mask.float(), (1, 0), value=0.0) # [B, T]
+    return token_lp_padded * mask_padded
 
 
 # ---------------------------------------------------------------------------
