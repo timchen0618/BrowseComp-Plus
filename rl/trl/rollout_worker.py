@@ -46,7 +46,7 @@ _EXPLORER_SYSTEM_PROMPT_TEMPLATE = (
 
 
 def _explorer_system_prompt() -> str:
-    return _EXPLORER_SYSTEM_PROMPT_TEMPLATE.format(today=date.today().isoformat())
+    return _EXPLORER_SYSTEM_PROMPT_TEMPLATE.replace("{today}", date.today().isoformat())
 
 
 # ---------------------------------------------------------------------------
