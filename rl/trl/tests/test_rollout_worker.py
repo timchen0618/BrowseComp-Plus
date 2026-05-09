@@ -15,31 +15,31 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from rl.trl.rollout_worker import (
-    EXPLORER_SYSTEM_PROMPT,
+    _explorer_system_prompt,
     _execute_search,
     extract_answer,
 )
 
 
 # ---------------------------------------------------------------------------
-# EXPLORER_SYSTEM_PROMPT sanity checks
+# _explorer_system_prompt sanity checks
 # ---------------------------------------------------------------------------
 
 def test_system_prompt_contains_tool_call():
-    assert "<tool_call>" in EXPLORER_SYSTEM_PROMPT
+    assert "<tool_call>" in _explorer_system_prompt()
 
 
 def test_system_prompt_contains_answer_tags():
-    assert "<answer>" in EXPLORER_SYSTEM_PROMPT
+    assert "<answer>" in _explorer_system_prompt()
 
 
 def test_system_prompt_contains_search_tool():
-    assert '"name": "search"' in EXPLORER_SYSTEM_PROMPT
+    assert '"name": "search"' in _explorer_system_prompt()
 
 
 def test_system_prompt_has_date():
-    # Should contain "Current date:" followed by an ISO date
-    assert "Current date:" in EXPLORER_SYSTEM_PROMPT
+    from datetime import date
+    assert date.today().isoformat() in _explorer_system_prompt()
 
 
 # ---------------------------------------------------------------------------

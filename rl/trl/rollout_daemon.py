@@ -201,6 +201,8 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--gpu-id", type=int, default=3)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    parser.add_argument("--max-iterations", type=int, default=None,
+                        help="Stop after N rollout iterations (default: run forever).")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -374,6 +376,12 @@ def main() -> None:
                 flush=True,
             )
             iteration += 1
+            if args.max_iterations is not None and iteration >= args.max_iterations:
+                print(
+                    f"[daemon] max-iterations={args.max_iterations} reached, exiting.",
+                    flush=True,
+                )
+                break
 
     finally:
         kill_server(explorer_proc)
