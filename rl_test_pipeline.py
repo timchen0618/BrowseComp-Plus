@@ -293,10 +293,12 @@ def run(args) -> int:
     if state.phase in ("init", "failed"):
         if args.retry:
             retry_tier = state.failed_tier or "tier0"
-            log.info("Retrying from %s", retry_tier)
+            log.info("Retrying from %s (submitting fresh job)", retry_tier)
             state.phase = retry_tier
             state.failed_tier = None
             state.failed_reason = None
+            # Clear old job_id so we submit a new job rather than re-validate old output
+            state.job_ids.pop(retry_tier, None)
         else:
             state.phase = "init"
 
