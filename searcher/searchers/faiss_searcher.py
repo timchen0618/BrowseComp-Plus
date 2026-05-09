@@ -141,9 +141,9 @@ class FaissSearcher(BaseSearcher):
             if num_gpus == 1:
                 co = faiss.GpuClonerOptions()
                 co.useFloat16 = True
-                res = faiss.StandardGpuResources()
+                self.res = faiss.StandardGpuResources()
                 self.retriever.index = faiss.index_cpu_to_gpu(
-                    res, 0, self.retriever.index, co
+                    self.res, 0, self.retriever.index, co
                 )
             else:
                 co = faiss.GpuMultipleClonerOptions()
