@@ -314,7 +314,15 @@ def run(args) -> int:
     current_tier = state.phase
     job_id = state.job_ids.get(current_tier)
 
-    # Dry-run: no real job_id → pretend job is done with code 0
+    # No job submitted for this tier yet (fresh start or retry) → submit now
+    if job_id is None:
+        jid = submit_job(SBATCH_FILES[current_tier], args.submit)
+        state.job_ids[current_tier] = jid
+        save_state(state)
+        log.info("Submitted %s (job %s). Poll again in ~15 min.", current_tier, jid)
+        return 0
+
+    # Dry-run: pretend job is done with code 0
     if not args.submit:
         log.info("[dry-run] treating %s as complete", current_tier)
         success, reason = validate_tier(
@@ -326,7 +334,7 @@ def run(args) -> int:
             log.warning("[dry-run] validation would fail: %s", reason)
         return 0
 
-    job_status = poll_job(job_id) if job_id else "DONE"
+    job_status = poll_job(job_id)
 
     if job_status in ("RUNNING", "PENDING", "COMPLETING"):
         log.info(
