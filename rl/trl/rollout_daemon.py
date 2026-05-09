@@ -321,12 +321,14 @@ def main() -> None:
             # Swap GPU to judge
             print(f"[daemon] swapping GPU {gpu_id} to judge mode ...", flush=True)
             kill_server(explorer_proc)
+            judge_quant = cfg.get("judge_quantization")
+            judge_extra = ["--quantization", judge_quant] if judge_quant else None
             judge_proc = start_vllm_server(
                 cfg["judge_model"],
                 cfg["rollout_port"],
                 gpu_id,
                 gpu_memory_utilization=args.gpu_memory_utilization,
-                extra_args=["--quantization", "int8"],
+                extra_args=judge_extra,
             )
             wait_for_server(cfg["rollout_port"])
             print("[daemon] judge server ready", flush=True)
