@@ -197,6 +197,7 @@ def load_policy_model(cfg: dict, device_map="auto"):
         cfg["explorer_model"],
         torch_dtype=torch.bfloat16,
         device_map=device_map,
+        trust_remote_code=True,
     )
     lora_cfg = LoraConfig(
         r=16,
@@ -218,6 +219,7 @@ def load_ref_model(cfg: dict, device_map="auto"):
         cfg["explorer_model"],
         torch_dtype=torch.bfloat16,
         device_map=device_map,
+        trust_remote_code=True,
     )
     # TODO: load SFT checkpoint weights once cfg["sft_checkpoint"] is real.
     for p in ref.parameters():
@@ -232,7 +234,7 @@ def load_ref_model(cfg: dict, device_map="auto"):
 def train(cfg: dict) -> None:
     accelerator = Accelerator()
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg["explorer_model"])
+    tokenizer = AutoTokenizer.from_pretrained(cfg["explorer_model"], trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
