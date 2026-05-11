@@ -53,10 +53,12 @@ singularity exec --nv \
     ${SINGULARITY_IMAGE} /bin/bash -c "
         source /ext3/env.sh
         CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
-            --model Qwen/Qwen3.5-0.8B \
+            --model Qwen/Qwen3-0.6B \
             --port ${MAIN_AGENT_PORT} \
             --tensor-parallel-size 1 \
-            --gpu-memory-utilization 0.4
+            --gpu-memory-utilization 0.4 \
+            --enable-auto-tool-choice \
+            --tool-call-parser hermes
     " &
 MAIN_AGENT_PID=$!
 echo "Main agent PID: ${MAIN_AGENT_PID}"
