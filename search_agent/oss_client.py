@@ -351,8 +351,7 @@ def _build_continuation_messages(
     original_messages = traj.get("original_messages") or []
 
     if not original_messages:
-        if args.verbose:
-            print(f"[{qid}] WARNING: no original_messages; using fresh single-message prompt", flush=True)
+        print(f"[{qid}] WARNING: no original_messages in trajectory; falling back to fresh single-message prompt", flush=True)
         user_content = format_query(qtext, args.query_template)
         return [{"role": "user", "content": user_content}]
 
