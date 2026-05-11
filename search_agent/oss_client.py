@@ -38,6 +38,7 @@ TRAJ_TRIGGERS = (
     "traj_orig_ext",
     "traj_summary_ext",
     "traj_summary_orig_ext",
+    "traj_continue",
 )
 TRAJ_SUMMARY_TRIGGERS = ("traj_summary_ext", "traj_summary_orig_ext")
 
@@ -333,6 +334,39 @@ def _build_trajectory_user_content(
     return format_query_with_traj_summary(qtext, traj_summary, args.query_template)
 
 
+def _build_continuation_messages(
+    qid: str,
+    qtext: str,
+    args,
+    trajectories_by_id: dict,
+) -> list:
+    """Build input_messages for traj_continue mode.
+
+    Strips the first user message from original_messages (which contained the
+    budget-constrained or otherwise special prompt) and replaces it with a fresh
+    default prompt.  The remaining messages (reasoning, tool calls, outputs) are
+    appended verbatim so the model resumes mid-conversation.
+    """
+    traj = trajectories_by_id.get(qid, {})
+    original_messages = traj.get("original_messages") or []
+
+    if not original_messages:
+        if args.verbose:
+            print(f"[{qid}] WARNING: no original_messages; using fresh single-message prompt", flush=True)
+        user_content = format_query(qtext, args.query_template)
+        return [{"role": "user", "content": user_content}]
+
+    user_content = format_query(qtext, args.query_template)
+    continuation = [{"role": "user", "content": user_content}] + list(original_messages[1:])
+    if args.verbose:
+        print(
+            f"[{qid}] traj_continue: {len(continuation)} messages "
+            f"({len(original_messages) - 1} from prior trajectory)",
+            flush=True,
+        )
+    return continuation
+
+
 # --- Persist run output ------------------------------------------------------
 
 def _persist_response(
@@ -516,15 +550,21 @@ def _process_tsv_dataset(
 
     def _handle_single_query(qid: str, qtext: str, pbar=None):
         """Build request, send, and persist response for one query."""
-        if args.planning_trigger in TRAJ_TRIGGERS:
+        if args.planning_trigger == "traj_continue":
+            input_messages = _build_continuation_messages(
+                qid, qtext, args, trajectories_by_id
+            )
+        elif args.planning_trigger in TRAJ_TRIGGERS:
             user_content = _build_trajectory_user_content(
                 qid, qtext, args, client, trajectories_by_id, summaries_by_id
             )
+            input_messages = [{"role": "user", "content": user_content}]
         elif args.search_budget is not None:
             user_content = format_query_with_budget(qtext, args.search_budget)
+            input_messages = [{"role": "user", "content": user_content}]
         else:
             user_content = format_query(qtext, args.query_template)
-        input_messages = [{"role": "user", "content": user_content}]
+            input_messages = [{"role": "user", "content": user_content}]
 
         initial_request = {
             "model": args.model,
@@ -586,6 +626,13 @@ def _process_tsv_dataset(
 def _validate_planning_args(args) -> None:
     trigger = args.planning_trigger
     if trigger is None:
+        return
+
+    if trigger == "traj_continue":
+        if args.trajectory_dir is None:
+            sys.exit("Error: traj_continue requires --trajectory-dir")
+        if args.search_budget is not None:
+            sys.exit("Error: traj_continue is incompatible with --search-budget")
         return
 
     if trigger in ("traj_ext", "traj_orig_ext"):
@@ -650,6 +697,7 @@ def main():
             "traj_summary_ext",
             "traj_orig_ext",
             "traj_summary_orig_ext",
+            "traj_continue",
         ],
         default=None,
         help="Trajectory-based input mode.",
