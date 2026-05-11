@@ -30,6 +30,9 @@ TEMPLATE_PATH_TRAIN680 = "run_qwen3_train680.SBATCH"
 # Missing shards per leaf folder for full split (from missing_1.txt analysis)
 MISSING = {
     # "gpt-oss-120b_budget_seed0":                                list(range(10)),
+    "gpt-oss-120b_budget_seed1":                                list(range(10)),
+    "gpt-oss-120b_budget_seed2":                                list(range(10)),
+    "gpt-oss-120b_budget_seed3":                                list(range(10)),
     # "qwen3.5-4b_budget_seed0":                                  list(range(10)),
     # "gpt-oss-120b_traj_budget_orig_ext_gpt-oss-120b_seed0":     list(range(10)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b_seed0":     list(range(10)),  # complete
@@ -200,18 +203,26 @@ MISSING_TEST150 = {
 }
 # Missing shards for bcp/test300 split (4 shards: 0-3).
 MISSING_TEST300 = {
-    "qwen3.5-4b-sft-gemini_2.5_pro_selection_budget_seed0":              list(range(4)),
-    "qwen3.5-4b-sft-random_selection_budget_seed0":                      list(range(4)),
-    "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_budget_seed0":     list(range(4)),
-    "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_budget_seed0": list(range(4)),
-    "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred_budget_seed0":              list(range(4)),
-    "qwen3.5-4b-sft-random_selection_unfilterred_budget_seed0":                      list(range(4)),
-    "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred_budget_seed0":     list(range(4)),
-    "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred_budget_seed0": list(range(4)),
+    # "qwen3.5-4b-sft-gemini_2.5_pro_selection_budget_seed0":              list(range(4)),
+    # "qwen3.5-4b-sft-random_selection_budget_seed0":                      list(range(4)),
+    # "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_budget_seed0":     list(range(4)),
+    # "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_budget_seed0": list(range(4)),
+    # "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered_budget_seed0":              list(range(4)),
+    # "qwen3.5-4b-sft-random_selection_unfiltered_budget_seed0":                      list(range(4)),
+    # "qwen3.5-4b-sft-best_of_8_random_selection_mode_c_budget_seed0":     list(range(4)),
+    # "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c_budget_seed0": list(range(4)),
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_seed0":  list(range(4)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_seed0":  list(range(4)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_8_random_selection_mode_d_seed0":  list(range(4)),  # complete
     # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-random_selection_unfiltered_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_8_random_selection_mode_c_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c_seed0":  list(range(4)),  # complete
+    #"qwen3.5-4b-sft-gpt-oss-120b_scout_budget_seed0":             list(range(4)),
+    #"qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered_budget_seed0":  list(range(4)),
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gpt-oss-120b_scout_seed0":  list(range(4)),  # complete
+    # "gpt-oss-120b_traj_budget_orig_ext_qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered_seed0":  list(range(4)),  # complete
 }
 # Missing shards for bcp/train530 split (6 shards: 0-5).
 MISSING_TRAIN530 = {
@@ -253,30 +264,42 @@ def parse_run_name(name):
     elif name.startswith("qwen3.6-35b-a3b"):
         model = "qwen3.6-35b-a3b"
         rest = name[len("qwen3.6-35b-a3b_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred"):
-        model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred"
-        rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered"):
+        model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered"
+        rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered_"):]
     elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_d"):
         model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_d"
         rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_d_"):]
-    elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred"):
-        model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred"
-        rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_8_random_selection_mode_c"):
+        model = "qwen3.5-4b-sft-best_of_8_random_selection_mode_c"
+        rest = name[len("qwen3.5-4b-sft-best_of_8_random_selection_mode_c_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered"):
+        model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered_"):]
     elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d"):
         model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d"
         rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_"):]
-    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred"):
-        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred"
-        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c"):
+        model = "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c"
+        rest = name[len("qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c_"):]
+    elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered"):
+        model = "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered"
+        rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered_"):]
     elif name.startswith("qwen3.5-4b-sft-gemini_2.5_pro_selection"):
         model = "qwen3.5-4b-sft-gemini_2.5_pro_selection"
         rest = name[len("qwen3.5-4b-sft-gemini_2.5_pro_selection_"):]
-    elif name.startswith("qwen3.5-4b-sft-random_selection_unfilterred"):
-        model = "qwen3.5-4b-sft-random_selection_unfilterred"
-        rest = name[len("qwen3.5-4b-sft-random_selection_unfilterred_"):]
+    elif name.startswith("qwen3.5-4b-sft-random_selection_unfiltered"):
+        model = "qwen3.5-4b-sft-random_selection_unfiltered"
+        rest = name[len("qwen3.5-4b-sft-random_selection_unfiltered_"):]
     elif name.startswith("qwen3.5-4b-sft-random_selection"):
         model = "qwen3.5-4b-sft-random_selection"
         rest = name[len("qwen3.5-4b-sft-random_selection_"):]
+    elif name.startswith("qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered"):
+        model = "qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered"
+        rest = name[len("qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered_"):]
+    elif name.startswith("qwen3.5-4b-sft-gpt-oss-120b_scout"):
+        model = "qwen3.5-4b-sft-gpt-oss-120b_scout"
+        rest = name[len("qwen3.5-4b-sft-gpt-oss-120b_scout_"):]
     elif name.startswith("qwen3.5-4b"):
         model = "qwen3.5-4b"
         rest = name[len("qwen3.5-4b_"):]
@@ -318,6 +341,7 @@ def parse_run_name(name):
         traj_model_patterns = [
             (r"^traj_budget_orig_ext_(.*)", "traj_budget_orig_ext"),
             (r"^traj_orig_ext_(.*)", "traj_orig_ext"),
+            (r"^traj_continue_(.*)", "traj_continue"),
             (r"^traj_summary_orig_ext_selected_tools_(.*)", "traj_summary_orig_ext_selected_tools"),
             (r"^traj_summary_orig_ext_(?!selected_tools)(.*)", "traj_summary_orig_ext"),
             (r"^traj_summary_ext_selected_tools_(.*)", "traj_summary_ext_selected_tools"),

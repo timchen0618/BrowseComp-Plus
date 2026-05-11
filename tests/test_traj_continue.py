@@ -75,3 +75,24 @@ def test_build_continuation_messages_missing_query_id():
     msgs = _build_continuation_messages("Q_UNKNOWN", "What is X?", args, {})
     assert len(msgs) == 1
     assert msgs[0]["role"] == "user"
+
+def test_parse_run_name_traj_continue():
+    from submit_missing import parse_run_name
+    model, mode, seed, traj_model = parse_run_name(
+        "gpt-oss-120b_traj_continue_gpt-oss-120b_seed0"
+    )
+    assert model == "gpt-oss-120b"
+    assert mode == "traj_continue"
+    assert seed == 0
+    assert traj_model == "gpt-oss-120b"
+
+
+def test_parse_run_name_traj_continue_cross_model():
+    from submit_missing import parse_run_name
+    model, mode, seed, traj_model = parse_run_name(
+        "gpt-oss-120b_traj_continue_qwen3.5-4b_seed1"
+    )
+    assert model == "gpt-oss-120b"
+    assert mode == "traj_continue"
+    assert seed == 1
+    assert traj_model == "qwen3.5-4b"
