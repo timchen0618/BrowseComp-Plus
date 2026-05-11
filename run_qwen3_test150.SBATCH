@@ -54,18 +54,24 @@ elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d" ]; th
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d" ]; then
     model_path="Qwen/Qwen3.5-4B"
     lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_d/checkpoint-100"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred" ]; then
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_unfilterred=sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0_unfiltered/checkpoint-50"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_unfilterred" ]; then
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered=sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0_unfiltered/checkpoint-50"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_unfiltered" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-random_selection_unfilterred=sft/checkpoints/bcp-train530-test300/random_selection_seed2_unfiltered/checkpoint-166"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred" ]; then
+    lora_modules="qwen3.5-4b-sft-random_selection_unfiltered=sft/checkpoints/bcp-train530-test300/random_selection_seed2_unfiltered/checkpoint-166"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfilterred=sft/checkpoints/bcp-train530-test300/best_of_8_random_selection_mode_d_unfiltered/checkpoint-107"
-elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred" ]; then
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered=sft/checkpoints/bcp-train530-test300/best_of_8_random_selection_mode_d_unfiltered/checkpoint-107"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered" ]; then
     model_path="Qwen/Qwen3.5-4B"
-    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfilterred=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_d_unfiltered/checkpoint-50"
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_d_unfiltered/checkpoint-50"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_c" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_c=sft/checkpoints/bcp-train530-test300/best_of_8_random_selection_mode_c/checkpoint-166"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_c=sft/checkpoints/bcp-train530-test300/best_of_4_gemini-2.5-pro_selection_mode_c/checkpoint-166"
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
     model_path="openai/gpt-oss-120b"
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
@@ -129,6 +135,9 @@ elif [[ "$base_mode" == "traj_orig_ext" ]]; then
 elif [[ "$base_mode" == "traj_budget_orig_ext" ]]; then
     inner_mode="${base_mode}"
     trigger="traj_orig_ext"
+elif [[ "$base_mode" == "traj_continue" ]]; then
+    inner_mode="${base_mode}"
+    trigger="traj_continue"
 elif [[ "$base_mode" == "traj_summary_orig_ext" ]]; then
     inner_mode="${base_mode}"
     trigger="traj_summary_orig_ext"
@@ -177,6 +186,10 @@ case "$inner_mode" in
     traj_budget_orig_ext)
         output_dir="${OUT_BASE}/traj_budget_orig_ext_${TRAJ_MODEL}_seed${seed}"
         extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/test150/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
+        ;;
+    traj_continue)
+        output_dir="${OUT_BASE}/traj_continue_${TRAJ_MODEL}_seed${seed}"
+        extra_args="--planning-trigger traj_continue --trajectory-dir runs/${dataset}/${RETRIEVER}/test150/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed}"
         ;;
     traj_summary_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"

@@ -2,17 +2,16 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=2:00:00
+#SBATCH --time=4:00:00
 #SBATCH --mem=200GB
-#SBATCH --job-name=gpt-oss-120b_first50_traj_summary_ext_seed0
+#SBATCH --job-name=gpt-oss-120b_train530_seed0
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=hc3337@nyu.edu
-#SBATCH --output=sbatch_outputs/gpt-oss-120b_first50_traj_summary_ext_seed0.out
+#SBATCH --output=sbatch_outputs/gpt-oss-120b_train530_seed0.out
 #SBATCH --account=torch_pr_152_courant
 #SBATCH --constraint="h200"
 #SBATCH --gres=gpu:1
-#SBATCH --comment="preemption=yes;requeue=true"
-
+#SBATCH --array=0-5
 
 SINGULARITY_IMAGE=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY_FILE=/scratch/hc3337/envs/bcp.ext3
@@ -26,17 +25,10 @@ PORT_STR="--model-url http://localhost:${port}/v1"
 PLAN_MODEL="gemini_2.5_pro"
 TRAJ_MODEL="${MODEL_NAME}"
 
-dataset="bcp"   # bcp or frames or musique
-mode="traj_summary_ext"
+dataset="bcp"   # bcp only (train530 split is bcp-specific)
+mode="org"
 seed=0
 SEARCH_BUDGET=5
-
-# Prompt version mapping:
-#   planning      = v1  (planning_prompt_v1.md)
-#   planning_v2   = v2  (planning_prompt_v6.1.md)  [was: new_prompt]
-#   planning_v0.5 = v0.5 (planning_prompt_v7.md)  [was: vanilla_prompt]
-#   planning_v3   = v3  (planning_prompt_v8.md)    [was: v8_prompt]
-#   planning_v4   = v4  (planning_prompt_v9.md)    [was: v9_prompt]
 
 lora_modules=""
 if [ "$MODEL_NAME" == "tongyi" ]; then
@@ -85,11 +77,12 @@ elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
     model_path="openai/gpt-oss-20b"
 else
-    echo "Invalid model name"
+    echo "Invalid retriever name"
     exit 1
 fi
 client_model="${model_path}"
 [ -n "${lora_modules}" ] && client_model="${MODEL_NAME}"
+
 
 if [ "$MODEL_NAME" == "gpt-oss-120b" ] || [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
     singularity exec --nv --overlay ${OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --port ${port} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL}" &
@@ -112,30 +105,17 @@ else
     execution_script="oss_client.py"
 fi
 
-if [ "$dataset" == "frames" ]; then
-    RETRIEVER="Qwen3-Embedding-0.6B"
-    INDEX_PATH="embeddings/qwen3-0.6b/chunks_v5*.pkl"
-    EMBED_MODEL_NAME="Qwen/Qwen3-Embedding-0.6B"
-elif [ "$dataset" == "musique" ]; then
-    RETRIEVER="Qwen3-Embedding-0.6B"
-    INDEX_PATH="embeddings/qwen3-0.6b/chunks_v5*.pkl"
-    EMBED_MODEL_NAME="Qwen/Qwen3-Embedding-0.6B"
-else
-    RETRIEVER="Qwen3-Embedding-8B"
-    INDEX_PATH="indexes/Qwen3-Embedding-8B/corpus.shard*.pkl"
-    EMBED_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
-fi
+RETRIEVER="Qwen3-Embedding-8B"
+INDEX_PATH="indexes/Qwen3-Embedding-8B/corpus.shard*.pkl"
+EMBED_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
 
-OUT_BASE="runs/${dataset}/${RETRIEVER}/first50/${MODEL_NAME}"
+OUT_BASE="runs/${dataset}/${RETRIEVER}/train530/${MODEL_NAME}"
 
 # Strip modifiers, setting flags along the way
 base_mode="${mode%_reinject_every_5}"
 [ "$base_mode" != "$mode" ] && reinject_args="--plan-reinject-every 5" || reinject_args=""
 
-tmp_mode="${base_mode%_revise_every_5}"
-[ "$tmp_mode" != "$base_mode" ] && revise_args="--plan-revise-every 5" || revise_args=""
-base_mode="$tmp_mode"
-
+RANDOM_FILE_SUFFIX=""
 # Strip trigger modifier
 if [[ "$base_mode" == *_traj_ext ]]; then
     inner_mode="${base_mode%_traj_ext}"
@@ -164,6 +144,10 @@ elif [[ "$base_mode" == "traj_summary_orig_ext" ]]; then
 elif [[ "$base_mode" == "traj_summary_orig_ext_selected_tools" ]]; then
     inner_mode="${base_mode}"
     trigger="traj_summary_orig_ext_selected_tools"
+elif [[ "$base_mode" == traj_summary_orig_ext_selected_tools_random_seed* ]]; then
+    inner_mode="${base_mode}"
+    trigger="traj_summary_orig_ext_selected_tools"
+    RANDOM_FILE_SUFFIX="${base_mode#traj_summary_orig_ext_selected_tools}"
 elif [[ "$base_mode" == *_start_ext ]]; then
     inner_mode="${base_mode%_start_ext}"
     trigger="start_ext"
@@ -189,45 +173,49 @@ case "$inner_mode" in
         extra_args="--save-raw-messages"
         ;;
     planning_retrospective)
-        extra_args="--planning-trigger start_ext --planning-file retrospective_plans/${MODEL_NAME}_seed0_gemini_legacy_first50.jsonl"
+        extra_args="--planning-trigger start_ext --planning-file retrospective_plans/${MODEL_NAME}_seed0_gemini_legacy_${SLURM_ARRAY_TASK_ID}.jsonl"
         ;;
     traj_ext)
         output_dir="${OUT_BASE}/traj_ext_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
+        extra_args="--planning-trigger traj_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
         ;;
     traj_orig_ext)
         output_dir="${OUT_BASE}/traj_orig_ext_${TRAJ_MODEL}_seed${seed}"
-	extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
+        extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
         ;;
     traj_budget_orig_ext)
         output_dir="${OUT_BASE}/traj_budget_orig_ext_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
+        extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
         ;;
     traj_continue)
         output_dir="${OUT_BASE}/traj_continue_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_continue --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed}"
+        extra_args="--planning-trigger traj_continue --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed}"
         ;;
     traj_summary_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/first50/selected_tool_calls_first50.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train530/gpt-oss-120b/seed${seed}/selected_tool_calls_train530_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_ext)
         output_dir="${OUT_BASE}/traj_summary_ext_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_orig_ext)
         output_dir="${OUT_BASE}/traj_summary_orig_ext_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/first50/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/train530/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     traj_summary_orig_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/first50/selected_tool_calls_gpt-oss-120b_use_original_messages_first50.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train530/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages_train530_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
+        ;;
+    traj_summary_orig_ext_selected_tools_random_seed*)
+        output_dir="${OUT_BASE}/traj_summary_orig_ext_selected_tools${RANDOM_FILE_SUFFIX}_${TRAJ_MODEL}_seed${seed}"
+        extra_args="--planning-trigger traj_summary_ext --trajectory-summary-file selected_tool_calls/train530/gpt-oss-120b/seed${seed}/selected_tool_calls_gpt-oss-120b_use_original_messages${RANDOM_FILE_SUFFIX}_train530_${SLURM_ARRAY_TASK_ID}.jsonl --query-template QUERY_TEMPLATE_GIVEN_TRAJ_SUMMARY"
         ;;
     planning_v*)
         if [ "$trigger" = "start_ext" ]; then
             reinject_suffix="${mode##*_start_ext}"   # "" or "_reinject_every_5"
             output_dir="${OUT_BASE}/${inner_mode}_start_ext_${PLAN_MODEL}${reinject_suffix}_seed${seed}"
-            extra_args="--planning-trigger start_ext --planning-file output_plans/${PLAN_MODEL}/${dataset}/${PLAN_MODEL}_plans_${version}_first50.jsonl"
+            extra_args="--planning-trigger start_ext --planning-file output_plans/${PLAN_MODEL}/${dataset}/${PLAN_MODEL}_plans_${version}_train530_${SLURM_ARRAY_TASK_ID}.jsonl"
         else
             extra_args="--planning-trigger ${trigger} --plan-prompt-file prompts/planning_prompt_${version}.md"
         fi
@@ -251,4 +239,4 @@ fi
 echo "Executing script: ${execution_script} | mode: ${mode} | output: ${output_dir}"
 echo "version: ${version} | trigger: ${trigger} | inner_mode: ${inner_mode}"
 echo "extra_args: ${extra_args}"
-singularity exec --nv --overlay ${OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} CUDA_LAUNCH_BLOCKING=1 python search_agent/${execution_script} --output-dir ${output_dir} --searcher-type faiss --index-path '${INDEX_PATH}' --model-name ${EMBED_MODEL_NAME} --normalize --num-threads 10 --query topics-qrels/${dataset}/queries_first50.tsv --model ${client_model} ${PORT_STR} ${extra_args} ${reinject_args} ${revise_args}"
+singularity exec --nv --overlay ${OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} CUDA_LAUNCH_BLOCKING=1 python search_agent/${execution_script} --output-dir ${output_dir} --searcher-type faiss --index-path '${INDEX_PATH}' --model-name ${EMBED_MODEL_NAME} --normalize --num-threads 10 --query topics-qrels/${dataset}/bcp_train530_6_shards/q_${SLURM_ARRAY_TASK_ID}.tsv --model ${client_model} ${PORT_STR} ${extra_args} ${reinject_args}"
