@@ -142,17 +142,17 @@
 
 | Condition | Acc | Recall | # calls |
 | :---- | ----: | ----: | ----: |
-| Baseline | 40.00 | 52.26 | — |
-| + full trajectory (`traj_orig_ext`) | 40.00 | 19.47 | — |
-| **+ trajectory summary (`traj_summary_orig_ext`)** | **46.33** | 48.89 | — |
-| + Gemini-2.5-pro selected k=5 tool calls | 48.33 | 27.78 | — |
-| + random k=5 tool calls (selection seed=42) | 46.67 | 35.91 | — |
-| + random k=5 tool calls (selection seed=43) | 46.33 | 33.17 | — |
-| + random k=5 tool calls (selection seed=44) | 47.67 | 34.58 | — |
-| + random k=5 tool calls (selection seed=45) | 47.00 | 33.30 | — |
+| Baseline | 40.00 | 52.26 | 22.10 |
+| + full trajectory (`traj_orig_ext`) | 40.00 | 19.47 | 4.96 |
+| **+ trajectory summary (`traj_summary_orig_ext`)** | **46.33** | 48.89 | 13.54 |
+| + Gemini-2.5-pro selected k=5 tool calls | 48.33 | 27.78 | 9.29 |
+| + random k=5 tool calls (selection seed=42) | 46.67 | 35.91 | 10.08 |
+| + random k=5 tool calls (selection seed=43) | 46.33 | 33.17 | 10.89 |
+| + random k=5 tool calls (selection seed=44) | 47.67 | 34.58 | 10.90 |
+| + random k=5 tool calls (selection seed=45) | 47.00 | 33.30 | 10.40 |
 | **+ random k=5 tool calls (best of 4)** | **57.67** † | — | — |
-| + budget-5 round-1 (no extras, just truncate to 5 calls) | 28.67 | 33.71 | — |
-| + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 37.33 | 26.41 | — |
+| + budget-5 round-1 (no extras, just truncate to 5 calls) | 28.67 | 33.71 | 6.53 |
+| + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 37.33 | 26.41 | 9.03 |
 
 † best-of-4 lift over best single seed: +10.00pp (143/300 → 173/300). Per-seed unique solves: 6/6/9/5.
 
