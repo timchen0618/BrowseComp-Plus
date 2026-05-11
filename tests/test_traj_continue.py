@@ -96,3 +96,40 @@ def test_parse_run_name_traj_continue_cross_model():
     assert mode == "traj_continue"
     assert seed == 1
     assert traj_model == "qwen3.5-4b"
+
+
+def test_resolve_run_subdir_traj_continue():
+    from auto_pipeline import _resolve_run_subdir, Target
+    t = Target(
+        run_name="gpt-oss-120b_traj_continue_gpt-oss-120b_seed0",
+        dataset="bcp",
+        split="test150",
+        template_path="run_qwen3_test150.SBATCH",
+        declared_shards=list(range(3)),
+        model="gpt-oss-120b",
+        mode="traj_continue",
+        seed=0,
+        traj_model="gpt-oss-120b",
+    )
+    result = _resolve_run_subdir(t)
+    assert result == "traj_continue_gpt-oss-120b_seed0"
+
+
+def test_upstream_traj_dir_traj_continue():
+    from auto_pipeline import _upstream_traj_dir, Target
+    t = Target(
+        run_name="gpt-oss-120b_traj_continue_gpt-oss-120b_seed0",
+        dataset="bcp",
+        split="test150",
+        template_path="run_qwen3_test150.SBATCH",
+        declared_shards=list(range(3)),
+        model="gpt-oss-120b",
+        mode="traj_continue",
+        seed=0,
+        traj_model="gpt-oss-120b",
+    )
+    result = _upstream_traj_dir(t)
+    assert result is not None
+    assert "budget" in str(result)
+    assert "seed0" in str(result)
+    assert "gpt-oss-120b" in str(result)

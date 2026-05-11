@@ -180,6 +180,7 @@ def _resolve_run_subdir(target: Target) -> str:
         "traj_ext",
         "traj_orig_ext",
         "traj_budget_orig_ext",
+        "traj_continue",
         "traj_summary_ext",
         "traj_summary_orig_ext",
         "traj_summary_ext_selected_tools",
@@ -255,6 +256,7 @@ _ORIG_MESSAGES_MODES = {
     "traj_orig_ext",
     "traj_budget_orig_ext",
     "traj_summary_orig_ext",
+    "traj_continue",
 }
 
 
@@ -262,7 +264,7 @@ def _upstream_traj_dir(target: Target, retriever: str = "Qwen3-Embedding-8B") ->
     """Return the upstream trajectory dir a traj_*_orig_ext target reads from."""
     if target.mode not in _ORIG_MESSAGES_MODES or not target.traj_model:
         return None
-    if target.mode == "traj_budget_orig_ext":
+    if target.mode in {"traj_budget_orig_ext", "traj_continue"}:
         # Read SEARCH_BUDGET from the template (default 5).
         search_budget = "5"
         try:
