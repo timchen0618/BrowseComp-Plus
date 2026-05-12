@@ -584,15 +584,24 @@ def _process_tsv_dataset(
         }
 
         try:
-            effective_max_iter = args.search_budget if args.search_budget is not None else args.max_iterations
-            messages, tool_usage, status = run_conversation_with_tools(
-                client,
-                initial_request,
-                tool_handler,
-                effective_max_iter,
-                args.verbose,
-                budget_mode=(args.search_budget is not None),
-            )
+            src_status = trajectories_by_id.get(qid, {}).get("status") if args.planning_trigger == "traj_continue" else None
+            if src_status == "completed":
+                # Source already has a final answer — pass through without an API call.
+                messages = input_messages
+                tool_usage = _count_tool_calls_from_messages(input_messages)
+                status = "completed"
+                if args.verbose:
+                    print(f"[{qid}] traj_continue passthrough: source already complete", flush=True)
+            else:
+                effective_max_iter = args.search_budget if args.search_budget is not None else args.max_iterations
+                messages, tool_usage, status = run_conversation_with_tools(
+                    client,
+                    initial_request,
+                    tool_handler,
+                    effective_max_iter,
+                    args.verbose,
+                    budget_mode=(args.search_budget is not None),
+                )
 
             if status == "completed":
                 with completed_lock:
