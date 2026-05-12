@@ -195,12 +195,12 @@ case "$inner_mode" in
         extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/seed$((seed + 4)) --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
         ;;
     traj_budget_orig_ext)
-        output_dir="${OUT_BASE}/traj_budget_orig_ext_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
+        output_dir="${OUT_BASE}/traj_budget_orig_ext_main_agent_${TRAJ_MODEL}_seed${seed}"
+        extra_args="--planning-trigger traj_orig_ext --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_main_agent_seed${seed} --query-template QUERY_TEMPLATE_GIVEN_TRAJECTORY"
         ;;
     traj_continue)
-        output_dir="${OUT_BASE}/traj_continue_${TRAJ_MODEL}_seed${seed}"
-        extra_args="--planning-trigger traj_continue --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_seed${seed}"
+        output_dir="${OUT_BASE}/traj_continue_main_agent_${TRAJ_MODEL}_seed${seed}"
+        extra_args="--planning-trigger traj_continue --trajectory-dir runs/${dataset}/${RETRIEVER}/full/${TRAJ_MODEL}/budget${SEARCH_BUDGET}_main_agent_seed${seed}"
         ;;
     traj_summary_ext_selected_tools)
         output_dir="${OUT_BASE}/traj_summary_ext_selected_tools_${TRAJ_MODEL}_seed${seed}"

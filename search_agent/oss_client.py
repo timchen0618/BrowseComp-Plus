@@ -366,6 +366,15 @@ def _build_continuation_messages(
     return continuation
 
 
+def _count_tool_calls_from_messages(messages: list) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    for m in messages:
+        if isinstance(m, dict) and m.get("type") == "function_call":
+            name = m.get("name", "unknown")
+            usage[name] = usage.get(name, 0) + 1
+    return usage
+
+
 # --- Persist run output ------------------------------------------------------
 
 def _persist_response(
