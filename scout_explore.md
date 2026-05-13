@@ -239,6 +239,41 @@ The +5.3pp gain from `traj_summary_orig_ext` reproduces (test150 was +7.3 — bo
 
 *Caveats:* FRAMES Recall is **article-level** (did the agent retrieve ≥1 passage from each of the relevant Wikipedia articles for that query) — computed post-hoc in `scripts/compute_frames_recall.py` from each query's `wiki_links` field in the GT, joined to the BGE-M3 corpus row IDs. After fixing URL canonicalization (GT uses `_` for spaces, url_map uses `%20`), **88.5% of GT URLs match (2209/2496) and 149/150 test150 qids have qrel evidence** — recall is now reported on essentially the full slice. GLM context_limit rate on FRAMES: 7% (baseline) / 11% (traj_orig) / 3% (traj_summary). GLM traj_orig was evaluated on N=143 (7 qids errored before producing output: 26, 74, 78, 99, 127, 129, 132).
 
+### FRAMES test300 (n=300) — GLM-4.7-Flash + MiniMax-M2.5
+
+Same 300-qid sample as BCP test300, replicating the 7-condition ablation sweep on FRAMES to test cross-dataset transfer.
+
+**Model: GLM-4.7-Flash (30B)**
+
+| Condition | Acc | Δ vs base | Recall | # calls |
+| :---- | ----: | ----: | ----: | ----: |
+| Baseline (`seed0`) | 50.00 | — | 12.39 | 31.68 |
+| + full trajectory (`traj_orig_ext`, N=291) | 51.89 | +1.89 | 2.23 | 5.93 |
+| **+ trajectory summary (`traj_summary_orig_ext`)** | **53.00** | **+3.00** | 8.25 | 13.95 |
+| + random k=5 tool calls (seed=42) | 52.67 | +2.67 | 4.94 | 14.98 |
+| + budget-5 round-1 | 42.00 | -8.00 | 7.72 | 4.90 |
+| + self-prompted explorer (round-2) | 45.67 | -4.33 | 3.28 | 9.75 |
+| + Qwen3.5-4B explorer (round-2) | 45.00 | -5.00 | 4.52 | 9.52 |
+
+**Model: MiniMax-M2.5 (229B)**
+
+| Condition | Acc | Δ vs base | Recall | # calls |
+| :---- | ----: | ----: | ----: | ----: |
+| Baseline (`seed0`) | 62.00 | — | 14.03 | 26.45 |
+| **+ full trajectory (`traj_orig_ext`, N=248)** | **72.58** | **+10.58** | 0.73 | 0.50 |
+| + trajectory summary (`traj_summary_orig_ext`) | 65.33 | +3.33 | 10.30 | 11.75 |
+| + random k=5 tool calls (seed=42) | 64.33 | +2.33 | 8.86 | 14.11 |
+| + budget-5 round-1 | 48.67 | -13.33 | 7.35 | 4.90 |
+| + self-prompted explorer (round-2) | 58.33 | -3.67 | 5.46 | 8.29 |
+| + Qwen3.5-4B explorer (round-2) | 54.67 | -7.33 | 3.99 | 6.39 |
+
+**Cross-dataset observations:**
+
+- **Summary prepend continues to win for GLM** (+3.0pp) but the magnitude is smaller on FRAMES than BCP (+6.3pp test300, +5.3pp test150). For MiniMax, `traj_summary` is +3.3pp — also smaller than BCP MiniMax test300 (+5.3pp).
+- **MiniMax flips: `traj_orig_ext` is the best condition** (+10.6pp), unlike BCP where summary wins. With recall collapsed to ~0.7% and ~0.5 new calls, MiniMax is answering almost entirely from the prepended trajectory — the FRAMES baseline's 14% recall is so low that prepending the agent's own trace becomes net informative rather than noise.
+- **Explorer prepends underperform** on both models across both datasets — self-prompted and Qwen3.5-4B explorer trajectories hurt accuracy by 4-7pp. The shorter, lower-quality "explorer" trace doesn't carry enough signal to compensate for the context overhead.
+- **Budget-5 round-1 alone is uniformly worst** (-8 to -13pp): truncating to 5 calls removes the agent's main lever.
+
 ---
 
 ## Key Observations
