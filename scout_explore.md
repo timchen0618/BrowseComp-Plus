@@ -153,6 +153,7 @@
 | **+ random k=5 tool calls (best of 4)** | **57.67** † | — | — |
 | + budget-5 round-1 (no extras, just truncate to 5 calls) | 28.67 | 33.71 | 6.53 |
 | + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 37.33 | 26.41 | 9.03 |
+| + Qwen3.5-4B explorer (round-2 prepends qwen3.5-4b round-1 trajectory) | 38.67 | 27.87 | 9.11 |
 
 † best-of-4 lift over best single seed: +10.00pp (143/300 → 173/300). Per-seed unique solves: 6/6/9/5.
 
@@ -184,6 +185,7 @@ The +8pp gain from `traj_summary_orig_ext` reproduces (test150 was statistically
 | **+ random k=5 tool calls (best of 4)** | **69.13** † | — | — |
 | + budget-5 round-1 (no extras, just truncate to 5 calls) | 36.00 | 33.12 | 4.97 |
 | + self-prompted explorer (round-2 prepends round-1 budget=5 trajectory) | 50.00 | 32.46 | 7.57 |
+| + Qwen3.5-4B explorer (round-2 prepends qwen3.5-4b round-1 trajectory) | 44.33 | 27.42 | 6.76 |
 
 † best-of-4 lift over best single seed: +17.45pp (154/298 → 206/298). Per-seed unique solves: 13/11/7/5. Computed on intersection of 298 qids common to all 4 seeds (random44, random45 each missing 1 qid that persistently failed across runs).
 ‡ random44, random45 have N=299 (1 qid persistently failed; below noise floor).
@@ -198,6 +200,7 @@ The +8pp gain from `traj_summary_orig_ext` reproduces (test150 was statistically
 | random k=5 best-of-4 | (71.3) | (69.13) |
 | budget-5 round-1 | — | -10.33 |
 | self_explorer (round-2) | — | +3.67 |
+| qwen3.5-4b explorer (round-2) | — | -2.00 |
 
 The +5.3pp gain from `traj_summary_orig_ext` reproduces (test150 was +7.3 — both within noise of each other and statistically meaningful). **Best-of-4 hits 69.13%** on test300 (vs 71.3% on test150, well within consistency range), reaffirming MiniMax's strong ceiling under random-tool-call extension. Random k=5 deltas flip from negative on test150 to **+5.67pp positive** on test300 — same pattern as GLM, suggesting test150's negatives were noise.
 
