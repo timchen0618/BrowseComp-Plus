@@ -57,6 +57,23 @@ Rules:
 - Use only indices from the provided catalog; do not invent indices.
 """
 
+SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC = """You are helping curate training or analysis data from web-search agent trajectories.
+
+Your task: choose exactly {k} tool-call steps (by step index) that are the most *useful* for understanding how the agent made good retrieval decisions. Tool calls include both search queries and full-document fetches (get_document). Prefer:
+- Steps that pivot strategy or refine queries after weak results
+- Steps that retrieve clearly relevant evidence for the user question
+- Steps that fetch a full document (get_document) when the agent identified a promising result worth reading in detail
+- Diversity across the episode (early/middle/late), not redundant near-duplicates
+
+Respond with a single JSON object only (no markdown fences), with this exact shape:
+{{"selected_indices": [<int>, ...], "rationale": "<short explanation>"}}
+
+Rules:
+- "selected_indices" must list exactly {k} distinct integers, each a valid candidate index from the catalog.
+- Indices must appear in ascending trajectory order in your array.
+- Use only indices from the provided catalog; do not invent indices.
+"""
+
 
 # ---------------------------------------------------------------------------
 # File I/O
@@ -427,6 +444,7 @@ def run_one_om(
     build_excerpt_fn: Callable[[dict, Sequence[int]], str],
     format_context_fn: Optional[Callable[..., str]] = None,
     require_original_messages: bool = True,
+    system_prompt_template: str = SYSTEM_PROMPT_TEMPLATE,
 ) -> dict:
     """Load one trajectory, select k tool calls via Gemini, return result dict.
 
