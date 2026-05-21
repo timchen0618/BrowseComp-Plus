@@ -28,6 +28,7 @@ from pathlib import Path
 
 
 import aiohttp
+import wandb
 import yaml
 
 # Project root on sys.path so we can import searcher/
@@ -35,7 +36,7 @@ _ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from rl.trl.buffer import append_sample, check_and_clear_flag
-from rl.trl.reward import call_main_agent, call_judge
+from rl.trl.reward import call_main_agent, score_answer
 from rl.trl.rollout_worker import generate_trajectory
 
 
@@ -193,6 +194,40 @@ async def _rollout_iteration(
 
 
 # ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+_SEP = "─" * 72
+
+def _print_example_trajectory(traj: dict, answer: str, reward: int, iteration: int) -> None:
+    """Pretty-print one explorer trajectory so the rollout quality is visible."""
+    msgs = traj["messages"]
+    n_searches = sum(
+        1 for m in msgs
+        if m["role"] == "user" and "<tool_response>" in m.get("content", "")
+    )
+    print(f"\n{_SEP}", flush=True)
+    print(
+        f"[daemon] EXAMPLE TRAJECTORY  iter={iteration}  "
+        f"qid={traj['query_id']}  searches={n_searches}  "
+        f"terminated={traj['terminated']}  reward={reward}",
+        flush=True,
+    )
+    print(f"  QUERY: {traj['query']}", flush=True)
+    for msg in msgs:
+        role = msg.get("role", "?")
+        if role == "system":
+            continue
+        content = msg.get("content", "")
+        preview = content[:300].replace("\n", " ")
+        if len(content) > 300:
+            preview += " …"
+        print(f"  [{role.upper()}] {preview}", flush=True)
+    print(f"  → ANSWER: {answer!r}", flush=True)
+    print(_SEP, flush=True)
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -211,6 +246,16 @@ def main() -> None:
     # Resolve paths relative to project root
     for key in ("index_path", "train_queries", "ground_truth", "buffer_dir", "ckpt_flag"):
         cfg[key] = str(_ROOT / cfg[key])
+
+    if cfg.get("wandb_project"):
+        wandb.init(
+            project=cfg["wandb_project"],
+            name=(cfg["wandb_run_name"] + "_rollout") if cfg.get("wandb_run_name") else None,
+            group=cfg.get("wandb_run_name"),
+            job_type="rollout",
+            config=cfg,
+        )
+        print(f"[daemon] wandb run: {wandb.run.url}", flush=True)
 
     # Initialise FAISS searcher
     from searcher.searchers.faiss_searcher import FaissSearcher
@@ -318,27 +363,30 @@ def main() -> None:
 
             groups, flat_trajs, answers = asyncio.run(_gen_and_main())
 
-            # Swap GPU to judge
-            print(f"[daemon] swapping GPU {gpu_id} to judge mode ...", flush=True)
-            kill_server(explorer_proc)
-            judge_quant = cfg.get("judge_quantization")
-            judge_extra = ["--quantization", judge_quant] if judge_quant else None
-            judge_proc = start_vllm_server(
-                cfg["judge_model"],
-                cfg["rollout_port"],
-                gpu_id,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                extra_args=judge_extra,
-            )
-            wait_for_server(cfg["rollout_port"])
-            print("[daemon] judge server ready", flush=True)
-
             # Score answers
             print(f"[daemon] iter={iteration}: scoring {len(flat_trajs)} answers ...", flush=True)
+            use_llm_judge = cfg.get("reward_function", "llm_judge") == "llm_judge"
+
+            if use_llm_judge:
+                # Swap GPU to judge model
+                print(f"[daemon] swapping GPU {gpu_id} to judge mode ...", flush=True)
+                kill_server(explorer_proc)
+                judge_quant = cfg.get("judge_quantization")
+                judge_extra = ["--quantization", judge_quant] if judge_quant else None
+                judge_proc = start_vllm_server(
+                    cfg["judge_model"],
+                    cfg["rollout_port"],
+                    gpu_id,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                    extra_args=judge_extra,
+                )
+                wait_for_server(cfg["rollout_port"])
+                print("[daemon] judge server ready", flush=True)
+
             async def _score():
                 async with aiohttp.ClientSession() as session:
                     return await asyncio.gather(*[
-                        call_judge(
+                        score_answer(
                             t["query"],
                             ans,
                             ground_truth.get(str(t["query_id"]), ""),
@@ -350,15 +398,16 @@ def main() -> None:
 
             rewards = asyncio.run(_score())
 
-            # Swap GPU back to explorer
-            print(f"[daemon] swapping GPU {gpu_id} back to explorer ...", flush=True)
-            kill_server(judge_proc)
-            judge_proc = None
-            explorer_proc = start_vllm_server(
-                cfg["explorer_model"], cfg["rollout_port"], gpu_id,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-            )
-            wait_for_server(cfg["rollout_port"])
+            if use_llm_judge:
+                # Swap GPU back to explorer
+                print(f"[daemon] swapping GPU {gpu_id} back to explorer ...", flush=True)
+                kill_server(judge_proc)
+                judge_proc = None
+                explorer_proc = start_vllm_server(
+                    cfg["explorer_model"], cfg["rollout_port"], gpu_id,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                )
+                wait_for_server(cfg["rollout_port"])
 
             # Push to buffer
             for traj, answer, reward in zip(flat_trajs, answers, rewards):
@@ -372,11 +421,32 @@ def main() -> None:
                 })
 
             n_correct = sum(rewards)
+            pct_correct = 100.0 * n_correct / len(flat_trajs) if flat_trajs else 0.0
+            avg_searches = sum(
+                sum(1 for m in t["messages"] if m["role"] == "user" and "<tool_response>" in m.get("content", ""))
+                for t in flat_trajs
+            ) / len(flat_trajs) if flat_trajs else 0.0
+            pct_terminated = 100.0 * sum(t["terminated"] for t in flat_trajs) / len(flat_trajs) if flat_trajs else 0.0
+
             print(
                 f"[daemon] iter={iteration}: pushed {len(flat_trajs)} samples "
-                f"({n_correct}/{len(flat_trajs)} correct)",
+                f"({n_correct}/{len(flat_trajs)} correct, {pct_correct:.1f}%)",
                 flush=True,
             )
+
+            # Periodic example trajectory
+            log_example_every = cfg.get("log_example_every", 10)
+            if flat_trajs and iteration % log_example_every == 0:
+                _print_example_trajectory(flat_trajs[0], answers[0], rewards[0], iteration)
+
+            if cfg.get("wandb_project"):
+                wandb.log({
+                    "rollout/pct_correct": pct_correct,
+                    "rollout/n_correct": n_correct,
+                    "rollout/avg_searches": avg_searches,
+                    "rollout/pct_terminated": pct_terminated,
+                }, step=iteration)
+
             iteration += 1
             if args.max_iterations is not None and iteration >= args.max_iterations:
                 print(

@@ -28,12 +28,25 @@ max_steps: 500
 checkpoint_every: 20      # learner steps between weight-sync checkpoints
 min_buffer_size: 64       # learner blocks until buffer holds this many samples
 
+# === Reward function ===
+# 'llm_judge' — Qwen3-32B judge on GPU 3 (time-muxed with explorer)
+# 'sub_em'    — substring exact match; no judge server needed, saves GPU memory
+reward_function: llm_judge
+
 # === Rollout settings ===
-max_turns: 15             # max search turns per trajectory
+max_turns: 15             # max LLM calls per explorer trajectory
+main_agent_max_turns: 10  # max LLM calls for main agent (usually 1-2 with trajectory context)
 max_new_tokens: 2048      # max tokens per LLM call
 temperature: 0.6
 top_p: 0.95
 k: 5                      # search results returned per query
+snippet_max_chars: 2000   # truncate each search result text to this many chars (~500 tokens)
+max_input_chars: 80000    # stop explorer early if accumulated context exceeds this (~20K tokens)
+
+# === Logging ===
+wandb_project: browsecomp-rl
+wandb_run_name: grpo_run1
+log_example_every: 10     # print one example trajectory every N daemon iterations
 
 # === Buffer / checkpoint paths ===
 buffer_dir: rl/trl/tmp/rl_buffer

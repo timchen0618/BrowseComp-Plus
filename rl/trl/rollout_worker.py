@@ -75,7 +75,13 @@ async def generate_trajectory(
     ]
     terminated = False
 
+    max_input_chars = cfg.get("max_input_chars", 80000)
+    snippet_max_chars = cfg.get("snippet_max_chars", 2000)
+
     for _ in range(max_turns):
+        if _estimate_chars(messages) > max_input_chars:
+            break
+
         content = await _call_vllm(
             session, port, model, messages,
             max_new_tokens=max_new_tokens,
@@ -98,7 +104,7 @@ async def generate_trajectory(
 
         if "<tool_call>" in content and "</tool_call>" in content:
             raw = content.split("<tool_call>")[1].split("</tool_call>")[0]
-            tool_response = _execute_search(raw, searcher, k)
+            tool_response = _execute_search(raw, searcher, k, snippet_max_chars)
             messages.append({"role": "user", "content": tool_response})
 
     return {
@@ -129,16 +135,23 @@ async def generate_group(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _execute_search(raw_tool_call: str, searcher, k: int) -> str:
+def _execute_search(raw_tool_call: str, searcher, k: int, snippet_max_chars: int = 2000) -> str:
     """Parse a <tool_call> JSON blob, run the search, return <tool_response>."""
     try:
         call = json5.loads(raw_tool_call)
         search_query = call.get("arguments", {}).get("query", "")
         results = searcher.search(search_query, k)
+        for r in results:
+            if "text" in r and len(r["text"]) > snippet_max_chars:
+                r["text"] = r["text"][:snippet_max_chars] + " …"
         body = json.dumps(results, ensure_ascii=False, indent=2)
     except Exception as exc:
         body = f"Error executing search: {exc}"
     return f"<tool_response>\n{body}\n</tool_response>"
+
+
+def _estimate_chars(messages: list[dict]) -> int:
+    return sum(len(msg.get("content", "")) for msg in messages)
 
 
 def extract_answer(messages: list[dict]) -> str:

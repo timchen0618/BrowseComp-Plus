@@ -3,8 +3,9 @@ Reward functions for the GRPO training loop.
 
 call_main_agent():
   Formats the explorer trajectory with QUERY_TEMPLATE_GIVEN_TRAJECTORY, then
-  runs a full tool-calling loop with GPT-OSS-120B on GPU 2 (port 8010) until
-  it emits "Exact Answer:" or exhausts max_turns.  Returns the final answer.
+  runs a full tool-calling loop with GPT-OSS-120B on GPU 2 (port 8010) via the
+  OpenAI Responses API (same as oss_client.py) until the model emits a final
+  text message or exhausts max_turns.  Returns the extracted "Exact Answer".
 
 call_judge():
   Sends (question, response, correct_answer) to Qwen3-32B on GPU 3 (port 8011,
@@ -15,8 +16,10 @@ call_judge():
 import asyncio
 import json
 import re
+import string
 
 import aiohttp
+import openai
 
 
 # ---------------------------------------------------------------------------
@@ -59,25 +62,23 @@ correct: Answer 'yes' if extracted_final_answer matches the [correct_answer] giv
 
 confidence: The extracted confidence score between 0|%| and 100|%| from [response]. Put 100 if there is no confidence score available.""".strip()
 
-# OpenAI-style function definition for the main agent's search tool
+# Responses API tool definition (matches oss_client.py SearchToolHandler.get_tool_definitions)
 _SEARCH_TOOL_DEF = {
     "type": "function",
-    "function": {
-        "name": "local_knowledge_base_retrieval",
-        "description": (
-            "Search the local knowledge base for documents relevant to a query."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "user_query": {
-                    "type": "string",
-                    "description": "Query to search the knowledge base.",
-                }
-            },
-            "required": ["user_query"],
+    "name": "local_knowledge_base_retrieval",
+    "description": "Search the local knowledge base for documents relevant to a query.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "user_query": {
+                "type": "string",
+                "description": "Query to search the knowledge base.",
+            }
         },
+        "required": ["user_query"],
+        "additionalProperties": False,
     },
+    "strict": True,
 }
 
 
@@ -96,12 +97,15 @@ async def call_main_agent(
     """
     Run GPT-OSS-120B with the explorer trajectory as context.
 
-    Returns the extracted "Exact Answer" string, or the last response if the
-    format is not found.
+    Uses the OpenAI Responses API, mirroring run_conversation_with_tools in
+    oss_client.py.  The loop continues until the model emits a final text
+    message (no pending tool calls) or max_turns is exhausted.
+
+    Returns the extracted "Exact Answer" string, or "" on failure.
     """
     port = cfg["main_agent_port"]
     model = cfg["main_agent_model"]
-    max_turns = cfg.get("max_turns", 50)
+    max_iterations = cfg.get("main_agent_max_turns", cfg.get("max_turns", 10))
     max_new_tokens = cfg.get("max_new_tokens", 2048)
     k = cfg.get("k", 5)
 
@@ -112,44 +116,75 @@ async def call_main_agent(
     )
 
     messages: list[dict] = [{"role": "user", "content": user_content}]
-    tools = [_SEARCH_TOOL_DEF] if searcher is not None else None
+    tools = [_SEARCH_TOOL_DEF] if searcher is not None else []
 
-    for _ in range(max_turns):
-        content, tool_calls = await _chat_completions(
-            session, port, model, messages, tools, max_new_tokens
-        )
-        if not content and not tool_calls:
-            break
+    aclient = openai.AsyncOpenAI(
+        base_url=f"http://127.0.0.1:{port}/v1",
+        api_key="EMPTY",
+    )
 
-        assistant_msg: dict = {"role": "assistant"}
-        if content:
-            assistant_msg["content"] = content
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
-        messages.append(assistant_msg)
+    request = {
+        "model": model,
+        "max_output_tokens": max_new_tokens,
+        "tools": tools,
+        "truncation": "auto",
+    }
 
-        # Check for final answer
-        if content and "Exact Answer:" in content:
-            return _extract_exact_answer(content)
+    iteration = 1
+    while iteration <= max_iterations:
+        try:
+            response = await aclient.responses.create(input=messages, **request)
+        except Exception as exc:
+            print(f"[reward] main_agent call failed (iter {iteration}): {exc}")
+            iteration += 1
+            continue
 
-        # Execute tool calls if searcher is available
-        if tool_calls and searcher is not None:
-            for tc in tool_calls:
-                fn_args = tc.get("function", {}).get("arguments", "{}")
-                try:
-                    args = json.loads(fn_args)
-                    results = searcher.search(args.get("user_query", ""), k)
-                    result_text = json.dumps(results, ensure_ascii=False, indent=2)
-                except Exception as exc:
-                    result_text = f"Search error: {exc}"
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": result_text,
-                })
-        elif not tool_calls:
-            # No tool calls and no "Exact Answer:" — return whatever we have
-            return content or ""
+        output = response.model_dump(mode="python")["output"]
+        messages.extend(output)
+
+        # Pure reasoning turn — don't count against iteration budget
+        if output and output[-1]["type"] == "reasoning":
+            messages.pop()
+            continue
+
+        if not output:
+            iteration += 1
+            continue
+
+        function_calls = [item for item in output if item["type"] == "function_call"]
+        last_item = output[-1]
+
+        # Done: no tool calls, or model emitted a final text message
+        if (not function_calls) or (
+            "content" in last_item
+            and last_item["content"][0]["type"] == "output_text"
+        ):
+            for item in reversed(output):
+                if item.get("type") == "message":
+                    for part in item.get("content", []):
+                        if part.get("type") == "output_text":
+                            return _extract_exact_answer(part["text"])
+            return ""
+
+        # Execute tool calls and append results
+        snippet_max_chars = cfg.get("snippet_max_chars", 2000)
+        for tc in function_calls:
+            try:
+                args = json.loads(tc["arguments"])
+                results = searcher.search(args.get("user_query", ""), k)
+                for r in results:
+                    if "text" in r and len(r["text"]) > snippet_max_chars:
+                        r["text"] = r["text"][:snippet_max_chars] + " …"
+                result_text = json.dumps(results, ensure_ascii=False, indent=2)
+            except Exception as exc:
+                result_text = f"Search error: {exc}"
+            messages.append({
+                "type": "function_call_output",
+                "call_id": tc["call_id"],
+                "output": result_text,
+            })
+
+        iteration += 1
 
     return ""
 
@@ -201,6 +236,43 @@ async def call_judge(
 
 
 # ---------------------------------------------------------------------------
+# Reward dispatch
+# ---------------------------------------------------------------------------
+
+async def score_answer(
+    query: str,
+    answer: str,
+    ground_truth: str,
+    cfg: dict,
+    session: aiohttp.ClientSession,
+) -> int:
+    """Dispatch to the reward function named by cfg['reward_function'].
+
+    'llm_judge' — Qwen3-32B LLM judge (requires judge server to be running).
+    'sub_em'    — substring exact match: reward=1 if normalized ground truth
+                  is contained in the normalized answer.
+    """
+    mode = cfg.get("reward_function", "llm_judge")
+    if mode == "sub_em":
+        return sub_em_reward(answer, ground_truth)
+    return await call_judge(query, answer, ground_truth, cfg, session)
+
+
+def normalize_text(text: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace."""
+    text = text.lower()
+    text = text.translate(str.maketrans("", "", string.punctuation))
+    return " ".join(text.split())
+
+
+def sub_em_reward(answer: str, ground_truth: str) -> int:
+    """Return 1 if normalized ground_truth is a substring of normalized answer."""
+    if not ground_truth:
+        return 0
+    return 1 if normalize_text(ground_truth) in normalize_text(answer) else 0
+
+
+# ---------------------------------------------------------------------------
 # Parsing helpers (public so tests can exercise them independently)
 # ---------------------------------------------------------------------------
 
@@ -235,41 +307,3 @@ def _format_traj_for_main_agent(messages: list[dict]) -> str:
     return "\n\n---\n\n".join(lines)
 
 
-async def _chat_completions(
-    session: aiohttp.ClientSession,
-    port: int,
-    model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
-    max_new_tokens: int = 2048,
-    max_retries: int = 5,
-) -> tuple[str, list[dict]]:
-    """Call /v1/chat/completions; return (content, tool_calls)."""
-    url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    payload: dict = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_new_tokens,
-        "temperature": 0.7,
-    }
-    if tools:
-        payload["tools"] = tools
-
-    for attempt in range(max_retries):
-        try:
-            async with session.post(
-                url, json=payload,
-                timeout=aiohttp.ClientTimeout(total=1200),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                choice = data["choices"][0]["message"]
-                content = choice.get("content") or ""
-                tool_calls = choice.get("tool_calls") or []
-                return content, tool_calls
-        except Exception as exc:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
-            else:
-                print(f"[reward] main_agent call failed: {exc}")
-    return "", []

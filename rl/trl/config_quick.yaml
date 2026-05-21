@@ -1,0 +1,58 @@
+# Quick-trial config — real Qwen3.5-4B explorer, sub_em reward, ~1-2 hours.
+#
+# Key choices vs production:
+#   - reward_function: sub_em       no judge server, no GPU swap per iter
+#   - main_agent_model: Qwen3-4B    small enough to fit on one GPU, still coherent
+#   - batch_queries: 8, group_size: 4  -> 32 samples/iter (stable GRPO, not too slow)
+#   - max_turns: 8                  shorter trajectories, faster rollouts
+#   - max_steps: 100                enough to see loss trend
+#   - min_buffer_size: 32           learner unblocks after one daemon iter
+
+# === Paths ===
+sft_checkpoint: sft/checkpoints/PLACEHOLDER
+index_path: "indexes/Qwen3-Embedding-8B/*"
+index_model_name: Qwen/Qwen3-Embedding-8B
+train_queries: topics-qrels/bcp/queries_train680.tsv
+ground_truth: data/browsecomp_plus_decrypted_train680.jsonl
+output_dir: rl/trl/runs/quick_run
+
+# === GPU / Server ports ===
+main_agent_port: 8010    # GPU 2: main agent, always loaded
+rollout_port: 8011       # GPU 3: explorer (no judge swap with sub_em)
+
+# === Models ===
+explorer_model: Qwen/Qwen3.5-4B
+main_agent_model: openai/gpt-oss-120b   # fits on one GPU; coherent enough to extract answers
+judge_model: Qwen/Qwen3-32B        # unused with sub_em, kept for easy switch
+
+# === GRPO hyperparameters ===
+group_size: 8             # G — independent trajectories per query
+batch_queries: 8          # 8 queries x G=8 -> 64 samples/iter
+kl_beta: 0.01
+learning_rate: 1.0e-6
+max_steps: 100
+checkpoint_every: 10
+min_buffer_size: 64       # batch_queries(8) x group_size(8) = 64 samples/iter; matches batch_size
+
+# === Reward function ===
+reward_function: sub_em   # no judge server needed; fast iteration
+
+# === Rollout settings ===
+max_turns: 5              # max LLM calls per explorer trajectory
+main_agent_max_turns: 3   # main agent has full trajectory context; rarely needs many calls
+max_new_tokens: 1024
+temperature: 0.6
+top_p: 0.95
+k: 5
+snippet_max_chars: 2000   # truncate each search result text to this many chars (~500 tokens)
+max_input_chars: 60000    # stop explorer early if accumulated context exceeds this (~15K tokens)
+
+# === Logging ===
+wandb_project: browsecomp-rl
+wandb_run_name: quick_run
+log_example_every: 5      # print one example trajectory every N daemon iterations
+
+# === Buffer / checkpoint paths ===
+buffer_dir: rl/trl/tmp/quick_buffer
+ckpt_dir: rl/trl/tmp/quick_buffer/ckpt_latest
+ckpt_flag: rl/trl/tmp/quick_buffer/ckpt_ready.flag

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+import wandb
 import yaml
 from accelerate import Accelerator
 from peft import LoraConfig, PeftModel, get_peft_model
@@ -262,6 +263,17 @@ def train(cfg: dict) -> None:
     # ready; the actual training loop re-calls pop_samples per step.
 
     print("[learner] buffer ready, starting training", flush=True)
+
+    if accelerator.is_main_process and cfg.get("wandb_project"):
+        wandb.init(
+            project=cfg["wandb_project"],
+            name=(cfg["wandb_run_name"] + "_learner") if cfg.get("wandb_run_name") else None,
+            group=cfg.get("wandb_run_name"),
+            job_type="learner",
+            config=cfg,
+        )
+        print(f"[learner] wandb run: {wandb.run.url}", flush=True)
+
     policy.train()
 
     for step in range(cfg["max_steps"]):
@@ -294,12 +306,17 @@ def train(cfg: dict) -> None:
         torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
         optimizer.step()
 
-        if accelerator.is_main_process and step % 10 == 0:
+        if accelerator.is_main_process:
             print(
                 f"[learner] step={step}  loss={loss.item():.4f}  "
                 + "  ".join(f"{k}={v:.4f}" for k, v in metrics.items()),
                 flush=True,
             )
+            if cfg.get("wandb_project"):
+                wandb.log(
+                    {"train/loss": loss.item(), **{f"train/{k}": v for k, v in metrics.items()}},
+                    step=step,
+                )
 
         # Checkpoint + weight-sync flag
         if accelerator.is_main_process and step % cfg["checkpoint_every"] == 0 and step > 0:

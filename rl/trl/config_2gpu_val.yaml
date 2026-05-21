@@ -11,12 +11,12 @@ ground_truth: data/browsecomp_plus_decrypted_train680.jsonl
 output_dir: rl/trl/runs/val_2gpu
 
 # === GPU / Server ports (same as production) ===
-main_agent_port: 8010
+main_agent_port: 8012
 rollout_port: 8011
 
 # === Tiny models (Qwen3-0.6B: supported by transformers 4.57.6 and vLLM 0.19.1) ===
 explorer_model: Qwen/Qwen3-0.6B
-main_agent_model: Qwen/Qwen3-0.6B
+main_agent_model: Qwen/Qwen3.5-0.8B
 judge_model: Qwen/Qwen3-0.6B
 
 # === Minimal batch — completes in ~5 minutes ===
@@ -28,12 +28,25 @@ max_steps: 3             # 3 training steps then exit
 checkpoint_every: 2
 min_buffer_size: 4       # learner unblocks as soon as 4 samples arrive
 
+# === Reward function ===
+# 'llm_judge' — Qwen3-32B judge (time-muxed on GPU)
+# 'sub_em'    — substring exact match; no judge server needed
+reward_function: sub_em
+
 # === Rollout settings ===
 max_turns: 5
+main_agent_max_turns: 3
 max_new_tokens: 256
 temperature: 0.6
 top_p: 0.95
 k: 5
+snippet_max_chars: 2000   # truncate each search result text to this many chars (~500 tokens)
+max_input_chars: 60000    # stop explorer early if accumulated context exceeds this (~15K tokens)
+
+# === Logging ===
+wandb_project: browsecomp-rl
+wandb_run_name: val_2gpu
+log_example_every: 1      # print every iteration (val runs are short)
 
 # === Buffer / checkpoint paths (isolated from production buffer) ===
 buffer_dir: rl/trl/tmp/val_2gpu_buffer
