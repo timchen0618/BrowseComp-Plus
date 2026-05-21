@@ -19,6 +19,7 @@ import copy
 import json
 import re
 import sys
+from functools import partial
 from pathlib import Path
 from typing import List, Optional, Sequence, Set
 
@@ -28,6 +29,8 @@ if str(_DIR) not in sys.path:
 
 from tool_call_utils import (  # noqa: E402
     DEFAULT_TOOL_NAMES,
+    SYSTEM_PROMPT_TEMPLATE,
+    SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC,
     add_common_args,
     resolve_common_args,
     run_one_om,
@@ -35,6 +38,7 @@ from tool_call_utils import (  # noqa: E402
 )
 
 DEFAULT_GLM_TOOL_NAMES = ("local_knowledge_base_retrieval",)
+DEFAULT_GLM_TOOL_NAMES_WITH_GET_DOC = ("local_knowledge_base_retrieval", "get_document")
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +121,12 @@ def build_catalog_lines_glm(
     return lines
 
 
-def verbatim_excerpt_for_tool_glm(trajectory: dict, tool_idx: int) -> str:
+def verbatim_excerpt_for_tool_glm(
+    trajectory: dict,
+    tool_idx: int,
+    *,
+    tool_output_max_chars: int = 0,
+) -> str:
     """Like verbatim_excerpt_for_tool_om: raw json.dumps of messages, separated by blank lines (no tags)."""
     messages = trajectory.get("original_messages", [])
     if tool_idx < 0 or tool_idx >= len(messages):
@@ -129,9 +138,13 @@ def verbatim_excerpt_for_tool_glm(trajectory: dict, tool_idx: int) -> str:
     parts: List[str] = []
     parts.append(json.dumps(msg, ensure_ascii=False))
     tool_m = _get_glm_tool_messages_after(messages, tool_idx)
-    if len(tool_m) > 0:
-        for m in tool_m:
-            parts.append(json.dumps(m, ensure_ascii=False))
+    for m in tool_m:
+        if tool_output_max_chars > 0:
+            m = copy.deepcopy(m)
+            content = m.get("content", "")
+            if isinstance(content, str) and len(content) > tool_output_max_chars:
+                m["content"] = content[:tool_output_max_chars] + "..."
+        parts.append(json.dumps(m, ensure_ascii=False))
     return "\n\n".join(parts)
 
 
@@ -139,8 +152,13 @@ def build_full_excerpt_glm(
     trajectory: dict,
     selected_indices: Sequence[int],
     separator: str = "\n\n---\n\n",
+    *,
+    tool_output_max_chars: int = 0,
 ) -> str:
-    chunks = [verbatim_excerpt_for_tool_glm(trajectory, i) for i in selected_indices]
+    chunks = [
+        verbatim_excerpt_for_tool_glm(trajectory, i, tool_output_max_chars=tool_output_max_chars)
+        for i in selected_indices
+    ]
     return separator.join(chunks)
 
 
@@ -213,15 +231,37 @@ def main() -> None:
                     "excerpts from original_messages."
     )
     add_common_args(ap)
-    # Override default tool-names help to mention GLM default
     ap.set_defaults(tool_names=None)
+    ap.add_argument(
+        "--include-get-document",
+        action="store_true",
+        default=False,
+        help=(
+            "Also consider get_document calls as candidates (in addition to "
+            "local_knowledge_base_retrieval). Uses a system prompt that describes both tool types."
+        ),
+    )
     args = ap.parse_args()
 
-    # Default tool names for GLM if not specified
+    # Default tool names for GLM if not specified by --tool-names
     if args.tool_names is None:
-        args.tool_names = list(DEFAULT_GLM_TOOL_NAMES)
+        if args.include_get_document:
+            args.tool_names = list(DEFAULT_GLM_TOOL_NAMES_WITH_GET_DOC)
+        else:
+            args.tool_names = list(DEFAULT_GLM_TOOL_NAMES)
+
+    system_prompt = (
+        SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC
+        if args.include_get_document
+        else SYSTEM_PROMPT_TEMPLATE
+    )
 
     paths, allowed, query_by_id, model, gen_params = resolve_common_args(args)
+
+    excerpt_fn = partial(
+        build_full_excerpt_glm,
+        tool_output_max_chars=args.context_tool_max_chars,
+    )
 
     def job(p):
         return run_one_om(
@@ -238,8 +278,9 @@ def main() -> None:
             query_by_id=query_by_id,
             find_candidates_fn=find_candidate_tool_indices_glm,
             build_catalog_fn=build_catalog_lines_glm,
-            build_excerpt_fn=build_full_excerpt_glm,
+            build_excerpt_fn=excerpt_fn,
             format_context_fn=format_context_for_prompt_glm,
+            system_prompt_template=system_prompt,
         )
 
     run_pipeline(paths, args.num_threads, job, args.output, dry_run=args.dry_run)

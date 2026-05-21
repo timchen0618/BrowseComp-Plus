@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Set  # noqa: F401 (re-exported for random_select_tool_calls)
 
@@ -27,6 +28,7 @@ from tool_call_utils import (  # noqa: E402
     DEFAULT_BCP_QUERIES_TSV,
     DEFAULT_TOOL_NAMES,
     SYSTEM_PROMPT_TEMPLATE,
+    SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC,
     Gemini25Pro,
     GenParams,
     tqdm,
@@ -50,6 +52,9 @@ from tool_call_utils import (  # noqa: E402
     run_one_om,
     run_pipeline,
 )
+
+DEFAULT_GPT_OSS_TOOL_NAMES = ("search", "local_knowledge_base_retrieval")
+DEFAULT_GPT_OSS_TOOL_NAMES_WITH_GET_DOC = ("search", "local_knowledge_base_retrieval", "get_document")
 
 def format_original_messages_for_prompt(
     trajectory: dict,
@@ -246,6 +251,8 @@ def _om_previous_tool_index(messages: List[dict], tool_idx: int) -> int:
 def verbatim_excerpt_for_tool_om(
     trajectory: dict,
     tool_idx: int,
+    *,
+    tool_output_max_chars: int = 0,
 ) -> str:
     """Like verbatim_excerpt_for_tool but reads from original_messages."""
     messages = trajectory.get("original_messages", [])
@@ -264,19 +271,22 @@ def verbatim_excerpt_for_tool_om(
         if s.get("type") == "reasoning":
             parts.append(json.dumps(s, ensure_ascii=False))
 
-    # tool_name = step.get("name", "?")
-    # args_raw = step.get("arguments", "")
-    # if isinstance(args_raw, str):
-    #     args_display = args_raw
-    # else:
-    #     args_display = json.dumps(args_raw, ensure_ascii=False)
-    # parts.append(f"[Tool call] {tool_name}\narguments:\n{args_display}")
     parts.append(json.dumps(step, ensure_ascii=False))
 
     cid = step.get("call_id", "")
     out_str = call_id_to_output.get(cid, "")
     if not isinstance(out_str, str):
         out_str = json.dumps(out_str, ensure_ascii=False)
+    if tool_output_max_chars > 0 and out_str:
+        try:
+            out_obj = json.loads(out_str)
+            output_field = out_obj.get("output", "")
+            if isinstance(output_field, str) and len(output_field) > tool_output_max_chars:
+                out_obj["output"] = output_field[:tool_output_max_chars] + "..."
+                out_str = json.dumps(out_obj, ensure_ascii=False)
+        except (json.JSONDecodeError, AttributeError):
+            if len(out_str) > tool_output_max_chars:
+                out_str = out_str[:tool_output_max_chars] + "..."
     parts.append(f"{out_str}")
 
     return "\n\n".join(parts)
@@ -286,9 +296,14 @@ def build_full_excerpt_om(
     trajectory: dict,
     selected_indices: Sequence[int],
     separator: str = "\n\n---\n\n",
+    *,
+    tool_output_max_chars: int = 0,
 ) -> str:
     """Like build_full_excerpt but reads from original_messages."""
-    chunks = [verbatim_excerpt_for_tool_om(trajectory, i) for i in selected_indices]
+    chunks = [
+        verbatim_excerpt_for_tool_om(trajectory, i, tool_output_max_chars=tool_output_max_chars)
+        for i in selected_indices
+    ]
     return separator.join(chunks)
 
 
@@ -303,15 +318,39 @@ def main() -> None:
         action="store_true",
         help="Use original_messages (OpenAI function_call format) for excerpts",
     )
+    ap.add_argument(
+        "--include-get-document",
+        action="store_true",
+        default=False,
+        help=(
+            "Also consider get_document calls as candidates. In --use-original-messages mode, "
+            "adds get_document to the default tool filter; uses a system prompt that describes "
+            "both tool types."
+        ),
+    )
     args = ap.parse_args()
+
+    # In OM mode, apply GPT-OSS-specific defaults when --tool-names is not set
+    if args.use_original_messages and args.tool_names is None:
+        if args.include_get_document:
+            args.tool_names = list(DEFAULT_GPT_OSS_TOOL_NAMES_WITH_GET_DOC)
+        else:
+            args.tool_names = list(DEFAULT_GPT_OSS_TOOL_NAMES)
+
+    system_prompt = (
+        SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC
+        if args.include_get_document
+        else SYSTEM_PROMPT_TEMPLATE
+    )
 
     paths, allowed, query_by_id, model, gen_params = resolve_common_args(args)
 
     if args.use_original_messages:
-        find_fn, catalog_fn, excerpt_fn = (
-            find_candidate_tool_indices_om,
-            build_catalog_lines_om,
+        find_fn = find_candidate_tool_indices_om
+        catalog_fn = build_catalog_lines_om
+        excerpt_fn = partial(
             build_full_excerpt_om,
+            tool_output_max_chars=args.context_tool_max_chars,
         )
         ctx_fn = format_trajectory_for_prompt_orig
         req_om = True
@@ -340,6 +379,7 @@ def main() -> None:
             build_excerpt_fn=excerpt_fn,
             format_context_fn=ctx_fn,
             require_original_messages=req_om,
+            system_prompt_template=system_prompt,
         )
 
     run_pipeline(paths, args.num_threads, job, args.output, dry_run=args.dry_run)

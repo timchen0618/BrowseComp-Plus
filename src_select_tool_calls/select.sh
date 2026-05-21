@@ -3,16 +3,16 @@ REASONING_MAX_CHARS=2000
 TOOL_OUTPUT_MAX_CHARS=3000
 CONTEXT_MAX_CHARS=280000
 
-# gpt-oss-120b (830 files in seed4)
-python src_select_tool_calls/select_useful_tool_calls.py --k 5 --use-original-messages \
-  --preview-chars ${PREVIEW_CHARS} \
-  --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
-  --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
-  --context-max-chars ${CONTEXT_MAX_CHARS} \
-  --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini-2.5-pro_2.jsonl \
-  --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ \
-  --num-threads 8 
-  # --model @vertexai-gemini-ec5413/gemini-3.1-pro-preview
+# # gpt-oss-120b (830 files in seed4)
+# python src_select_tool_calls/select_useful_tool_calls.py --k 5 --use-original-messages \
+#   --preview-chars ${PREVIEW_CHARS} \
+#   --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
+#   --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
+#   --context-max-chars ${CONTEXT_MAX_CHARS} \
+#   --output selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini-2.5-pro_2.jsonl \
+#   --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4/ \
+#   --num-threads 8 
+#   # --model @vertexai-gemini-ec5413/gemini-3.1-pro-preview
 
 # # tongyi (830 files in seed4)
 # python src_select_tool_calls/select_useful_tool_calls_tongyi.py --k 5  \
@@ -92,3 +92,27 @@ python src_select_tool_calls/select_useful_tool_calls.py --k 5 --use-original-me
 # do
 #   mv selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_less_chars_random_seed${seed}.jsonl selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_random_seed${seed}.jsonl
 # done
+
+
+# glm
+python src_select_tool_calls/select_useful_tool_calls_glm.py --k 5  \
+  --preview-chars ${PREVIEW_CHARS} \
+  --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
+  --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
+  --context-max-chars ${CONTEXT_MAX_CHARS} \
+  --output selected_tool_calls/all/glm/seed0/selected_tool_calls_glm_getdoc_use_original_messages.jsonl \
+  --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/glm/seed0_getdoc/ \
+  --include-get-document \
+  --num-threads 8
+
+
+# glm
+python src_select_tool_calls/select_useful_tool_calls_glm.py --k 5  \
+  --preview-chars ${PREVIEW_CHARS} \
+  --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
+  --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
+  --context-max-chars ${CONTEXT_MAX_CHARS} \
+  --output selected_tool_calls_frames/all/glm/seed0/selected_tool_calls_glm_getdoc_use_original_messages.jsonl \
+  --trajectory-dir runs/frames/Qwen3-Embedding-8B/full/glm/seed0_getdoc/ \
+  --include-get-document \
+  --num-threads 8

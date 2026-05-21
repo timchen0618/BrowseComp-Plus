@@ -24,6 +24,7 @@ import copy
 import json
 import re
 import sys
+from functools import partial
 from pathlib import Path
 from typing import List, Optional, Sequence, Set
 
@@ -32,6 +33,8 @@ if str(_DIR) not in sys.path:
     sys.path.insert(0, str(_DIR))
 
 from tool_call_utils import (  # noqa: E402
+    SYSTEM_PROMPT_TEMPLATE,
+    SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC,
     add_common_args,
     resolve_common_args,
     run_one_om,
@@ -39,6 +42,7 @@ from tool_call_utils import (  # noqa: E402
 )
 
 DEFAULT_TONGYI_TOOL_NAMES = ("search",)
+DEFAULT_TONGYI_TOOL_NAMES_WITH_GET_DOC = ("search", "get_document")
 
 # If the next-turn <tool_response> body contains one of these, the Tongyi run treated the
 # step as a failed tool call (see search_agent/tongyi_utils/react_agent.py and tool_search.py).
@@ -140,7 +144,7 @@ def _preview_tool_step_tongyi(msg: dict, tool_response: str, preview_chars: int)
         return "args_hint=(unparseable) | output_preview=''"
     args = tc.get("arguments", {})
     if isinstance(args, dict):
-        hint = args.get("query") or args.get("user_query") or json.dumps(args)[:200]
+        hint = args.get("query") or args.get("user_query") or args.get("docid") or json.dumps(args)[:200]
     elif isinstance(args, str):
         hint = args[:200]
     else:
@@ -168,7 +172,12 @@ def build_catalog_lines_tongyi(
     return lines
 
 
-def verbatim_excerpt_for_tool_tongyi(trajectory: dict, tool_idx: int) -> str:
+def verbatim_excerpt_for_tool_tongyi(
+    trajectory: dict,
+    tool_idx: int,
+    *,
+    tool_output_max_chars: int = 0,
+) -> str:
     """Like verbatim_excerpt_for_tool_om: raw json.dumps of messages, separated by blank lines (no tags)."""
     messages = trajectory.get("original_messages", [])
     if tool_idx < 0 or tool_idx >= len(messages):
@@ -181,6 +190,11 @@ def verbatim_excerpt_for_tool_tongyi(trajectory: dict, tool_idx: int) -> str:
     parts.append(json.dumps(msg, ensure_ascii=False))
     user_m = _get_tongyi_tool_user_message(messages, tool_idx)
     if user_m is not None:
+        if tool_output_max_chars > 0:
+            user_m = copy.deepcopy(user_m)
+            content = user_m.get("content", "")
+            if isinstance(content, str):
+                user_m["content"] = _tongyi_truncate_tool_responses(content, tool_output_max_chars)
         parts.append(json.dumps(user_m, ensure_ascii=False))
     return "\n\n".join(parts)
 
@@ -189,8 +203,13 @@ def build_full_excerpt_tongyi(
     trajectory: dict,
     selected_indices: Sequence[int],
     separator: str = "\n\n---\n\n",
+    *,
+    tool_output_max_chars: int = 0,
 ) -> str:
-    chunks = [verbatim_excerpt_for_tool_tongyi(trajectory, i) for i in selected_indices]
+    chunks = [
+        verbatim_excerpt_for_tool_tongyi(trajectory, i, tool_output_max_chars=tool_output_max_chars)
+        for i in selected_indices
+    ]
     return separator.join(chunks)
 
 
@@ -282,13 +301,37 @@ def main() -> None:
                     "excerpts from original_messages."
     )
     add_common_args(ap)
+    ap.set_defaults(tool_names=None)
+    ap.add_argument(
+        "--include-get-document",
+        action="store_true",
+        default=False,
+        help=(
+            "Also consider get_document calls as candidates (in addition to search). "
+            "Uses a system prompt that describes both tool types."
+        ),
+    )
     args = ap.parse_args()
 
-    # Default tool names for Tongyi if not specified
+    # Default tool names for Tongyi if not specified by --tool-names
     if args.tool_names is None:
-        args.tool_names = list(DEFAULT_TONGYI_TOOL_NAMES)
+        if args.include_get_document:
+            args.tool_names = list(DEFAULT_TONGYI_TOOL_NAMES_WITH_GET_DOC)
+        else:
+            args.tool_names = list(DEFAULT_TONGYI_TOOL_NAMES)
+
+    system_prompt = (
+        SYSTEM_PROMPT_TEMPLATE_WITH_GET_DOC
+        if args.include_get_document
+        else SYSTEM_PROMPT_TEMPLATE
+    )
 
     paths, allowed, query_by_id, model, gen_params = resolve_common_args(args)
+
+    excerpt_fn = partial(
+        build_full_excerpt_tongyi,
+        tool_output_max_chars=args.context_tool_max_chars,
+    )
 
     def job(p):
         return run_one_om(
@@ -305,8 +348,9 @@ def main() -> None:
             query_by_id=query_by_id,
             find_candidates_fn=find_candidate_tool_indices_tongyi,
             build_catalog_fn=build_catalog_lines_tongyi,
-            build_excerpt_fn=build_full_excerpt_tongyi,
+            build_excerpt_fn=excerpt_fn,
             format_context_fn=format_context_for_prompt_tongyi,
+            system_prompt_template=system_prompt,
         )
 
     run_pipeline(paths, args.num_threads, job, args.output, dry_run=args.dry_run)

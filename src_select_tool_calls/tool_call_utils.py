@@ -29,6 +29,12 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 DEFAULT_BCP_QUERIES_TSV = _PROJECT_ROOT / "topics-qrels" / "bcp" / "queries.tsv"
 
+# Maps dataset directory name → queries TSV path.  Used for auto-detection.
+DATASET_TSV_MAP: dict[str, Path] = {
+    "bcp":    _PROJECT_ROOT / "topics-qrels" / "bcp"    / "queries.tsv",
+    "frames": _PROJECT_ROOT / "topics-qrels" / "frames" / "queries.tsv",
+}
+
 try:
     from portkey import Gemini25Pro, GenParams
 except ImportError:
@@ -531,7 +537,7 @@ def run_one_om(
         f"\nReminder: selected_indices must be a subset of this list only: {allowed_json}",
     ]
     user_content = "\n".join(user_parts)
-    system = SYSTEM_PROMPT_TEMPLATE.format(k=k_eff)
+    system = system_prompt_template.format(k=k_eff)
 
     if dry_run:
         return {
@@ -687,10 +693,14 @@ def add_common_args(ap: "argparse.ArgumentParser") -> None:  # type: ignore[name
                     help="Per reasoning block cap (0=none)")
     ap.add_argument("--context-tool-max-chars", type=int, default=3000,
                     help="Per tool result cap in context block")
-    ap.add_argument("--queries-tsv", type=Path, default=DEFAULT_BCP_QUERIES_TSV,
-                    help=f"BCP topics TSV (query_id\\tquestion). Default: {DEFAULT_BCP_QUERIES_TSV}")
+    ap.add_argument("--queries-tsv", type=Path, default=None,
+                    help=(
+                        "Topics TSV file (query_id\\tquestion). "
+                        "Auto-detected from --trajectory-dir if it contains 'bcp' or 'frames'. "
+                        f"Known paths: {', '.join(str(v) for v in DATASET_TSV_MAP.values())}"
+                    ))
     ap.add_argument("--no-queries-tsv", action="store_true",
-                    help="Do not load --queries-tsv; use only query/question fields from each JSON")
+                    help="Do not load any queries TSV; use only query/question fields from each JSON")
 
 
 def resolve_common_args(args: Any) -> tuple:
@@ -736,12 +746,27 @@ def resolve_common_args(args: Any) -> tuple:
 
     query_by_id: Optional[dict[str, str]] = None
     if not args.no_queries_tsv:
-        qp = args.queries_tsv
-        if qp.is_file():
+        qp: Optional[Path] = args.queries_tsv
+        if qp is None:
+            # Auto-detect dataset from trajectory dir path parts
+            dir_parts = {p.lower() for p in traj_dir.parts}
+            for dataset, tsv_path in DATASET_TSV_MAP.items():
+                if dataset in dir_parts:
+                    qp = tsv_path
+                    print(f"Auto-detected queries TSV: {qp}", file=sys.stderr)
+                    break
+        if qp is not None and qp.is_file():
             query_by_id = load_query_id_to_text(qp)
-        else:
+        elif qp is not None:
             print(
                 f"Warning: queries TSV not found ({qp}); using trajectory query/question fields only.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Warning: could not auto-detect dataset TSV from trajectory dir; "
+                "using trajectory query/question fields only. "
+                "Pass --queries-tsv to specify explicitly.",
                 file=sys.stderr,
             )
 
