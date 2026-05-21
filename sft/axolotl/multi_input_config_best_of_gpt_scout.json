@@ -1,0 +1,26 @@
+[
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_less_chars.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0_less_chars/",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0_less_chars/"
+    },
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0/",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_seed0/"
+    },
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini-2.5-pro_1.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_gemini-2.5-pro_1_seed0/",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_gemini-2.5-pro_1_seed0/"
+    },
+    {
+      "input": "selected_tool_calls/all/gpt-oss-120b/seed0/selected_tool_calls_gpt-oss-120b_use_original_messages_gemini_3.1-pro-preview.jsonl",
+      "trajectory_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/seed4",
+      "subsequent_folder": "runs/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_gemini_3.1-pro-preview_seed0/",
+      "subsequent_eval_folder": "evals/bcp/Qwen3-Embedding-8B/full/gpt-oss-120b/traj_summary_orig_ext_selected_tools_gpt-oss-120b_gemini_3.1-pro-preview_seed0/"
+    }
+  ]

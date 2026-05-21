@@ -70,7 +70,7 @@ python sft/axolotl/prepare_dataset.py \
     --split "${SPLIT}" \
     --val-size "${VAL_SIZE}" \
     --seed "${SEED}" \
-    --template "qwen-oss"
+    --template "qwen-oss-xml"
 
 echo "[2/3] Axolotl preprocess (tokenize + cache)"
 axolotl preprocess "${RENDERED_CONFIG}"

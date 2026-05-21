@@ -238,7 +238,11 @@ def _parse_excerpt_items(excerpt: str) -> List[Dict[str, Any]]:
 TEMPLATE_GPT_OSS = "gpt-oss"
 TEMPLATE_QWEN = "qwen"
 TEMPLATE_QWEN_OSS = "qwen-oss"
-TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN, TEMPLATE_QWEN_OSS)
+# qwen-oss-xml — same as qwen-oss but emits tool calls in the Qwen3.5-4B XML
+#                format (<function=name><parameter=key>value</parameter></function>)
+#                so training data matches the base model's inference template.
+TEMPLATE_QWEN_OSS_XML = "qwen-oss-xml"
+TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML)
 
 # Map (source_name, source_arg_key) -> (target_name, target_arg_key) for the
 # legacy `qwen` (Tongyi) template only.
@@ -271,7 +275,7 @@ def _reasoning_text(item: Dict[str, Any], template: str) -> str:
     text = "\n".join(parts).strip()
     if not text:
         return ""
-    if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS):
+    if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML):
         return f"<think>\n{text}\n</think>"
     return text
 
@@ -302,9 +306,21 @@ def _fmt_tool_call(item: Dict[str, Any], template: str) -> str:
     if template == TEMPLATE_QWEN:
         # Legacy Tongyi format: rewrite to search/query.
         name, parsed_args = _rewrite_qwen_tool_call(name, parsed_args)
-    # qwen-oss: keep name/args exactly as they appear in the source trajectory
-    # (local_knowledge_base_retrieval / user_query), matching oss_client.py.
 
+    if template == TEMPLATE_QWEN_OSS_XML:
+        # Qwen3.5-4B XML format: matches the base model's inference chat template.
+        # <tool_call>\n<function=name>\n<parameter=key>value</parameter>\n</function>\n</tool_call>
+        lines = [f"<tool_call>", f"<function={name}>"]
+        if isinstance(parsed_args, dict):
+            for k, v in parsed_args.items():
+                lines.append(f"<parameter={k}>\n{v}\n</parameter>")
+        elif parsed_args:
+            lines.append(str(parsed_args))
+        lines.append("</function>")
+        lines.append("</tool_call>")
+        return "\n".join(lines)
+
+    # qwen-oss / qwen / gpt-oss: JSON format inside <tool_call> tags.
     payload = {"name": name, "arguments": parsed_args}
     return "<tool_call>\n" + json.dumps(payload, ensure_ascii=False) + "\n</tool_call>"
 
@@ -343,7 +359,7 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
     # qwen / qwen-oss: compact single-newline separator so the assistant turn
     # looks like "<think>...</think>\n<tool_call>...</tool_call>".
     # gpt-oss: blank-line separator for readability.
-    sep = "\n" if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS) else "\n\n"
+    sep = "\n" if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML) else "\n\n"
 
     def flush_assistant() -> None:
         if not buf:
@@ -364,7 +380,7 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
             flush_assistant()
         elif kind == "function_call_output":
             flush_assistant()
-            if template == TEMPLATE_QWEN_OSS:
+            if template in (TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML):
                 out = it.get("output", "")
                 if not isinstance(out, str):
                     out = json.dumps(out, ensure_ascii=False)
