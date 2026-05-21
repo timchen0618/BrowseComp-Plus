@@ -26,6 +26,7 @@ datasets:
     message_property_mappings:
       role: role
       content: content
+      tool_calls: tool_calls
     # Assistant-only loss: user/tool/system turns get label=-100.
     roles_to_train: ["assistant"]
     # Train on the <|im_end|> of each assistant turn so the model learns
@@ -39,6 +40,7 @@ test_datasets:
     message_property_mappings:
       role: role
       content: content
+      tool_calls: tool_calls
     roles_to_train: ["assistant"]
     train_on_eos: turn
     split: train

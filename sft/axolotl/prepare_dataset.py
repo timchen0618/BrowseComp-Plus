@@ -26,8 +26,10 @@ folder, regardless of --keep-failed.
 Output line shape (one JSON object per line):
     {"messages": [
         {"role": "user",      "content": "<system+question merged>"},
-        {"role": "assistant", "content": "...<tool_call>...</tool_call>"},
-        {"role": "user",      "content": "<tool_response>...</tool_response>"},
+        {"role": "assistant", "content": "<think>...</think>",
+                              "tool_calls": [{"type": "function",
+                                              "function": {"name": "...", "arguments": {...}}}]},
+        {"role": "tool",      "content": "<raw tool output>"},
         ...
     ]}
 
@@ -87,6 +89,7 @@ import argparse
 import dataclasses
 import json
 import random
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -181,11 +184,35 @@ def _query_id_from_record(
     return str(q).strip()
 
 
-def _system_user_from_source(traj: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """
-    The first item of original_messages is a `{role: "user"}` entry whose
-    content already concatenates the system prompt and the "User: <question>"
-    line. We keep it as a single merged user message.
+# Budget system prompt template — matches search_agent/prompts.py
+# QUERY_TEMPLATE_NO_GET_DOCUMENT_BUDGET (no get_document tool, search-only).
+# Used for ALL training examples regardless of what prompt the source trajectory used,
+# so the model always trains against the budget-constrained instruction format.
+_BUDGET_PROMPT_TEMPLATE = (
+    "You are a deep research agent. You need to answer the given question by interacting "
+    "with a search engine, using the search tool provided. Please perform reasoning and use "
+    "the tool step by step, in an interleaved manner. You may use the search tool multiple "
+    "times. You only have a budget of {SearchBudget} search turns — use them efficiently.\n\n"
+    "Question: {Question}\n\n"
+    "Your response should be in the following format:\n"
+    "Explanation: {{your explanation for your final answer. For this explanation section only, "
+    "you should cite your evidence documents inline by enclosing their docids in square "
+    "brackets [] at the end of sentences. For example, [20].}}\n"
+    "Exact Answer: {{your succinct, final answer}}\n"
+    "Confidence: {{your confidence score between 0% and 100% for your answer}}"
+)
+
+
+_QUESTION_RE = re.compile(r"\nQuestion:\s*(.+?)(?=\n\nYour response)", re.DOTALL)
+
+
+def _system_user_from_source(traj: Dict[str, Any], budget: int) -> Optional[Dict[str, str]]:
+    """Build the merged system+user message using the budget prompt template.
+
+    Always uses the budget-style system prompt regardless of what prompt the
+    source trajectory originally used, so training format matches budget-mode
+    inference. The question is extracted from original_messages[0] content via
+    regex; if extraction fails, the original content is returned unchanged.
     """
     om = traj.get("original_messages")
     if not isinstance(om, list) or not om:
@@ -194,9 +221,17 @@ def _system_user_from_source(traj: Dict[str, Any]) -> Optional[Dict[str, str]]:
     if not isinstance(first, dict):
         return None
     role = str(first.get("role", "")).lower()
-    content = first.get("content", "")
-    if role != "user" or not isinstance(content, str) or not content.strip():
+    raw_content = first.get("content", "")
+    if role != "user" or not isinstance(raw_content, str) or not raw_content.strip():
         return None
+
+    m = _QUESTION_RE.search(raw_content)
+    if m:
+        question = m.group(1).strip()
+        content = _BUDGET_PROMPT_TEMPLATE.format(SearchBudget=budget, Question=question)
+    else:
+        content = raw_content  # fallback: use original content as-is
+
     return {"role": "user", "content": content}
 
 
@@ -238,11 +273,7 @@ def _parse_excerpt_items(excerpt: str) -> List[Dict[str, Any]]:
 TEMPLATE_GPT_OSS = "gpt-oss"
 TEMPLATE_QWEN = "qwen"
 TEMPLATE_QWEN_OSS = "qwen-oss"
-# qwen-oss-xml — same as qwen-oss but emits tool calls in the Qwen3.5-4B XML
-#                format (<function=name><parameter=key>value</parameter></function>)
-#                so training data matches the base model's inference template.
-TEMPLATE_QWEN_OSS_XML = "qwen-oss-xml"
-TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML)
+TEMPLATE_CHOICES = (TEMPLATE_GPT_OSS, TEMPLATE_QWEN, TEMPLATE_QWEN_OSS)
 
 # Map (source_name, source_arg_key) -> (target_name, target_arg_key) for the
 # legacy `qwen` (Tongyi) template only.
@@ -275,7 +306,7 @@ def _reasoning_text(item: Dict[str, Any], template: str) -> str:
     text = "\n".join(parts).strip()
     if not text:
         return ""
-    if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML):
+    if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS):
         return f"<think>\n{text}\n</think>"
     return text
 
@@ -292,7 +323,7 @@ def _rewrite_qwen_tool_call(name: str, parsed_args: Any) -> Tuple[str, Any]:
 
 
 def _fmt_tool_call(item: Dict[str, Any], template: str) -> str:
-    """Render a function_call item as an inline <tool_call>...</tool_call>."""
+    """Render a function_call item as a JSON-in-<tool_call> string (gpt-oss / qwen only)."""
     name = item.get("name", "")
     raw_args = item.get("arguments", "")
     if isinstance(raw_args, str):
@@ -304,25 +335,30 @@ def _fmt_tool_call(item: Dict[str, Any], template: str) -> str:
         parsed_args = raw_args
 
     if template == TEMPLATE_QWEN:
-        # Legacy Tongyi format: rewrite to search/query.
         name, parsed_args = _rewrite_qwen_tool_call(name, parsed_args)
 
-    if template == TEMPLATE_QWEN_OSS_XML:
-        # Qwen3.5-4B XML format: matches the base model's inference chat template.
-        # <tool_call>\n<function=name>\n<parameter=key>value</parameter>\n</function>\n</tool_call>
-        lines = [f"<tool_call>", f"<function={name}>"]
-        if isinstance(parsed_args, dict):
-            for k, v in parsed_args.items():
-                lines.append(f"<parameter={k}>\n{v}\n</parameter>")
-        elif parsed_args:
-            lines.append(str(parsed_args))
-        lines.append("</function>")
-        lines.append("</tool_call>")
-        return "\n".join(lines)
-
-    # qwen-oss / qwen / gpt-oss: JSON format inside <tool_call> tags.
     payload = {"name": name, "arguments": parsed_args}
     return "<tool_call>\n" + json.dumps(payload, ensure_ascii=False) + "\n</tool_call>"
+
+
+def _make_tool_call_entry(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a standard OpenAI-style tool_calls entry from a function_call item.
+
+    Returns {"type": "function", "function": {"name": ..., "arguments": {...}}}
+    where arguments is always a dict so apply_chat_template can iterate its items.
+    """
+    name = item.get("name", "")
+    raw_args = item.get("arguments", "")
+    if isinstance(raw_args, str):
+        try:
+            parsed_args: Any = json.loads(raw_args)
+        except json.JSONDecodeError:
+            parsed_args = {"raw": raw_args}
+    else:
+        parsed_args = raw_args
+    if not isinstance(parsed_args, dict):
+        parsed_args = {"raw": str(parsed_args)}
+    return {"type": "function", "function": {"name": name, "arguments": parsed_args}}
 
 
 def _fmt_tool_response(item: Dict[str, Any]) -> str:
@@ -333,40 +369,43 @@ def _fmt_tool_response(item: Dict[str, Any]) -> str:
     return "<tool_response>\n" + out + "\n</tool_response>"
 
 
-def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
+def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, Any]]:
     """
     Walk the Responses-API items into inline chat messages.
 
     Rules:
-      - `reasoning`           -> append text (optionally wrapped in
-                                 <think>...</think> for qwen/qwen-oss)
-                                 to the current assistant buffer
-      - `function_call`       -> append <tool_call>...</tool_call>, flush
-                                 buffer as one assistant message
+      - `reasoning`           -> append text (wrapped in <think>...</think> for
+                                 qwen/qwen-oss) to the current assistant buffer
+      - `function_call`       -> flush buffer as assistant message with a
+                                 `tool_calls` array (qwen-oss) or inline
+                                 JSON-in-<tool_call> string (qwen / gpt-oss)
       - `function_call_output`-> flush any pending assistant buffer, then:
                                    qwen-oss: role=tool, content=raw output
                                              (Qwen3 chat template adds the
                                              <tool_response> wrapper itself)
                                    qwen:     role=user, content=<tool_response>
                                    gpt-oss:  role=user, content=<tool_response>
+
+    For qwen-oss the assistant message uses the standard OpenAI tool_calls field
+    so apply_chat_template renders the call in the model's own native format
+    (e.g. <function=name><parameter=key>value</parameter></function> for
+    Qwen3.5-4B), without any manual string formatting here.
     """
     items = _parse_excerpt_items(excerpt)
     if not items:
         return []
 
-    messages: List[Dict[str, str]] = []
+    messages: List[Dict[str, Any]] = []
     buf: List[str] = []
-    # qwen / qwen-oss: compact single-newline separator so the assistant turn
-    # looks like "<think>...</think>\n<tool_call>...</tool_call>".
-    # gpt-oss: blank-line separator for readability.
-    sep = "\n" if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML) else "\n\n"
+    sep = "\n" if template in (TEMPLATE_QWEN, TEMPLATE_QWEN_OSS) else "\n\n"
 
-    def flush_assistant() -> None:
-        if not buf:
-            return
-        text = sep.join(s for s in buf if s).strip()
+    def flush_assistant(tool_call_entry: Optional[Dict[str, Any]] = None) -> None:
+        text = sep.join(s for s in buf if s).strip() if buf else ""
         buf.clear()
-        if text:
+        if tool_call_entry is not None:
+            # Always emit the assistant message when there's a tool call.
+            messages.append({"role": "assistant", "content": text, "tool_calls": [tool_call_entry]})
+        elif text:
             messages.append({"role": "assistant", "content": text})
 
     for it in items:
@@ -376,11 +415,14 @@ def _excerpt_to_messages(excerpt: str, template: str) -> List[Dict[str, str]]:
             if text:
                 buf.append(text)
         elif kind == "function_call":
-            buf.append(_fmt_tool_call(it, template))
-            flush_assistant()
+            if template == TEMPLATE_QWEN_OSS:
+                flush_assistant(tool_call_entry=_make_tool_call_entry(it))
+            else:
+                buf.append(_fmt_tool_call(it, template))
+                flush_assistant()
         elif kind == "function_call_output":
             flush_assistant()
-            if template in (TEMPLATE_QWEN_OSS, TEMPLATE_QWEN_OSS_XML):
+            if template == TEMPLATE_QWEN_OSS:
                 out = it.get("output", "")
                 if not isinstance(out, str):
                     out = json.dumps(out, ensure_ascii=False)
@@ -403,7 +445,8 @@ def _coerce_excerpt(
     example: Dict[str, Any],
     source_cache: _SourceTrajectoryCache,
     template: str,
-) -> Tuple[Optional[List[Dict[str, str]]], str]:
+    budget: int = 5,
+) -> Tuple[Optional[List[Dict[str, Any]]], str]:
     """
     Build messages for a (source_file, excerpt) record.
 
@@ -417,7 +460,7 @@ def _coerce_excerpt(
     if traj is None:
         return None, "missing_source"
 
-    prompt = _system_user_from_source(traj)
+    prompt = _system_user_from_source(traj, budget)
     if prompt is None:
         return None, "missing_source"
 
@@ -426,7 +469,9 @@ def _coerce_excerpt(
         return None, "bad_excerpt"
 
     has_tool_call = any(
-        m["role"] == "assistant" and "<tool_call>" in m["content"]
+        m["role"] == "assistant" and (
+            m.get("tool_calls") or "<tool_call>" in m.get("content", "")
+        )
         for m in excerpt_msgs
     )
     if not has_tool_call:
@@ -810,17 +855,27 @@ def main() -> None:
         help=f"With --split {SPLIT_RANDOM}: shuffle seed. Also used for --mode b random selection.",
     )
     parser.add_argument(
+        "--budget",
+        type=int,
+        default=5,
+        help=(
+            "Search-turn budget written into the system prompt for all examples. "
+            "The budget-style prompt is always used regardless of what prompt the "
+            "source trajectory originally used (default: 5)."
+        ),
+    )
+    parser.add_argument(
         "--template",
         choices=TEMPLATE_CHOICES,
         default=TEMPLATE_QWEN_OSS,
         help=(
             "Output template. "
-            "'qwen-oss' (default) targets Qwen3.5 models run via oss_client.py: "
+            "'qwen-oss' (default) targets Qwen3.5 models via oss_client.py: "
             "keeps name=local_knowledge_base_retrieval / arg=user_query, wraps "
-            "reasoning in <think>...</think>, tool responses as role=tool with raw "
-            "content (the Qwen3 chat template adds <tool_response> itself). "
-            "'gpt-oss' preserves the source trajectory format as-is with no "
-            "reasoning wrapping. "
+            "reasoning in <think>...</think>, emits tool calls as a standard "
+            "tool_calls array so apply_chat_template renders them in the model's "
+            "own native format (XML for Qwen3.5-4B), tool responses as role=tool. "
+            "'gpt-oss' preserves the source trajectory format with no rewrites. "
             "'qwen' is the legacy Tongyi/react_agent format: rewrites tool calls "
             "to name=search / arg=query with role=user <tool_response> wrapper."
         ),
@@ -913,7 +968,7 @@ def main() -> None:
                 dropped_not_success += 1
                 continue
 
-            messages, reason = _coerce_excerpt(record, source_cache, args.template)
+            messages, reason = _coerce_excerpt(record, source_cache, args.template, args.budget)
             if messages is None:
                 if reason == "schema":
                     dropped_schema += 1
@@ -962,7 +1017,7 @@ def main() -> None:
 
             for candidate in chosen_list:
                 messages, reason = _coerce_excerpt(
-                    candidate.record, candidate.source_cache, args.template
+                    candidate.record, candidate.source_cache, args.template, args.budget
                 )
                 if messages is None:
                     if reason == "schema":
