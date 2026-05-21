@@ -72,6 +72,14 @@ elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout" ]; then
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered" ]; then
     model_path="Qwen/Qwen3.5-4B"
     lora_modules="qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered=sft/checkpoints/bcp-train530-test300/gpt-oss-120b_scout_unfiltered/checkpoint-166"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_full_unfiltered" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0_full_unfiltered/checkpoint-150"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_full" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300/gemini-2.5-pro_selection_0_full"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full_unfiltered" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300/gpt-oss-120b_scout_full_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300/gpt-oss-120b_scout_full"
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
     model_path="openai/gpt-oss-120b"
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
@@ -92,7 +100,7 @@ else
     lora_args=""
     [ -n "${lora_modules}" ] && lora_args="--enable-lora --lora-modules ${lora_modules}"
     qwen3_args=""
-    [[ "${model_path}" == Qwen/Qwen3.5* || "${model_path}" == Qwen/Qwen3.6* ]] && \
+    [[ "${model_path}" == Qwen/Qwen3.5* || "${model_path}" == Qwen/Qwen3.6* || "${MODEL_NAME}" == qwen3.5-4b-sft-* ]] && \
         qwen3_args="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder"
     singularity exec --nv --overlay ${VLLM_OVERLAY_FILE}:ro $SINGULARITY_IMAGE /bin/bash -c "source /ext3/env.sh; cd /scratch/hc3337/projects/BrowseComp-Plus/; HF_TOKEN=${HF_TOKEN} vllm serve ${model_path} --port ${port} --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} --gpu-memory-utilization ${GPU_UTIL} ${lora_args} ${qwen3_args}" &
 fi
