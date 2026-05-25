@@ -110,7 +110,16 @@ DEFAULT_BCP_QUERIES_TEST_TSV = DEFAULT_BCP_QUERIES_TEST150_TSV
 SPLIT_RANDOM = "random"
 SPLIT_BCP_TRAIN680_TEST150 = "bcp-train680-test150"
 SPLIT_BCP_TRAIN530_TEST300 = "bcp-train530-test300"
-SPLIT_CHOICES = (SPLIT_RANDOM, SPLIT_BCP_TRAIN680_TEST150, SPLIT_BCP_TRAIN530_TEST300)
+# Alias: same train/val TSVs as bcp-train530-test300 but produces a distinct
+# output_dir (sft/checkpoints/bcp-train530-test300_xml_format/...) to
+# separate checkpoints trained on the new native tool_calls format.
+SPLIT_BCP_TRAIN530_TEST300_XML = "bcp-train530-test300_xml_format"
+SPLIT_CHOICES = (
+    SPLIT_RANDOM,
+    SPLIT_BCP_TRAIN680_TEST150,
+    SPLIT_BCP_TRAIN530_TEST300,
+    SPLIT_BCP_TRAIN530_TEST300_XML,
+)
 
 MODE_A = "a"
 MODE_B = "b"
@@ -902,14 +911,15 @@ def main() -> None:
     if multi_mode and args.keep_failed:
         parser.error("--keep-failed is only valid with --input, not --multi-input.")
 
+    _is_530_300 = args.split in (SPLIT_BCP_TRAIN530_TEST300, SPLIT_BCP_TRAIN530_TEST300_XML)
     if args.split != SPLIT_RANDOM:
         if args.queries_train_tsv is None:
-            if args.split == SPLIT_BCP_TRAIN530_TEST300:
+            if _is_530_300:
                 args.queries_train_tsv = DEFAULT_BCP_QUERIES_TRAIN530_TSV
             else:
                 args.queries_train_tsv = DEFAULT_BCP_QUERIES_TRAIN680_TSV
         if args.queries_test_tsv is None:
-            if args.split == SPLIT_BCP_TRAIN530_TEST300:
+            if _is_530_300:
                 args.queries_test_tsv = DEFAULT_BCP_QUERIES_TEST300_TSV
             else:
                 args.queries_test_tsv = DEFAULT_BCP_QUERIES_TEST150_TSV
