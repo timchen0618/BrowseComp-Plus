@@ -80,6 +80,47 @@ elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full_unfiltered" ]; t
     model_path="sft/checkpoints/bcp-train530-test300/gpt-oss-120b_scout_full_unfiltered"
 elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full" ]; then
     model_path="sft/checkpoints/bcp-train530-test300/gpt-oss-120b_scout_full"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d_unfiltered_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_8_random_selection_mode_d_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_8_random_selection_mode_d_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_8_random_selection_mode_d_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_8_random_selection_mode_d"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_unfiltered_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_4_gemini-2.5-pro_selection_mode_d_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_gemini_2.5_pro_selection_mode_d_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_4_gemini-2.5-pro_selection_mode_d"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_sft_gpt-oss-120b_scout_mode_d_unfiltered_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_sft_gpt-oss-120b_scout_mode_d_unfiltered_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_4_sft_gpt-oss-120b_scout_mode_d_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-best_of_4_sft_gpt-oss-120b_scout_mode_d_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-best_of_4_sft_gpt-oss-120b_scout_mode_d_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/best_of_4_sft_gpt-oss-120b_scout_mode_d"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_unfiltered_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/gemini-2.5-pro_selection_0_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gemini_2.5_pro_selection_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/gemini-2.5-pro_selection_0"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gpt-oss-120b_scout_unfiltered_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/gpt-oss-120b_scout_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-gpt-oss-120b_scout_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/gpt-oss-120b_scout"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-random_selection_xml_format" ]; then
+    model_path="Qwen/Qwen3.5-4B"
+    lora_modules="qwen3.5-4b-sft-random_selection_xml_format=sft/checkpoints/bcp-train530-test300_xml_format/random_selection_seed2"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_full_unfiltered_xml_format" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300_xml_format/gemini-2.5-pro_selection_0_full_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gemini_2.5_pro_selection_full_xml_format" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300_xml_format/gemini-2.5-pro_selection_0_full"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full_unfiltered_xml_format" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300_xml_format/gpt-oss-120b_scout_full_unfiltered"
+elif [ "$MODEL_NAME" == "qwen3.5-4b-sft-gpt-oss-120b_scout_full_xml_format" ]; then
+    model_path="sft/checkpoints/bcp-train530-test300_xml_format/gpt-oss-120b_scout_full"
 elif [ "$MODEL_NAME" == "gpt-oss-120b" ]; then
     model_path="openai/gpt-oss-120b"
 elif [ "$MODEL_NAME" == "gpt-oss-20b" ]; then
