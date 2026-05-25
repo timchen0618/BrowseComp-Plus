@@ -31,8 +31,14 @@ DEFAULT_BCP_QUERIES_TSV = _PROJECT_ROOT / "topics-qrels" / "bcp" / "queries.tsv"
 
 # Maps dataset directory name → queries TSV path.  Used for auto-detection.
 DATASET_TSV_MAP: dict[str, Path] = {
-    "bcp":    _PROJECT_ROOT / "topics-qrels" / "bcp"    / "queries.tsv",
-    "frames": _PROJECT_ROOT / "topics-qrels" / "frames" / "queries.tsv",
+    "bcp":      _PROJECT_ROOT / "topics-qrels" / "bcp"     / "queries.tsv",
+    "frames":   _PROJECT_ROOT / "topics-qrels" / "frames"  / "queries.tsv",
+    "fanoutqa": _PROJECT_ROOT / "topics-qrels" / "fanoutqa" / "fanoutqa_5_shards"  / "fanoutqa_dev_question_only.tsv",
+    "musique":  _PROJECT_ROOT / "topics-qrels" / "musique"  / "musique_10_shards"  / "musique_dev_question_only.tsv",
+    "nq":       _PROJECT_ROOT / "topics-qrels" / "nq"       / "nq_10_shards"       / "nq_dev_question_only.tsv",
+    "qampari":  _PROJECT_ROOT / "topics-qrels" / "qampari"  / "qampari_10_shards"  / "qampari_dev_question_only.tsv",
+    "quest":    _PROJECT_ROOT / "topics-qrels" / "quest"    / "quest_17_shards"    / "quest_dev_question_only.tsv",
+    "webqsp":   _PROJECT_ROOT / "topics-qrels" / "webqsp"   / "webqsp_10_shards"   / "webqsp_dev_question_only.tsv",
 }
 
 try:

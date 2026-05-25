@@ -94,16 +94,16 @@ CONTEXT_MAX_CHARS=280000
 # done
 
 
-# glm
-python src_select_tool_calls/select_useful_tool_calls_glm.py --k 5  \
-  --preview-chars ${PREVIEW_CHARS} \
-  --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
-  --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
-  --context-max-chars ${CONTEXT_MAX_CHARS} \
-  --output selected_tool_calls/all/glm/seed0/selected_tool_calls_glm_getdoc_use_original_messages.jsonl \
-  --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/glm/seed0_getdoc/ \
-  --include-get-document \
-  --num-threads 8
+# # glm
+# python src_select_tool_calls/select_useful_tool_calls_glm.py --k 5  \
+#   --preview-chars ${PREVIEW_CHARS} \
+#   --context-reasoning-max-chars ${REASONING_MAX_CHARS} \
+#   --context-tool-max-chars ${TOOL_OUTPUT_MAX_CHARS} \
+#   --context-max-chars ${CONTEXT_MAX_CHARS} \
+#   --output selected_tool_calls/all/glm/seed0/selected_tool_calls_glm_getdoc_use_original_messages.jsonl \
+#   --trajectory-dir runs/bcp/Qwen3-Embedding-8B/full/glm/seed0_getdoc/ \
+#   --include-get-document \
+#   --num-threads 8
 
 
 # glm
